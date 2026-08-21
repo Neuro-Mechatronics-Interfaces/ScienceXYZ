@@ -1,0 +1,126 @@
+# -----------------------------------------------------------------------------
+# Local environment
+# -----------------------------------------------------------------------------
+
+.venv/
+venv/
+env/
+
+.env
+.env.*
+!.env.example
+
+# -----------------------------------------------------------------------------
+# Python / synapsectl
+# -----------------------------------------------------------------------------
+
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Generated protobuf Python
+*_pb2.py
+*_pb2.pyi
+
+# -----------------------------------------------------------------------------
+# C / C++ / CMake
+# -----------------------------------------------------------------------------
+
+**/build/
+**/build-*/
+**/cmake-build-*/
+**/CMakeFiles/
+**/CMakeCache.txt
+**/cmake_install.cmake
+**/compile_commands.json
+**/Testing/
+
+*.d
+*.o
+*.obj
+*.lo
+*.slo
+*.gch
+*.pch
+
+*.a
+*.lib
+*.so
+*.so.*
+*.dylib
+*.dll
+
+*.exe
+*.out
+*.pdb
+
+# Generated protobuf C++
+*.pb.cc
+*.pb.h
+*.desc
+
+# -----------------------------------------------------------------------------
+# Synapse App build/deployment artifacts
+# -----------------------------------------------------------------------------
+
+**/dist/
+**/.cache/
+**/.xmake/
+**/app-sdk/
+**/vcpkg_installed/
+**/x64-linux/
+**/arm64-linux/
+
+.synapse_deploy_cache.json
+**/.synapse_deploy_cache.json
+
+*.deb
+
+# -----------------------------------------------------------------------------
+# Experiment data -- do not accidentally commit recordings
+# -----------------------------------------------------------------------------
+
+/data/
+/recordings/
+/captures/
+/logs/
+/artifacts/
+/out/
+/tmp/
+
+*.dat
+*.data
+
+# Keep intentionally curated configs/results elsewhere rather than globally
+# ignoring CSV/HDF5/JSON.
+
+# -----------------------------------------------------------------------------
+# Embedded / XIAO development
+# -----------------------------------------------------------------------------
+
+.pio/
+.pioenvs/
+.piolibdeps/
+firmware/**/.pio/
+firmware/**/build/
+
+# -----------------------------------------------------------------------------
+# OS/editor noise
+# -----------------------------------------------------------------------------
+
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.swp
+*.swo
+*~
+
+# -----------------------------------------------------------------------------
+# Generated repository snapshots
+# -----------------------------------------------------------------------------
+
+/structure.txt

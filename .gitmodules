@@ -1,0 +1,15 @@
+[submodule "vendor/synapse-cpp"]
+	path = vendor/synapse-cpp
+	url = https://github.com/sciencecorp/synapse-cpp
+[submodule "vendor/synapse-python"]
+	path = vendor/synapse-python
+	url = https://github.com/sciencecorp/synapse-python
+[submodule "vendor/synapse-typescript"]
+	path = vendor/synapse-typescript
+	url = https://github.com/sciencecorp/synapse-typescript
+[submodule "vendor/synapse-api"]
+	path = vendor/synapse-api
+	url = https://github.com/sciencecorp/synapse-api
+[submodule "apps/synapse-example-app"]
+	path = apps/synapse-example-app
+	url = https://github.com/sciencecorp/synapse-example-app.git

@@ -1,0 +1,32 @@
+# Science Synapse Python client and synapsectl CLI.
+# Keep this pinned so bench setup is reproducible.
+science-synapse==2.7.7
+
+# Lightweight local testing support for Python utilities/smoke tests.
+pytest>=8,<9
+pytest-asyncio>=0.24,<2
+
+# From science-python:
+coolname
+grpcio
+grpcio-tools
+protoletariat
+paramiko>=3.5.1
+pyserial
+pyzmq
+build
+scipy
+cython
+rich==14.0.0
+pre-commit
+pytest
+pytest-asyncio
+dearpygui
+pyqtgraph
+pyqt5
+pyyaml
+pandas>=2.2.0
+protobuf>=5.29
+numpy >=2.0.0
+crcmod
+h5py
