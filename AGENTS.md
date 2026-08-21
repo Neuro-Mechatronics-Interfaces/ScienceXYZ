@@ -113,7 +113,7 @@ When documentation, installed `synapsectl` behavior, and an example repository d
 
 ## Python Environment
 
-Use 64-bit CPython 3.14 as the current project Python baseline.
+Use 64-bit CPython 3.13 as the current project Python baseline.
 
 Do not lower the supported Python version solely to accommodate an assumed
 third-party compatibility issue. Verify the incompatibility first. If a

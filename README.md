@@ -29,10 +29,10 @@ Do not assume that these IP addresses or peripheral IDs apply to another install
 For basic Synapse client use:
 
 - Git
-- 64-bit CPython 3.14
+- 64-bit CPython 3.13
 - access to the same network as the SciFi-2
 
-Python 3.14 is the current recommended development baseline. The project may
+Python 3.13 is the current recommended development baseline. The project may
 advance this baseline as newer stable Python releases and project dependencies
 mature.
 
@@ -62,12 +62,12 @@ Third-party Science repositories under `vendor/` are maintained as Git submodule
 
 ### 3. Initialize the Python virtual environment
 
-The recommended interpreter is 64-bit Python 3.11.
+The recommended interpreter is 64-bit Python 3.13.
 
 On Windows PowerShell:
 
 ```powershell
-py -3.14 -m venv .venv
+py -3.13 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 ```
 
