@@ -15,7 +15,7 @@ The initial goals are:
 The basic hardware smoke test is:
 
 ```
-synapsectl -u 10.0.0.15 info
+synapsectl -u 192.168.100.157 info
 ```
 
 Before proceeding with an actual peripheral signal chain:

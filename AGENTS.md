@@ -9,9 +9,9 @@ This repository is for bringing up and evaluating the Science SciFi-2 / Synapse 
 Current bench configuration:
 
 - SciFi-2 headstage
-  - IP: `10.0.0.15`
+  - IP: `192.168.100.157`
 - Host laptop
-  - IP: `10.0.0.14`
+  - IP: `192.168.100.14`
 - Science Axon Omnetics Adapter
   - connected to SciFi-2 by USB-C on Port 2
 - Additional candidate test sensors:

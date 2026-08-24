@@ -14,8 +14,8 @@ Persistent project implementation should prefer C++ where practical. Python is u
 
 ## Current Bench Configuration
 
-* **SciFi-2 headstage:** `10.0.0.15`
-* **Host computer:** `10.0.0.14`
+* **SciFi-2 headstage:** `192.168.100.157`
+* **Host computer:** `192.168.100.14`
 * **Axon Omnetics Adapter:** connected to SciFi-2 USB-C Port 2
 * **Candidate auxiliary sensors:**
 
@@ -104,7 +104,7 @@ synapsectl --help
 With the host and SciFi-2 on the same network:
 
 ```bash
-synapsectl -u 10.0.0.15 info
+synapsectl -u 192.168.100.157 info
 ```
 
 Confirm that:
