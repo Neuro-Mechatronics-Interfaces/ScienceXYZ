@@ -110,10 +110,7 @@ synapsectl -u 10.0.0.15 info
 Confirm that:
 
 1. the SciFi-2 responds;
-2. its software/firmware information is reported;
-3. the Axon Omnetics Adapter appears under the reported peripherals.
-
-Do not hard-code the Axon peripheral ID from an example configuration. Use the ID reported by the connected device.
+2. its software/firmware information is reported
 
 ## Repository Layout
 
@@ -167,11 +164,7 @@ The first multimodal implementation should prioritize explicit timestamps, seque
 
 ## Synapse Apps
 
-Science Synapse Apps are C++ applications that execute on the SciFi-2 and are integrated into Synapse signal chains through an application node.
-
-Start App development from Science's official `synapse-example-app` structure rather than constructing the SDK/build environment from scratch.
-
-A minimal initial application should resemble:
+Science Synapse Apps are C++ applications that execute on the SciFi-2 and are integrated into Synapse signal chains through an application node. Start App development from Science's official `synapse-example-app` structure rather than constructing the SDK/build environment from scratch. A minimal initial application should resemble:
 
 ```text
 kBroadbandSource -> kApplication -> Tap
@@ -200,6 +193,4 @@ Avoid duplicating detailed content across these files. When project behavior cha
 
 ## Data
 
-Raw experimental recordings belong under `data/` or another explicitly ignored recording directory and should not be committed to Git.
-
-Small configurations, metadata schemas, test vectors, and deterministic reference fixtures may be tracked when they are useful for reproducibility.
+Raw experimental recordings belong under `data/` or another explicitly ignored recording directory and should not be committed to Git. Small configurations, metadata schemas, test vectors, and deterministic reference fixtures may be tracked when they are useful for reproducibility.
