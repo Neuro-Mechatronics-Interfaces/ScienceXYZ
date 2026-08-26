@@ -16,3 +16,6 @@
 [submodule "vendor/axon-peripheral-example"]
 	path = vendor/axon-peripheral-example
 	url = https://github.com/sciencecorp/axon-peripheral-example.git
+[submodule "third_party/intan"]
+	path = third_party/intan
+	url = https://github.com/m053m716/Intan-RHX

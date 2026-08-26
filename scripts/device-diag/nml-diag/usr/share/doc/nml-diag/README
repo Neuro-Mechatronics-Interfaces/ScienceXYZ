@@ -1,0 +1,1 @@
+Read-only diagnostic package for the NML bench. Safe to remove with: dpkg -r nml-diag

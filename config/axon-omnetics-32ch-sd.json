@@ -1,0 +1,259 @@
+{
+  "nodes": [
+    {
+      "id": 1,
+      "type": "kBroadbandSource",
+      "broadband_source": {
+        "peripheral_id": 2,
+        "bit_width": 12,
+        "sample_rate_hz": 32000,
+        "gain": 200,
+        "signal": {
+          "electrode": {
+            "channels": [
+              {
+                "id": 0,
+                "electrode_id": 0,
+                "reference_id": 1,
+                "type": 0
+              },
+              {
+                "id": 4,
+                "electrode_id": 8,
+                "reference_id": 9,
+                "type": 0
+              },
+              {
+                "id": 12,
+                "electrode_id": 24,
+                "reference_id": 25,
+                "type": 0
+              },
+              {
+                "id": 14,
+                "electrode_id": 28,
+                "reference_id": 29,
+                "type": 0
+              },
+              {
+                "id": 20,
+                "electrode_id": 40,
+                "reference_id": 41,
+                "type": 0
+              },
+              {
+                "id": 26,
+                "electrode_id": 52,
+                "reference_id": 53,
+                "type": 0
+              },
+              {
+                "id": 32,
+                "electrode_id": 64,
+                "reference_id": 65,
+                "type": 0
+              },
+              {
+                "id": 36,
+                "electrode_id": 72,
+                "reference_id": 73,
+                "type": 0
+              },
+              {
+                "id": 38,
+                "electrode_id": 76,
+                "reference_id": 77,
+                "type": 0
+              },
+              {
+                "id": 42,
+                "electrode_id": 84,
+                "reference_id": 85,
+                "type": 0
+              },
+              {
+                "id": 44,
+                "electrode_id": 88,
+                "reference_id": 89,
+                "type": 0
+              },
+              {
+                "id": 48,
+                "electrode_id": 96,
+                "reference_id": 97,
+                "type": 0
+              },
+              {
+                "id": 50,
+                "electrode_id": 100,
+                "reference_id": 101,
+                "type": 0
+              },
+              {
+                "id": 54,
+                "electrode_id": 108,
+                "reference_id": 109,
+                "type": 0
+              },
+              {
+                "id": 56,
+                "electrode_id": 112,
+                "reference_id": 113,
+                "type": 0
+              },
+              {
+                "id": 60,
+                "electrode_id": 120,
+                "reference_id": 121,
+                "type": 0
+              },
+              {
+                "id": 62,
+                "electrode_id": 124,
+                "reference_id": 125,
+                "type": 0
+              },
+              {
+                "id": 66,
+                "electrode_id": 132,
+                "reference_id": 133,
+                "type": 0
+              },
+              {
+                "id": 68,
+                "electrode_id": 136,
+                "reference_id": 137,
+                "type": 0
+              },
+              {
+                "id": 74,
+                "electrode_id": 148,
+                "reference_id": 149,
+                "type": 0
+              },
+              {
+                "id": 80,
+                "electrode_id": 160,
+                "reference_id": 161,
+                "type": 0
+              },
+              {
+                "id": 86,
+                "electrode_id": 172,
+                "reference_id": 173,
+                "type": 0
+              },
+              {
+                "id": 92,
+                "electrode_id": 184,
+                "reference_id": 185,
+                "type": 0
+              },
+              {
+                "id": 98,
+                "electrode_id": 196,
+                "reference_id": 197,
+                "type": 0
+              },
+              {
+                "id": 104,
+                "electrode_id": 208,
+                "reference_id": 209,
+                "type": 0
+              },
+              {
+                "id": 108,
+                "electrode_id": 216,
+                "reference_id": 217,
+                "type": 0
+              },
+              {
+                "id": 110,
+                "electrode_id": 220,
+                "reference_id": 221,
+                "type": 0
+              },
+              {
+                "id": 114,
+                "electrode_id": 228,
+                "reference_id": 229,
+                "type": 0
+              },
+              {
+                "id": 116,
+                "electrode_id": 232,
+                "reference_id": 233,
+                "type": 0
+              },
+              {
+                "id": 120,
+                "electrode_id": 240,
+                "reference_id": 241,
+                "type": 0
+              },
+              {
+                "id": 122,
+                "electrode_id": 244,
+                "reference_id": 245,
+                "type": 0
+              },
+              {
+                "id": 126,
+                "electrode_id": 252,
+                "reference_id": 253,
+                "type": 0
+              }
+            ],
+            "low_cutoff_hz": 57,
+            "high_cutoff_hz": 13489
+          }
+        }
+      }
+    },
+    {
+      "id": 2,
+      "type": "kApplication",
+      "application": {
+        "name": "synapse-example-app",
+        "parameters": {
+          "low_cutoff_hz": 200.0,
+          "high_cutoff_hz": 5000.0,
+          "spike_threshold_uv": 50.0,
+          "waveform_size": 50,
+          "refractory_period_us": 1000,
+          "window_size": 5,
+          "max_expected_rate": 10.0,
+          "cursor_channels": [
+            0,
+            7,
+            16,
+            30
+          ],
+          "enable_function_profiling": false,
+          "enable_inference": false,
+          "model_name": "decoder"
+        }
+      }
+    },
+    {
+      "id": 3,
+      "type": "kSpikeDetector",
+      "spike_detector": {
+        "samples_per_spike": "320",
+        "thresholder": {
+          "thresholdUV": "50"
+        }
+      }
+    }
+  ],
+  "connections": [
+    {
+      "src_node_id": 1,
+      "dst_node_id": 2
+    },
+    {
+      "src_node_id": 1,
+      "dst_node_id": 3
+    }
+  ]
+}

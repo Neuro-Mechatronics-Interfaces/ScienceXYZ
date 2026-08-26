@@ -1,0 +1,11 @@
+Package: nml-quarantine
+Version: 0.1.0
+Architecture: all
+Maintainer: NML <max.murphy11@gmail.com>
+Section: synapse-peripherals
+Priority: optional
+Description: Move axon_test_source.so out of the plugin scan path
+ Moves /usr/lib/scifi/plugins/axon_test_source.so to
+ /opt/scifi/data/quarantine/ to test whether its presence disturbs
+ peripheral enumeration. Reversible by redeploying the original
+ scifi-axon-test-source .deb. Touches nothing else.

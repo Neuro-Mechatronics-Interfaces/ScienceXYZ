@@ -1,0 +1,21 @@
+#!/bin/sh
+# Read-only diagnostic v0.5.0: boot-scoped journal (clock-skew-safe). Changes nothing.
+REPORT=/tmp/nml-diag-report.txt
+{
+echo "=== NML-DIAG v0.5.0 ==="
+echo "--- this boot: scifi-server startup (head 120) ---"
+journalctl -b -u scifi-server --no-pager 2>&1 | head -120
+echo "--- this boot: scifi-server latest (tail 60) ---"
+journalctl -b -u scifi-server --no-pager 2>&1 | tail -60
+echo "--- this boot: at_usb/axon/peripheral/plugin mentions (tail 120) ---"
+journalctl -b --no-pager 2>&1 | grep -iE "at_usb|axon|peripheral|plugin|usbdevice|2ac1|probe.?updater|functionfs|ffs" | tail -120
+echo "--- at_usb device nodes ---"
+ls -la /dev/at_usb* 2>&1
+ls -la /dev/usb-ffs/ 2>&1
+echo "=== NML-DIAG END ==="
+} > "$REPORT" 2>&1
+cat "$REPORT"
+for d in /opt/scifi/data /opt/scifi/data/sdcard /opt/scifi/data/disk_writer; do
+  [ -d "$d" ] && cp "$REPORT" "$d/nml-diag-report.txt" 2>/dev/null
+done
+exit 0

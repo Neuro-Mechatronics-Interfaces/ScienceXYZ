@@ -1,0 +1,26 @@
+#!/bin/sh
+# nml-quarantine 0.1.0: move axon_test_source.so out of the plugin scan path.
+# Reversible: redeploy dist/scifi-axon-test-source_0.1.0_arm64.deb to restore.
+REPORT=/tmp/nml-quarantine-report.txt
+Q=/opt/scifi/data/quarantine
+{
+echo "=== NML-QUARANTINE v0.1.0 ==="
+echo "--- plugins before ---"
+ls -la /usr/lib/scifi/plugins/ 2>&1
+mkdir -p "$Q" 2>&1
+if [ -f /usr/lib/scifi/plugins/axon_test_source.so ]; then
+  mv /usr/lib/scifi/plugins/axon_test_source.so "$Q/axon_test_source.so" 2>&1 && echo "moved axon_test_source.so -> $Q"
+else
+  echo "axon_test_source.so not present; nothing moved"
+fi
+echo "--- plugins after ---"
+ls -la /usr/lib/scifi/plugins/ 2>&1
+echo "NOTE: /usr/lib/libscifi-peripheral-sdk.so* deliberately left in place (inert)."
+echo "Next: power-cycle the SciFi-2, then run synapsectl info."
+echo "=== NML-QUARANTINE END ==="
+} > "$REPORT" 2>&1
+cat "$REPORT"
+for d in /opt/scifi/data /opt/scifi/data/sdcard /opt/scifi/data/disk_writer; do
+  [ -d "$d" ] && cp "$REPORT" "$d/nml-quarantine-report.txt" 2>/dev/null
+done
+exit 0

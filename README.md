@@ -64,42 +64,34 @@ Third-party Science repositories under `vendor/` are maintained as Git submodule
 
 The recommended interpreter is 64-bit Python 3.13.
 
-On Windows PowerShell:
-
-```powershell
-py -3.13 -m venv .venv
-.\.venv\Scripts\Activate.ps1
-```
-
-On Linux/macOS:
-
+On Windows use WSL Ubuntu terminal, to set up:
 ```bash
-python3.11 -m venv .venv
-source .venv/bin/activate
+deactivate
+rm -rf ~/.venvs/sciencexyz
+
+uv python install 3.13
+uv venv --python 3.13 --seed ~/.venvs/sciencexyz
 ```
 
-Confirm the active interpreter:
+Then you should be able to cleanly activate your environment:  
+```bash
+source ~/.venvs/sciencexyz/bin/activate
+```
 
+For troubleshooting: 
 ```bash
 python --version
-```
+python -m pip --version
 
-### 4. Install Python dependencies
-
-```bash
 python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
-```
+python -m pip install science-synapse==2.7.7
 
-Verify the environment:
-
-```bash
-python -m pip check
+which synapsectl
 synapsectl --version
-synapsectl --help
+docker info
 ```
 
-### 5. Verify SciFi-2 connectivity
+### 4. Verify SciFi-2 connectivity
 
 With the host and SciFi-2 on the same network:
 

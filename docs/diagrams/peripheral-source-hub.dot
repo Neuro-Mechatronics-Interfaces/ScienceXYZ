@@ -1,0 +1,23 @@
+// Track B — STM32 NUCLEO-U5A5ZJ-Q host-side hub (Option D) (2026-08-24)
+// The double-headed adapter<->fusion edge carries sensor frames up, actuator commands down.
+// "Shared TTL sync edge" is the same physical edge as in peripheral-source-scifi.dot.
+digraph peripheral_source_hub {
+  rankdir=LR;
+  fontname="Helvetica";
+  nodesep=0.45;
+  ranksep=0.6;
+  node [shape=box, style="rounded,filled", fillcolor="#f2f2f2", fontname="Helvetica", fontsize=11];
+  edge [fontname="Helvetica", fontsize=9];
+
+  sensors [label="IMU / joystick / torque\ncamera sync / exo / stim"];
+  trig    [label="Shared TTL sync edge\n(into TIM input capture)"];
+
+  hub     [label="NUCLEO-U5A5ZJ-Q hub\n32-bit timebase, seq numbers,\nhw-timestamped frames", fillcolor="#dbe9f6"];
+  adapter [label="Host adapter (C++)\nUSB HS bulk, libusb"];
+  fusion  [label="Host fusion\ncommon timestamped records\n+ sync diagnostics", fillcolor="#e4f2e0"];
+
+  sensors -> hub;
+  trig    -> hub;
+  hub     -> adapter [label="USB HS 480 Mb/s"];
+  adapter -> fusion  [dir=both];
+}

@@ -124,3 +124,10 @@ Desktop.ini
 # -----------------------------------------------------------------------------
 
 /structure.txt
+.scienv
+.local
+
+scifi-errors.log
+scifi-info.log
+
+vendor/axon-peripheral-example/nml-diag-report.txt

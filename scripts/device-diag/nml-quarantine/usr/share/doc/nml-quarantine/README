@@ -1,0 +1,1 @@
+Moves axon_test_source.so from /usr/lib/scifi/plugins/ to /opt/scifi/data/quarantine/ as an enumeration-interference test. Restore by redeploying the original scifi-axon-test-source .deb. Remove this package with: dpkg -r nml-quarantine

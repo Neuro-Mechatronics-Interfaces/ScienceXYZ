@@ -1,0 +1,27 @@
+// Track A/C — SciFi-2 recording path (2026-08-24)
+// Track A: config-only recording from the physical Axon Omnetics adapter.
+// Track C (dashed): conditional native peripheral on the Via devkit.
+// The double-headed Taps<->fusion edge carries broadband up, commands down.
+// "Shared TTL sync edge" is the same physical edge as in peripheral-source-hub.dot.
+digraph peripheral_source_scifi {
+  rankdir=LR;
+  fontname="Helvetica";
+  nodesep=0.45;
+  ranksep=0.6;
+  node [shape=box, style="rounded,filled", fillcolor="#f2f2f2", fontname="Helvetica", fontsize=11];
+  edge [fontname="Helvetica", fontsize=9];
+
+  viadev  [label="Via devkit LIFCL-17\ncustom peripheral\n(Track C, needs hardware)", style="rounded,filled,dashed", fillcolor="#ffffff"];
+  probe   [label="Omnetics probe\n+ Axon adapter\n(built-in digitizer)"];
+  trig    [label="Shared TTL sync edge\n(into SciFi GPIO)"];
+
+  scifi   [label="SciFi-2\nbuilt-in peripheral (ID: bench)\n→ kBroadbandSource → App", fillcolor="#dbe9f6"];
+  taps    [label="Synapse Taps\n(producer / consumer)"];
+  fusion  [label="Host fusion\ncommon timestamped records\n+ sync diagnostics", fillcolor="#e4f2e0"];
+
+  viadev -> scifi [style=dashed];
+  probe  -> scifi;
+  trig   -> scifi;
+  scifi  -> taps;
+  taps   -> fusion [dir=both];
+}

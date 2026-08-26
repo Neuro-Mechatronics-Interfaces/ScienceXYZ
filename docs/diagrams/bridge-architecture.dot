@@ -1,0 +1,44 @@
+// NML Synapse Bridge — proven native path vs. host-side fallback path.
+// Source of truth for docs/diagrams/bridge-architecture.svg.
+digraph bridge_architecture {
+    rankdir = TB;
+    node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, fillcolor="#eef3fb"];
+    edge [fontname="Helvetica", fontsize=9];
+
+    // --- Native custom-peripheral path (PROVEN for record; via Lattice FPGA) ---
+    subgraph cluster_native {
+        label = "Native SciFi peripheral (Lattice FPGA + driver .so)  [PROVEN for record source]";
+        style = "rounded"; color = "#2f6fdb"; fontname="Helvetica"; fontsize=10;
+
+        rtl   [label="FPGA peripheral RTL\n(axi4-stream frames)", fillcolor="#dcecff"];
+        trans [label="SDK transport\n(encrypted IP: decap/encap)", fillcolor="#f3e6ff"];
+        drv   [label="Driver plugin .so\nRecordPluginWithLimits", fillcolor="#dcecff"];
+
+        rtl -> trans [label="DATA_FRAME / CONFIGURE"];
+        trans -> drv [label="IR serdes uplink\n+ FT60x USB3"];
+    }
+
+    // --- Host-side fallback path (PROVEN; works today) ---
+    subgraph cluster_host {
+        label = "Host-side fallback (works today, no FPGA)  [PROVEN]";
+        style = "rounded"; color = "#1f9d55"; fontname="Helvetica"; fontsize=10;
+
+        mcu   [label="Bridge MCU (STM32/nRF52)\ntimed acquisition + TTL", fillcolor="#e3f6ea"];
+        adapt [label="Host C++ adapter\nnormalize + timestamp", fillcolor="#e3f6ea"];
+        app   [label="C++ Synapse App", fillcolor="#e3f6ea"];
+    }
+
+    scifi [label="SciFi-2 headstage", shape=box, style="rounded,filled", penwidth=2, fillcolor="#fff2cc"];
+    tap   [label="Synapse Taps\n(producer + consumer)", fillcolor="#fff2cc"];
+    host  [label="Host fusion / logging", fillcolor="#f5f5f5"];
+
+    drv   -> scifi [label="enumerated peripheral"];
+    scifi -> tap   [label="BroadbandFrame"];
+    tap   -> host  [label="stream ~10k msg/s"];
+
+    mcu   -> adapt [label="USB / serial"];
+    adapt -> host;
+    host  -> tap   [label="consumer Tap\n(commands)", style=dashed];
+    tap   -> app   [style=dashed];
+    app   -> mcu   [label="USB command → TTL", style=dashed];
+}

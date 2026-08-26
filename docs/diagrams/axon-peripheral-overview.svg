@@ -1,0 +1,131 @@
+<?xml version="1.0" standalone="no"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="601pt" height="307pt" viewBox="0.00 0.00 600.64 306.8">
+<g id="graph0" class="graph" transform="translate(4,302.79998779296875) scale(1)" data-name="peripheral_sources">
+
+<polygon fill="white" stroke="none" points="-4,4 -4,-302.8 596.64,-302.8 596.64,4 -4,4"/>
+<!-- probe -->
+<g id="node1" class="node" pointer-events="visible" data-name="probe">
+
+<path fill="#f2f2f2" stroke="black" d="M84.54,-298.6C84.54,-298.6 12.15,-298.6 12.15,-298.6 6.15,-298.6 0.15,-292.6 0.15,-286.6 0.15,-286.6 0.15,-263.4 0.15,-263.4 0.15,-257.4 6.15,-251.4 12.15,-251.4 12.15,-251.4 84.54,-251.4 84.54,-251.4 90.54,-251.4 96.54,-257.4 96.54,-263.4 96.54,-263.4 96.54,-286.6 96.54,-286.6 96.54,-292.6 90.54,-298.6 84.54,-298.6"/>
+<text text-anchor="middle" x="48.34" y="-284.9" font-family="Helvetica,sans-Serif" font-size="11.00">Omnetics probe</text>
+<text text-anchor="middle" x="48.34" y="-271.7" font-family="Helvetica,sans-Serif" font-size="11.00">+ Axon adapter</text>
+<text text-anchor="middle" x="48.34" y="-258.5" font-family="Helvetica,sans-Serif" font-size="11.00">(built-in digitizer)</text>
+</g>
+<!-- scifi -->
+<g id="node5" class="node" pointer-events="visible" data-name="scifi">
+
+<path fill="#dbe9f6" stroke="black" d="M266.19,-211C266.19,-211 132.5,-211 132.5,-211 126.5,-211 120.5,-205 120.5,-199 120.5,-199 120.5,-175.8 120.5,-175.8 120.5,-169.8 126.5,-163.8 132.5,-163.8 132.5,-163.8 266.19,-163.8 266.19,-163.8 272.19,-163.8 278.19,-169.8 278.19,-175.8 278.19,-175.8 278.19,-199 278.19,-199 278.19,-205 272.19,-211 266.19,-211"/>
+<text text-anchor="middle" x="199.34" y="-197.3" font-family="Helvetica,sans-Serif" font-size="11.00">SciFi-2</text>
+<text text-anchor="middle" x="199.34" y="-184.1" font-family="Helvetica,sans-Serif" font-size="11.00">built-in peripheral (ID: bench)</text>
+<text text-anchor="middle" x="199.34" y="-170.9" font-family="Helvetica,sans-Serif" font-size="11.00">→ kBroadbandSource → App</text>
+</g>
+<!-- probe&#45;&gt;scifi -->
+<g id="edge1" class="edge" data-name="probe-&gt;scifi">
+
+<path fill="none" stroke="black" d="M88.81,-251.06C107.26,-240.6 129.29,-228.11 148.82,-217.04"/>
+<polygon fill="black" stroke="black" points="150.48,-220.13 157.45,-212.15 147.03,-214.04 150.48,-220.13"/>
+</g>
+<!-- viadev -->
+<g id="node2" class="node" pointer-events="visible" data-name="viadev">
+
+<path fill="#ffffff" stroke="black" stroke-dasharray="5,2" d="M260.67,-298.6C260.67,-298.6 138.02,-298.6 138.02,-298.6 132.02,-298.6 126.02,-292.6 126.02,-286.6 126.02,-286.6 126.02,-263.4 126.02,-263.4 126.02,-257.4 132.02,-251.4 138.02,-251.4 138.02,-251.4 260.67,-251.4 260.67,-251.4 266.67,-251.4 272.67,-257.4 272.67,-263.4 272.67,-263.4 272.67,-286.6 272.67,-286.6 272.67,-292.6 266.67,-298.6 260.67,-298.6"/>
+<text text-anchor="middle" x="199.34" y="-284.9" font-family="Helvetica,sans-Serif" font-size="11.00">Via devkit LIFCL-17</text>
+<text text-anchor="middle" x="199.34" y="-271.7" font-family="Helvetica,sans-Serif" font-size="11.00">custom peripheral</text>
+<text text-anchor="middle" x="199.34" y="-258.5" font-family="Helvetica,sans-Serif" font-size="11.00">(Track C, needs hardware)</text>
+</g>
+<!-- viadev&#45;&gt;scifi -->
+<g id="edge2" class="edge" data-name="viadev-&gt;scifi">
+
+<path fill="none" stroke="black" stroke-dasharray="5,2" d="M199.34,-251.06C199.34,-242.33 199.34,-232.18 199.34,-222.63"/>
+<polygon fill="black" stroke="black" points="202.85,-222.92 199.34,-212.92 195.85,-222.92 202.85,-222.92"/>
+</g>
+<!-- sensors -->
+<g id="node4" class="node" pointer-events="visible" data-name="sensors">
+
+<path fill="#f2f2f2" stroke="black" d="M580.43,-293C580.43,-293 470.26,-293 470.26,-293 464.26,-293 458.26,-287 458.26,-281 458.26,-281 458.26,-269 458.26,-269 458.26,-263 464.26,-257 470.26,-257 470.26,-257 580.43,-257 580.43,-257 586.43,-257 592.43,-263 592.43,-269 592.43,-269 592.43,-281 592.43,-281 592.43,-287 586.43,-293 580.43,-293"/>
+<text text-anchor="middle" x="525.34" y="-278.3" font-family="Helvetica,sans-Serif" font-size="11.00">IMU / joystick / torque</text>
+<text text-anchor="middle" x="525.34" y="-265.1" font-family="Helvetica,sans-Serif" font-size="11.00">camera sync / exo / stim</text>
+</g>
+<!-- hub -->
+<g id="node6" class="node" pointer-events="visible" data-name="hub">
+
+<path fill="#dbe9f6" stroke="black" d="M459.31,-211C459.31,-211 319.38,-211 319.38,-211 313.38,-211 307.38,-205 307.38,-199 307.38,-199 307.38,-175.8 307.38,-175.8 307.38,-169.8 313.38,-163.8 319.38,-163.8 319.38,-163.8 459.31,-163.8 459.31,-163.8 465.31,-163.8 471.31,-169.8 471.31,-175.8 471.31,-175.8 471.31,-199 471.31,-199 471.31,-205 465.31,-211 459.31,-211"/>
+<text text-anchor="middle" x="389.34" y="-197.3" font-family="Helvetica,sans-Serif" font-size="11.00">NUCLEO-U5A5ZJ-Q hub</text>
+<text text-anchor="middle" x="389.34" y="-184.1" font-family="Helvetica,sans-Serif" font-size="11.00">32-bit timebase, seq numbers,</text>
+<text text-anchor="middle" x="389.34" y="-170.9" font-family="Helvetica,sans-Serif" font-size="11.00">hw-timestamped frames</text>
+</g>
+<!-- sensors&#45;&gt;hub -->
+<g id="edge5" class="edge" data-name="sensors-&gt;hub">
+
+<path fill="none" stroke="black" d="M497.82,-256.68C479.93,-245.42 456.17,-230.46 435.44,-217.41"/>
+<polygon fill="black" stroke="black" points="437.46,-214.55 427.14,-212.19 433.73,-220.47 437.46,-214.55"/>
+</g>
+<!-- trig -->
+<g id="node3" class="node" pointer-events="visible" data-name="trig">
+
+<path fill="#f2f2f2" stroke="black" d="M417.13,-293C417.13,-293 313.56,-293 313.56,-293 307.56,-293 301.56,-287 301.56,-281 301.56,-281 301.56,-269 301.56,-269 301.56,-263 307.56,-257 313.56,-257 313.56,-257 417.13,-257 417.13,-257 423.13,-257 429.13,-263 429.13,-269 429.13,-269 429.13,-281 429.13,-281 429.13,-287 423.13,-293 417.13,-293"/>
+<text text-anchor="middle" x="365.34" y="-278.3" font-family="Helvetica,sans-Serif" font-size="11.00">Shared TTL sync edge</text>
+<text text-anchor="middle" x="365.34" y="-265.1" font-family="Helvetica,sans-Serif" font-size="11.00">(GPIO / TIM capture)</text>
+</g>
+<!-- trig&#45;&gt;scifi -->
+<g id="edge3" class="edge" data-name="trig-&gt;scifi">
+
+<path fill="none" stroke="black" d="M331.75,-256.68C309.42,-245.16 279.59,-229.78 253.89,-216.53"/>
+<polygon fill="black" stroke="black" points="255.75,-213.55 245.25,-212.07 252.54,-219.77 255.75,-213.55"/>
+</g>
+<!-- trig&#45;&gt;hub -->
+<g id="edge4" class="edge" data-name="trig-&gt;hub">
+
+<path fill="none" stroke="black" d="M370.2,-256.68C372.98,-246.76 376.57,-233.96 379.89,-222.14"/>
+<polygon fill="black" stroke="black" points="383.21,-223.25 382.54,-212.68 376.47,-221.36 383.21,-223.25"/>
+</g>
+<!-- taps -->
+<g id="node7" class="node" pointer-events="visible" data-name="taps">
+
+<path fill="#f2f2f2" stroke="black" d="M269.55,-123.6C269.55,-123.6 169.14,-123.6 169.14,-123.6 163.14,-123.6 157.14,-117.6 157.14,-111.6 157.14,-111.6 157.14,-99.6 157.14,-99.6 157.14,-93.6 163.14,-87.6 169.14,-87.6 169.14,-87.6 269.55,-87.6 269.55,-87.6 275.55,-87.6 281.55,-93.6 281.55,-99.6 281.55,-99.6 281.55,-111.6 281.55,-111.6 281.55,-117.6 275.55,-123.6 269.55,-123.6"/>
+<text text-anchor="middle" x="219.34" y="-108.9" font-family="Helvetica,sans-Serif" font-size="11.00">Synapse Taps</text>
+<text text-anchor="middle" x="219.34" y="-95.7" font-family="Helvetica,sans-Serif" font-size="11.00">(producer / consumer)</text>
+</g>
+<!-- scifi&#45;&gt;taps -->
+<g id="edge6" class="edge" data-name="scifi-&gt;taps">
+
+<path fill="none" stroke="black" d="M205.13,-163.32C207.34,-154.52 209.88,-144.37 212.2,-135.12"/>
+<polygon fill="black" stroke="black" points="215.57,-136.07 214.6,-125.52 208.78,-134.37 215.57,-136.07"/>
+</g>
+<!-- adapter -->
+<g id="node8" class="node" pointer-events="visible" data-name="adapter">
+
+<path fill="#f2f2f2" stroke="black" d="M423.89,-123.6C423.89,-123.6 332.8,-123.6 332.8,-123.6 326.8,-123.6 320.8,-117.6 320.8,-111.6 320.8,-111.6 320.8,-99.6 320.8,-99.6 320.8,-93.6 326.8,-87.6 332.8,-87.6 332.8,-87.6 423.89,-87.6 423.89,-87.6 429.89,-87.6 435.89,-93.6 435.89,-99.6 435.89,-99.6 435.89,-111.6 435.89,-111.6 435.89,-117.6 429.89,-123.6 423.89,-123.6"/>
+<text text-anchor="middle" x="378.34" y="-108.9" font-family="Helvetica,sans-Serif" font-size="11.00">Host adapter (C++)</text>
+<text text-anchor="middle" x="378.34" y="-95.7" font-family="Helvetica,sans-Serif" font-size="11.00">USB HS bulk, libusb</text>
+</g>
+<!-- hub&#45;&gt;adapter -->
+<g id="edge7" class="edge" data-name="hub-&gt;adapter">
+
+<path fill="none" stroke="black" d="M386.16,-163.32C384.96,-154.61 383.58,-144.6 382.32,-135.43"/>
+<polygon fill="black" stroke="black" points="385.79,-134.98 380.96,-125.55 378.86,-135.93 385.79,-134.98"/>
+</g>
+<!-- fusion -->
+<g id="node9" class="node" pointer-events="visible" data-name="fusion">
+
+<path fill="#e4f2e0" stroke="black" d="M363.29,-47.4C363.29,-47.4 223.4,-47.4 223.4,-47.4 217.4,-47.4 211.4,-41.4 211.4,-35.4 211.4,-35.4 211.4,-12.2 211.4,-12.2 211.4,-6.2 217.4,-0.2 223.4,-0.2 223.4,-0.2 363.29,-0.2 363.29,-0.2 369.29,-0.2 375.29,-6.2 375.29,-12.2 375.29,-12.2 375.29,-35.4 375.29,-35.4 375.29,-41.4 369.29,-47.4 363.29,-47.4"/>
+<text text-anchor="middle" x="293.34" y="-33.7" font-family="Helvetica,sans-Serif" font-size="11.00">Host fusion</text>
+<text text-anchor="middle" x="293.34" y="-20.5" font-family="Helvetica,sans-Serif" font-size="11.00" style="">common timestamped records</text>
+<text text-anchor="middle" x="293.34" y="-7.3" font-family="Helvetica,sans-Serif" font-size="11.00" style="">+ sync diagnostics</text>
+</g>
+<!-- taps&#45;&gt;fusion -->
+<g id="edge8" class="edge" data-name="taps-&gt;fusion">
+
+<path fill="none" stroke="black" d="M243.15,-78.93C249.96,-71.59 257.45,-63.51 264.52,-55.88"/>
+<polygon fill="black" stroke="black" points="240.66,-76.46 236.43,-86.17 245.8,-81.22 240.66,-76.46"/>
+<polygon fill="black" stroke="black" points="266.72,-58.66 270.95,-48.95 261.59,-53.9 266.72,-58.66"/>
+</g>
+<!-- adapter&#45;&gt;fusion -->
+<g id="edge9" class="edge" data-name="adapter-&gt;fusion">
+
+<path fill="none" stroke="black" d="M351.64,-79.53C343.54,-71.93 334.55,-63.48 326.1,-55.55"/>
+<polygon fill="black" stroke="black" points="349.11,-81.96 358.8,-86.25 353.9,-76.85 349.11,-81.96"/>
+<polygon fill="black" stroke="black" points="328.67,-53.17 318.99,-48.87 323.88,-58.27 328.67,-53.17"/>
+</g>
+</g>
+</svg>
