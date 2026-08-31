@@ -132,6 +132,36 @@ failure, and workaround in `MISTAKES.md`.
 The Python baseline may be advanced as newer stable CPython releases become
 well-supported by the project's dependencies.
 
+## Handoff MCP
+
+Use the project-scoped `handoff` MCP server as a compact continuity cache, not
+as a replacement for Git history or repository documentation.
+
+- At the start of a session, call `handoff_list` for open handoffs before
+  repeating discovery work. Use a small result limit and inspect the newest
+  relevant entries first. Call `todo_list` when the task may depend on queued
+  work; use `project_status` when only counts are needed.
+- Verify a breadcrumb against the current working tree and device state before
+  acting on it. Handoffs describe the state observed by an earlier session and
+  can become stale.
+- Before adding an item, list existing open items and update or resolve them
+  instead of creating duplicates. Use `todo_add` for one concrete, actionable
+  next step and `handoff_add` for session state that another worker needs in
+  order to resume efficiently.
+- Keep each handoff short but operational: summarize what was accomplished,
+  record key decisions and gotchas, give explicit next steps, and reference
+  exact file paths, commands, issue IDs, or device IDs where useful. Do not
+  paste large logs, secrets, or information already captured in tracked files.
+- Mark completed or abandoned TODOs with `todo_update`, and call
+  `handoff_resolve` when a handoff is completed or superseded. Open records
+  should represent work that is genuinely still resumable.
+- When accumulated searches, logs, or finished subtasks are crowding the
+  context window, call `context_report` and then `context_compact`. Persist a
+  summary during compaction only when it will help a later session resume.
+- Put durable rules in `AGENTS.md`, developer workflows in `README.md`, current
+  tracked milestones in `TODO.md`, and concrete failure evidence in
+  `MISTAKES.md`. Keep MCP handoffs transient and project-specific.
+
 ## Repository Documentation
 
 Keep repository documentation separated by purpose:
