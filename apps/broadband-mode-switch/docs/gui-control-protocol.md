@@ -2,7 +2,13 @@
 
 Status: design contract for the GUI/control-plane work (protocol version 1).
 
-This document freezes the state and concurrency semantics before adding the device control/status taps or the Python clients. The C++ App is currently legacy-only: `set_source_mode`, `set_capture`, and `fit_mlp` consume protobuf `ListValue` messages, while `broadband_out` produces `BroadbandFrame` and `class_out` produces `Tensor`. The versioned interface below is the canonical interface for new clients; the legacy taps remain compatibility shims during migration.
+This document freezes the state and concurrency semantics for the device
+control/status taps and Python clients. The C++ App now consumes the typed
+`control` command tap and applies commands serially at the main-loop boundary;
+`set_source_mode`, `set_capture`, and `fit_mlp` remain `ListValue`
+compatibility shims. `broadband_out` still produces `BroadbandFrame` and
+`class_out` still produces `Tensor`. The versioned interface below is the
+canonical interface for new clients.
 
 ## Terms and ownership
 
@@ -128,17 +134,17 @@ Request IDs are unique across the controller's live session. A duplicate ID for 
 
 ## Tap mapping and compatibility
 
-The planned device taps are:
+The device taps are:
 
 | Tap | Direction | Payload |
 | --- | --- | --- |
-| `control` | consumer | Versioned command envelope. |
+| `control` | consumer | Versioned command envelope; validated and queued for serial main-loop application. |
 | `state` | producer | Complete versioned state snapshots. |
 | `command_result` | producer | Correlated result/progress envelopes. |
 | `broadband_out` | producer | Existing `BroadbandFrame`; unchanged source timestamps in sampling mode. |
 | `class_out` | producer | Existing little-endian float `Tensor[num_classes]`. |
 
-The controller implementation belongs under `client/` and is the only layer that constructs `synapse.client.taps.Tap` connections. The existing scripts [`set_source_mode.py`](../client/set_source_mode.py), [`set_capture.py`](../client/set_capture.py), [`fit_mlp.py`](../client/fit_mlp.py), and [`listen_class.py`](../client/listen_class.py) document the current wire types and remain usable during migration.
+The controller implementation belongs under `client/` and is the only layer that constructs `synapse.client.taps.Tap` connections. The existing scripts [`set_source_mode.py`](../client/set_source_mode.py), [`set_capture.py`](../client/set_capture.py), [`fit_mlp.py`](../client/fit_mlp.py), and [`listen_class.py`](../client/listen_class.py) document the legacy wire types and remain usable during migration. T-7 adds state and correlated command-result publication.
 
 Legacy behavior is deliberately limited:
 

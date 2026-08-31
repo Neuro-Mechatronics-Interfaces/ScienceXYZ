@@ -1,5 +1,4 @@
 #pragma once
-#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -16,6 +15,8 @@
 #include "mlp.hpp"
 #include "mpf_features.hpp"
 #include "collection_store.hpp"
+#include "control_command_queue.hpp"
+#include "control_state.hpp"
 #include "synthetic_source.hpp"
 
 namespace app {
@@ -25,7 +26,8 @@ namespace app {
 // Node graph:
 //   kBroadbandSource(id=1) -> kApplication(id=2, "broadband-mode-switch")
 //
-// Consumer taps (control, ListValue payloads):
+// Consumer taps:
+//   control            ControlCommand              canonical v1 control plane
 //   set_source_mode  [int mode]                0=SAMPLING 1=SYNTHETIC
 //   set_capture      [int label, int enable]   route feature windows to a class
 //   fit_mlp          [int epochs?]             trigger a training pass
@@ -34,9 +36,9 @@ namespace app {
 //   broadband_out    BroadbandFrame            real (forwarded) or synthetic
 //   class_out        Tensor[num_classes]       softmax distribution, on classify
 //
-// Tap callbacks run on their own threads; they only set atomics / stash small
-// requests under a mutex and return fast. All heavy work (featurise, capture,
-// fit, classify) runs in main().
+// Tap callbacks run on their own threads; they only validate and enqueue small
+// requests, then return fast. All control mutations and heavy work (featurise,
+// capture, fit, classify) run serially in main().
 class ModeSwitchApp : public synapse::App {
  public:
   ModeSwitchApp() = default;
@@ -70,11 +72,19 @@ class ModeSwitchApp : public synapse::App {
   bool parse_config(const synapse::ApplicationNodeConfig& configuration);
 
   // ---- tap callbacks (run off-thread; keep them tiny) ----
+  void on_control_command(const protocol::ControlCommand& command);
   void on_set_source_mode(const google::protobuf::ListValue& msg);
   void on_set_capture(const google::protobuf::ListValue& msg);
   void on_fit_mlp(const google::protobuf::ListValue& msg);
 
   // ---- main-loop helpers ----
+  void drain_control_commands();
+  void apply_control_request(const control::ControlRequest& request);
+  void apply_protocol_command(const protocol::ControlCommand& command);
+  bool enqueue_legacy_request(control::ControlRequest request, const char* tap_name);
+  void log_command_failure(const protocol::ControlCommand& command,
+                           const control::TransitionResult& failure) const;
+
   // Pull one frame from the reader; returns false if nothing was read.
   bool read_one_frame(synapse::BroadbandFrame& frame);
   // Lazily size window/stride/featurizer/MLP once we know the channel layout.
@@ -91,13 +101,14 @@ class ModeSwitchApp : public synapse::App {
   AppConfig cfg_;
   synapse::ApplicationNodeConfig application_config_;
 
-  // ---- shared control state (atomics; set by callbacks) ----
-  std::atomic<int> mode_{static_cast<int>(SourceMode::kSampling)};
-  std::atomic<int> active_label_{0};
-  std::atomic<bool> capture_enabled_{false};
-  std::atomic<bool> fit_requested_{false};
-  std::atomic<int> fit_epochs_override_{-1};  // <0 => use cfg_.mlp_epochs
-  std::atomic<bool> model_ready_{false};
+  // ---- queued control state ----
+  control::ControlCommandQueue control_queue_;
+  control::ActiveTarget active_target_;
+  SourceMode mode_ = SourceMode::kSampling;
+  bool fit_requested_ = false;
+  int fit_epochs_override_ = -1;  // <0 => use cfg_.mlp_epochs
+  bool state_subscription_enabled_ = false;  // consumed by the later state publisher
+  bool model_ready_ = false;
 
   // ---- pipeline state (main-thread owned unless noted) ----
   bool pipeline_ready_ = false;

@@ -18,6 +18,7 @@ kBroadbandSource(id=1, peripheral_id=200, 20 kHz, 16-bit, 32 ch)
         │  (connection src=1 -> dst=2)
         ▼
 kApplication(id=2, name="broadband-mode-switch")
+        ├─ consumer  control               ControlCommand (versioned v1)
         ├─ consumer  set_source_mode  [mode]            0=SAMPLING 1=SYNTHETIC
         ├─ consumer  set_capture      [label, enable]
         ├─ consumer  fit_mlp          [epochs?]         (trigger)
@@ -25,19 +26,21 @@ kApplication(id=2, name="broadband-mode-switch")
         └─ producer  class_out        Tensor[num_classes]  softmax
 ```
 
-In SAMPLING mode the App forwards each upstream `BroadbandFrame` **unchanged** on `broadband_out` (source timestamps are preserved, per repo policy). In SYNTHETIC mode it emits its own deterministic frames with a monotonic sequence number and a derived timestamp.
+In SAMPLING mode the App forwards each upstream `BroadbandFrame` **unchanged** on `broadband_out` (source timestamps are preserved, per repo policy). In SYNTHETIC mode it emits its own deterministic frames with a monotonic sequence number and a derived timestamp. The typed `control` tap and all legacy control shims enqueue bounded requests; the main loop applies them serially before the next feature window is routed.
 
 ## Source layout
 
 | File | Role |
 | --- | --- |
-| `src/mode_switch_app.{hpp,cpp}` | App subclass: taps, main loop, mode FSM, windowing |
+| `src/mode_switch_app.{hpp,cpp}` | App subclass: typed/legacy taps, serial command application, mode FSM, windowing |
 | `src/synthetic_source.{hpp,cpp}` | ported gateware synthetic neural source |
 | `src/mpf_features.{hpp,cpp}` | STFT + CSD + band-average + Hermitian matrix-log |
 | `src/mlp.{hpp,cpp}` | hand-rolled 2-hidden-layer MLP + backprop + SGD |
 | `src/collection_store.hpp` | bounded multi-collection store, flushes, and generations |
 | `proto/gui_control.proto` | versioned command, result, and state protobuf schema |
 | `src/control_protocol.hpp` | v1 payload validation and protobuf serialization helpers |
+| `src/control_command_queue.hpp` | bounded FIFO for off-thread tap callbacks and main-loop control |
+| `src/control_state.hpp` | atomic target transition and selection rules |
 | `src/ring_buffer.hpp` | per-class feature store |
 | `config/rhd2132_mode_switch.json` | kBroadbandSource(200) → kApplication graph |
 | `client/*.py` | control/monitor clients |
@@ -51,8 +54,11 @@ The MLP z-scores each feature dimension using mean/std fit from the captured tra
 The canonical GUI/control-plane payloads are typed protobuf messages in
 `proto/gui_control.proto`. `src/control_protocol.hpp` validates protocol v1
 envelopes, command arguments, complete state snapshots, and correlated command
-results before serialization or application. The app still exposes only the
-legacy `ListValue` taps until the serial command application work in T-6.
+results before serialization or application. The `control` consumer tap now
+validates and queues typed commands for serial application in the App main loop.
+The legacy `set_source_mode`, `set_capture`, and `fit_mlp` taps remain
+compatibility shims through the same queue. State and command-result producer
+taps are reserved for T-7.
 
 ## Feature dimension
 

@@ -6,8 +6,8 @@ digraph broadband_gui_control {
   client [label="PySide6 GUI\nor loopback client", fillcolor="#e8f5e9", color="#2e7d32"];
   socket [label="Asyncio NDJSON\n127.0.0.1 by default", fillcolor="#fff8e1", color="#9a6b00"];
   controller [label="Headless Python\ncontroller\n(single Tap owner)", fillcolor="#fff8e1", color="#9a6b00"];
-  taps [label="Synapse control/status\nTap connections", fillcolor="#fce4ec", color="#ad1457"];
-  app [label="ModeSwitchApp\nmain-loop command boundary", fillcolor="#f3e5f5", color="#6a1b9a"];
+  taps [label="Synapse control/status\nTaps\n(control + legacy shims)", fillcolor="#fce4ec", color="#ad1457"];
+  app [label="ModeSwitchApp\nbounded FIFO → serial apply\nbefore feature routing", fillcolor="#f3e5f5", color="#6a1b9a"];
   buffers [label="Bounded collections\nof label rings", fillcolor="#e0f2f1", color="#00695c"];
   fit [label="Snapshot-and-swap\nfit worker + live model", fillcolor="#e0f2f1", color="#00695c"];
 
