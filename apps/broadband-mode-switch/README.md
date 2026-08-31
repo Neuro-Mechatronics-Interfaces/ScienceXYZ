@@ -167,6 +167,13 @@ command. A producer subscription can miss frames before the subscriber is
 ready, so use the probe's sustained count/rate and sequence diagnostics rather
 than treating the first sequence number as a zero-based stream origin.
 
+Bench note (2026-08-31): after the IntanRHD2132 re-enumerated and the app was
+freshly started against the verified ID 200, the synthetic probe was clean
+(7,768 frames/5 s, no sequence or timestamp faults). The real sampling probe
+reached the `ELECTRODE:32` path but observed 97,945 missing source sequences in
+5 s; the app log also recorded a dropped-frame interval. Treat real sampling
+as a throughput investigation until that source-drop behavior is explained.
+
 ## GUI and loopback service
 
 The graphical client owns the device Tap connections through a replaceable

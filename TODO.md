@@ -299,6 +299,48 @@ The next bench action is to restore or re-enumerate the adapter, then rerun the
 documented workflow with a fresh deployed app and record the missing stream
 checks.
 
+### 2026-08-31 - T-17 real-device bench validation completed with sampling blocker
+
+The adapter re-enumerated before the fresh run. `\.venv\\Scripts\\synapsectl.exe
+-u 192.168.100.157 info` reported device `SFI2-0-260534`, Synapse 2.4.1,
+firmware 3164583911, and `IntanRHD2132` as peripheral ID 200. A clean
+`stop`/`start apps/broadband-mode-switch/config/rhd2132_mode_switch.json`
+bound the broadband source to `IntanRHD2132 (id: 200)` and started the app with
+the typed control/state/result taps.
+
+Fresh bounded producer probes (`broadband_probe.py --duration 5`) reported:
+
+- Synthetic: 7,768 frames in 5.001 s (1,553.2 Hz), no missing or reordered
+  sequences, no timestamp regressions, fixed 50,000 ns deltas, 20 kHz, 32
+  channels, empty legacy channel ranges, and 0 parse errors.
+- Sampling: 5,156 frames in 5.021 s (1,026.9 Hz), 97,945 missing sequences,
+  no reordered sequences, 0 timestamp regressions, timestamp deltas
+  20,313..18,834,792 ns (mean 1,001,349.5 ns), 20 kHz, 32 channels,
+  `ELECTRODE:32`, and 0 parse errors. The application log also recorded a
+  larger dropped-frame interval while the source was sampling.
+
+On loopback port 18765, the packaged socket client verified successful label,
+collection, and all flush scopes; atomic target preparation with capture off;
+capture counts 6/6 for labels 0/1; and fit progress epochs 1/2/3. The terminal
+fit reported loss 0.553772 and accuracy 0.916667. A later capture advanced the
+collection generation 12 -> 26 and the state correctly marked the still-ready
+model `stale=true`. `class_out` delivered 12 valid normalized five-class
+softmax tensors in 3 s.
+
+The offscreen PySide6 dashboard connected, disconnected, and reconnected to
+the real device, reaching `ready` after both connections. The actual
+calibration prompter safely switched targets collection 0,label 2 ->
+collection 0,label 3, with capture disabled between targets and after cleanup.
+The deployed app config contains one collection (0); collection 1 was
+rejected as unavailable before prompting, so cross-collection switching is a
+configuration limitation rather than an untested success.
+
+T-17 is complete for the available deployed configuration, with the real
+sampling loss/backpressure behavior explicitly evidenced above. Do not treat
+the sampling probe as loss-free acquisition until the source-drop bottleneck
+is isolated; synthetic/control-plane/classification checks passed. The device
+was returned to sampling with capture disabled and the host service stopped.
+
 ## Initial Definition of Done
 
 The first repository milestone is complete when:
