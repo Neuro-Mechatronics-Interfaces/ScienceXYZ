@@ -145,3 +145,15 @@ lr>=~0.01 the first-layer gradients explode and the softmax collapses to uniform
 **Correction:** Added a 500 ms post-connect settle delay to the project command scripts before their first send. Device-side `app_logs` and `taps stream` should be monitored when validating command delivery; a local `send()` result is not an application acknowledgement.
 
 **Candidate rule:** Treat PUB/SUB command delivery as asynchronous: allow the subscription handshake to settle and verify receipt through an application result/state/log stream rather than trusting the publisher's local send return value.
+
+### 2026-08-31 — Windows Proactor socket cleanup raised an unhandled reset
+
+**Attempt:** Closed a loopback NDJSON client during the reconnect integration test and caught `ConnectionError` around `StreamWriter.wait_closed()`.
+
+**Failure:** Windows reported `OSError: [WinError 64]` from the Proactor transport after the peer reset, leaving an unhandled exception in the server callback even though the test passed.
+
+**Cause:** The platform surfaced this peer-close path as a broad `OSError`, not the narrower exception covered by the cleanup handler.
+
+**Correction:** Service shutdown and per-client cleanup now catch `OSError` around `wait_closed()`.
+
+**Candidate rule:** Treat socket close cleanup as best-effort and catch platform-level `OSError` when awaiting peer shutdown.

@@ -14,6 +14,9 @@ class DummyController:
     def on_state(self, callback):
         self.state_callback = callback
 
+    def on_result(self, callback):
+        self.result_callback = callback
+
     def connect(self):
         pass
 

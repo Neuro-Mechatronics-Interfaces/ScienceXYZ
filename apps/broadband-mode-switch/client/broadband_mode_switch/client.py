@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import socket
 import threading
+import time
 import uuid
 from collections import deque
 from typing import Any
@@ -104,10 +105,7 @@ class NdjsonClient:
 
     def wait_for_state(self, timeout: float | None = None) -> dict[str, Any]:
         """Return the next state event, retaining unrelated result events."""
-        deadline = None if timeout is None else socket.getdefaulttimeout()
-        if timeout is not None:
-            import time
-            deadline = time.monotonic() + timeout
+        deadline = None if timeout is None else time.monotonic() + timeout
         while True:
             remaining = None if deadline is None else max(0.0, deadline - time.monotonic())
             event = self.receive(remaining)

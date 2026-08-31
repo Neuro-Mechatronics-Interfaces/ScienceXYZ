@@ -13,10 +13,10 @@
 <!-- inner_001 -->
 <g id="node1" class="node">
 <title>inner_001</title>
-<g id="a_node1"><a xlink:href="gui-control-architecture.inner-001.svg" xlink:title="Open Inner view 1&#10;5 nodes" target="_top">
+<g id="a_node1"><a xlink:href="gui-control-architecture.inner-001.svg" xlink:title="Open Inner view 1&#10;6 nodes" target="_top">
 <polygon fill="#eef4ff" stroke="black" points="84.25,-39.5 81.25,-43.5 60.25,-43.5 57.25,-39.5 0,-39.5 0,0 84.25,0 84.25,-39.5"/>
 <text text-anchor="middle" x="42.12" y="-22.2" font-family="Times New Roman,serif" font-size="14.00">Inner view 1</text>
-<text text-anchor="middle" x="42.12" y="-6.45" font-family="Times New Roman,serif" font-size="14.00">5 nodes</text>
+<text text-anchor="middle" x="42.12" y="-6.45" font-family="Times New Roman,serif" font-size="14.00">6 nodes</text>
 </a>
 </g>
 </g>

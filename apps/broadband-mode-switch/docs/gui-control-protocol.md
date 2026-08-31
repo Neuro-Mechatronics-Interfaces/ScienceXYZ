@@ -181,6 +181,9 @@ The Python controller exposes an optional asyncio TCP service for the GUI and ex
  arguments return a `failed` result with a stable error code. The server continues reading after a recoverable bad request.
 - State events are complete replacement snapshots. A slow subscriber may have
  intermediate snapshots coalesced, but terminal command results are never coalesced. A bounded per-client queue disconnects a client that cannot accept its terminal results.
+- While a socket `fit` request is running, the service forwards each accepted
+  progress result for that request, followed by the terminal response. Progress
+  is correlated to the external request id and is never used as a state patch.
 - Mutating requests from multiple clients share the controller's FIFO command
  serialization and therefore have observable result/state order. Disconnect cancels delivery to that client but does not cancel an already applied device command.
 

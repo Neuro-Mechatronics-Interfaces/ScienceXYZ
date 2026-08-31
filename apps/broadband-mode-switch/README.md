@@ -46,6 +46,37 @@ In SAMPLING mode the App forwards each upstream `BroadbandFrame` **unchanged** o
 | `config/rhd2132_mode_switch.json` | kBroadbandSource(200) → kApplication graph |
 | `client/*.py` | control/monitor clients |
 
+## Installable host client
+
+The GUI/socket client supports CPython 3.13. From the repository root, create
+or activate a virtual environment and install the client package:
+
+```bash
+py -3.13 -m venv .venv
+.venv/Scripts/python -m pip install -e apps/broadband-mode-switch/client
+```
+
+This installs the `broadband-mode-switch-service`,
+`broadband-mode-switch-gui`, `broadband-mode-switch-calibration`, and
+`broadband-mode-switch-fake-demo` commands. The package depends on
+`science-synapse` for real device Taps and PySide6 for the GUI; the fake demo
+and hardware-free tests use no SciFi-2.
+
+To verify the install without hardware:
+
+```bash
+broadband-mode-switch-fake-demo
+PYTHONPATH=apps/broadband-mode-switch/client \
+  .venv/Scripts/python -m unittest discover \
+  -s apps/broadband-mode-switch/client/tests -v
+```
+
+The fake demo exits after a controller/state round trip. To run the real
+tools, use `broadband-mode-switch-service --device-ip "$DEV" --port 8765`,
+`broadband-mode-switch-gui --device-ip "$DEV"`, or the calibration command
+shown below. The service host defaults to `127.0.0.1`; selecting `--host`
+outside loopback is an explicit, unauthenticated operator choice.
+
 The synthetic source is a faithful port of `vendor/axon-peripherals/src/gateware/src/axon_test_source_peripheral.sv` (256-entry sine LFP LUT, 32-sample biphasic spike ROM, per-channel delay LUT, 16-bit spike-trigger LFSR seeded from `synthetic_seed`, 32-bit noise LFSR). It reproduces the gateware's per-sample values and per-channel lags but does not emulate the AXI-stream bus timing.
 
 The MPF matrix logarithm uses a hand-rolled cyclic-Jacobi Hermitian eigensolver (`mpf_features.cpp`), so **no `eigen3`/BLAS dependency is added** to `vcpkg.json`.
@@ -184,6 +215,17 @@ The prompter first queries a complete state snapshot, then uses one atomic
 `prepare_capture(..., enabled=false)` per target. It enables capture only for
 the prompted window and disables it in a `finally` cleanup before the next
 target is selected. It never connects to device Taps directly.
+
+The dashboard renders whole immutable snapshots: pipeline/source connectivity,
+active target and capture state, every reported label count/capacity, and model
+phase/epoch/loss/accuracy/duration with a stale indicator. Controller callbacks
+are queued for the Qt thread, while device connections and commands run in
+worker threads; a fake-state Qt smoke test runs with `QT_QPA_PLATFORM=offscreen`.
+Target changes use the single atomic Apply action, all mutating controls are
+gated while their request is pending, fit progress does not re-enable them
+until its terminal result, and label/collection/all flushes require explicit
+confirmation. A zero or unavailable capacity is shown as unknown rather than
+as a false percentage.
 
 ## Configuration parameters
 

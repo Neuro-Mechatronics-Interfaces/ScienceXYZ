@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .controller import BroadbandController, ControllerError, DeviceCommandError
-from .model import AppState, state_to_json
+from .model import AppState, CommandResult, result_to_json, state_to_json
 
 
 MAX_LINE = 64 * 1024
@@ -23,6 +23,7 @@ class _Client:
     session_id: str = field(default_factory=lambda: uuid.uuid4().hex)
     pending_state: dict[str, Any] | None = None
     state_task: asyncio.Task | None = None
+    progress_tasks: set[asyncio.Task] = field(default_factory=set)
 
 
 class ControlService:
@@ -35,8 +36,11 @@ class ControlService:
         self._server: asyncio.AbstractServer | None = None
         self._clients: set[_Client] = set()
         self._command_lock = asyncio.Lock()
+        self._active_requests: dict[str, tuple[_Client, str]] = {}
         self._loop: asyncio.AbstractEventLoop | None = None
         controller.on_state(self._state_from_thread)
+        if hasattr(controller, "on_result"):
+            controller.on_result(self._result_from_thread)
 
     async def start(self) -> None:
         self._loop = asyncio.get_running_loop()
@@ -51,10 +55,12 @@ class ControlService:
         for client in tuple(self._clients):
             if client.state_task is not None:
                 client.state_task.cancel()
+            for task in tuple(client.progress_tasks):
+                task.cancel()
             client.writer.close()
             try:
                 await client.writer.wait_closed()
-            except ConnectionError:
+            except OSError:
                 pass
         self._clients.clear()
         await asyncio.to_thread(self.controller.disconnect)
@@ -62,6 +68,20 @@ class ControlService:
     def _state_from_thread(self, state: AppState) -> None:
         if self._loop is not None:
             self._loop.call_soon_threadsafe(self._broadcast_state, state)
+
+    def _result_from_thread(self, result: CommandResult) -> None:
+        if self._loop is not None and result.status == "accepted" and result.progress is not None:
+            self._loop.call_soon_threadsafe(self._forward_progress, result)
+
+    def _forward_progress(self, result: CommandResult) -> None:
+        target = self._active_requests.get(result.request_id)
+        if target is None:
+            return
+        client, request_id = target
+        event = result_to_json(result) | {"request_id": request_id}
+        task = asyncio.create_task(self._write(client, event))
+        client.progress_tasks.add(task)
+        task.add_done_callback(client.progress_tasks.discard)
 
     def _broadcast_state(self, state: AppState) -> None:
         for client in tuple(self._clients):
@@ -90,7 +110,7 @@ class ControlService:
             async with client.write_lock:
                 client.writer.write(data)
                 await client.writer.drain()
-        except (ConnectionError, asyncio.CancelledError):
+        except (OSError, asyncio.CancelledError):
             client.subscribed = False
             client.pending_state = None
             self._clients.discard(client)
@@ -104,6 +124,8 @@ class ControlService:
                     line = await reader.readline()
                 except asyncio.LimitOverrunError:
                     await self._write(client, self._error("", "malformed", "request line exceeds 64 KiB"))
+                    break
+                except OSError:
                     break
                 if not line:
                     break
@@ -121,10 +143,6 @@ class ControlService:
         finally:
             self._clients.discard(client)
             writer.close()
-            try:
-                await writer.wait_closed()
-            except ConnectionError:
-                pass
 
     @staticmethod
     def _error(request_id: str, code: str, message: str, *, retryable: bool = False) -> dict[str, Any]:
@@ -151,32 +169,46 @@ class ControlService:
             if not isinstance(enabled, bool):
                 return self._error(request_id, "invalid_argument", "enabled must be boolean")
 
+        completed = False
         try:
             async with self._command_lock:
-                result = await asyncio.to_thread(self._run_command, command, request, f"socket/{client.session_id}/{request_id}")
-            from .model import result_to_json
+                internal_id = f"socket/{client.session_id}/{request_id}"
+                self._active_requests[internal_id] = (client, request_id)
+                result = await asyncio.to_thread(self._run_command, command, request, internal_id)
             if command == "subscribe_state":
                 client.subscribed = request["enabled"]
                 if client.subscribed:
                     current_state = getattr(self.controller, "state", None)
                     if isinstance(current_state, AppState):
                         client.pending_state = state_to_json(current_state)
+                        if client.state_task is None or client.state_task.done():
+                            client.state_task = asyncio.create_task(self._drain_states(client))
                 else:
                     client.pending_state = None
+            completed = True
             return result_to_json(result) | {"request_id": request_id}
         except DeviceCommandError as exc:
-            from .model import result_to_json
             return result_to_json(exc.result) | {"request_id": request_id}
         except TimeoutError as exc:
             return self._error(request_id, "timeout", str(exc), retryable=True)
         except ControllerError as exc:
-            code = "transport_disconnected" if not self.controller.connected else "internal"
-            return self._error(request_id, code, str(exc), retryable=code == "transport_disconnected")
+            message = str(exc)
+            if message.startswith("duplicate request id:"):
+                code = "duplicate_request_id"
+            else:
+                code = "transport_disconnected" if not self.controller.connected else "internal"
+            return self._error(request_id, code, message, retryable=code == "transport_disconnected")
         except (KeyError, TypeError) as exc:
             return self._error(request_id, "invalid_argument", str(exc))
         except ValueError as exc:
             code = "unknown_command" if str(exc).startswith("unknown command:") else "invalid_argument"
             return self._error(request_id, code, str(exc))
+        finally:
+            if "internal_id" in locals():
+                self._active_requests.pop(internal_id, None)
+            if not completed:
+                for task in tuple(client.progress_tasks):
+                    task.cancel()
 
     def _run_command(self, name: str, request: dict[str, Any], request_id: str):
         c = self.controller

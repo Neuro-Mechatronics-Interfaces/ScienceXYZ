@@ -49,6 +49,8 @@ class BroadbandController:
         self._send_lock = threading.Lock()
         self._pending: dict[str, _Pending] = {}
         self._pending_lock = threading.Lock()
+        self._completed: dict[str, CommandResult] = {}
+        self._completed_limit = 1024
         self._state = AppState()
         self._state_lock = threading.Lock()
         self._state_callbacks: list[Callable[[AppState], None]] = []
@@ -246,6 +248,9 @@ class BroadbandController:
                             pending = None
                         elif pending is not None:
                             self._pending.pop(result.request_id, None)
+                            self._completed[result.request_id] = result
+                            if len(self._completed) > self._completed_limit:
+                                self._completed.pop(next(iter(self._completed)))
                     if pending is not None:
                         pending.terminal = result
                         pending.event.set()
@@ -283,6 +288,13 @@ class BroadbandController:
         with self._pending_lock:
             if command.request_id in self._pending:
                 raise ControllerError(f"duplicate request id: {command.request_id}")
+            cached = self._completed.get(command.request_id)
+            if cached is not None:
+                if cached.command != proto.enum_name(command, "command"):
+                    raise ControllerError(f"duplicate request id: {command.request_id}")
+                if cached.ok:
+                    return cached
+                raise DeviceCommandError(cached)
             self._pending[command.request_id] = pending
         try:
             with self._send_lock:

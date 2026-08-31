@@ -217,6 +217,88 @@ failure.
 
 T-13 (read-only PySide6 dashboard and Qt smoke test) is next.
 
+### 2026-08-31 - T-13 dashboard view complete
+
+Extracted `create_dashboard_window()` from the previous monolithic GUI entry
+point. The dashboard applies immutable `AppState` replacements on the Qt
+thread, renders pipeline/source state, active target, all label
+count/capacity progress bars, and model phase/epoch/loss/accuracy/duration
+with stale indication. Synapse connection and command work remains in worker
+threads. A headless Qt smoke test verifies the rendered state without hardware.
+
+T-14 (safe GUI targeting, fitting, and flush controls) is next.
+
+### 2026-08-31 - T-14 safe GUI controls complete
+
+GUI mutation controls now share a pending-command gate: collection/label
+selectors, capture, Apply, Fit, and all flush buttons are disabled until the
+correlated terminal result or an error. Non-terminal fit progress leaves the
+gate closed. Apply always sends the atomic `prepare_capture` command; state
+fields are updated only by acknowledged snapshots. Destructive flush scopes
+are confirmed, device rejection/timeout text is shown inline, and unknown
+capacities are rendered disabled instead of as a fabricated percentage.
+
+Headless Qt tests cover snapshot rendering, unknown capacity, pending/double
+submission suppression, rejection/timeout re-enable, and label/collection/all
+flush submission. T-15 (fake-device end-to-end and robustness tests) is next.
+
+### 2026-08-31 - T-15 fake-device integration complete
+
+Added an in-process `FakeDevice` contract fixture and end-to-end tests that
+run the fake transport through `BroadbandController`, `ControlService`, and
+the socket client. The tests cover atomic target changes and rejection while
+capturing, all flush scopes, fit progress with new-generation data and stale
+model state, completed request-id replay without reapplying a command, two
+socket clients, and reconnect while a fit is active. The controller now keeps
+a bounded terminal-result cache for duplicate request IDs.
+
+The complete hardware-free suite passes with 24 tests when the offscreen Qt
+tests run, or 24 tests with the Qt cases skipped in environments without the
+optional PySide6 dependency. T-16 (packaging, launch commands, documentation,
+and architecture diagram refresh) is next.
+
+### 2026-08-31 - T-16 packaging and operator documentation complete
+
+Added `client/pyproject.toml` with the CPython 3.13 package metadata,
+dependencies, and console entry points for the service, GUI, calibration
+prompter, and no-hardware fake demo. Launch scripts now expose import-safe
+`main()` functions. README documentation covers editable installation,
+hardware-free verification, service binding safety, protocol usage, GUI state
+semantics, and the calibration ordering guarantee.
+
+Updated the version-controlled GraphViz architecture source and regenerated
+its bounded parent/inner SVG artifacts to show the packaged NDJSON client and
+fake-device contract fixture. The protocol document references the refreshed
+diagram.
+
+### 2026-08-31 - T-17 partial real-device bench evidence
+
+The installed tool was run as
+`\.venv\Scripts\synapsectl.exe -u 192.168.100.157 info` and reported device
+`SFI2-0-260534`, Synapse 2.4.1, firmware 3164583911, but only virtual
+peripherals 1000/1001. The configured broadband source reported `Connected
+to: Unknown`; IntanRHD2132 ID 200 was absent. `taps list` nevertheless showed
+the deployed typed `control`, `state`, and `command_result` taps plus
+`broadband_out` and `class_out`.
+
+Using the updated host service on loopback port 18765 and the packaged socket
+client, `get_state_snapshot` returned state version 7214 with
+`pipeline=disconnected`, `source_mode=sampling`, `capture_enabled=false`,
+collection generation 54 and counts 24/30/0/0/0. A fresh socket `fit(3)`
+completed at state version 7220 with loss 0.076810 and accuracy 1.000. The
+socket delivered accepted progress for epochs 1/2/3: losses 1.303458,
+0.182930, and 0.076810, with accuracies 0.666667, 0.962963, and 1.000000.
+The host service was stopped afterward; the device remained sampling with
+capture disabled.
+
+This validates the live controller/service/socket and fresh fit-progress path,
+but T-17 remains open because the missing Intan peripheral blocks connected
+sampling/synthetic stream validation, classification continuity, full GUI
+reconnect, and calibration-prompter collection switching on the real device.
+The next bench action is to restore or re-enumerate the adapter, then rerun the
+documented workflow with a fresh deployed app and record the missing stream
+checks.
+
 ## Initial Definition of Done
 
 The first repository milestone is complete when:

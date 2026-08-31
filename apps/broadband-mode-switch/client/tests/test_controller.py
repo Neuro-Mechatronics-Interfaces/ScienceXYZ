@@ -128,6 +128,33 @@ class ControllerTests(unittest.TestCase):
             self.controller.select_collection(0)
         self.assertFalse(self.controller._pending)
 
+    def test_completed_request_id_is_not_reapplied(self):
+        request_id = "fixed-request"
+        outcome = []
+
+        def issue():
+            outcome.append(self.controller.select_label(3, request_id=request_id))
+
+        thread = threading.Thread(target=issue)
+        thread.start()
+        command = None
+        deadline = time.monotonic() + 1
+        while command is None and time.monotonic() < deadline:
+            for _, raw in self.transport.sent:
+                candidate = proto.ControlCommand()
+                candidate.ParseFromString(raw)
+                if candidate.request_id == request_id:
+                    command = candidate
+                    break
+            time.sleep(0.01)
+        self.assertIsNotNone(command)
+        self.transport.inject("command_result", result_payload(request_id, "select_label"))
+        thread.join(1)
+        sent_count = len(self.transport.sent)
+        self.assertTrue(outcome[0].ok)
+        self.assertTrue(self.controller.select_label(3, request_id=request_id).ok)
+        self.assertEqual(len(self.transport.sent), sent_count)
+
     def test_malformed_state_is_reported_without_disconnecting(self):
         updates = []
         self.controller.on_state(updates.append)
