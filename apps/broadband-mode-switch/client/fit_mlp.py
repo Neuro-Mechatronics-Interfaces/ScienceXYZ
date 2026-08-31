@@ -5,8 +5,8 @@ Trigger an on-device training pass of the broadband-mode-switch App's MLP over
 all currently captured feature windows, via the "fit_mlp" consumer tap.
 
 Payload: a ListValue [epochs?]. If epochs is omitted, the App uses its
-configured mlp_epochs. Training runs in the App's main loop; watch the App logs
-(synapsectl logs) for the final loss/accuracy.
+configured mlp_epochs. Training runs on the App's managed fit worker; watch the
+App logs or command_result tap for progress and final loss/accuracy.
 """
 
 import argparse
@@ -42,6 +42,9 @@ def main() -> None:
             print(f"Failed to connect to tap '{args.tap_name}' at {args.device_ip}",
                   file=sys.stderr)
             sys.exit(1)
+        # Allow the device-side SUB socket to finish its ZeroMQ handshake;
+        # PUB silently drops messages sent during the slow-joiner window.
+        time.sleep(0.5)
         if tap.send(list_value.SerializeToString()):
             override = "" if args.epochs is None else f" (epochs={args.epochs})"
             print(f"fit_mlp requested{override}; check App logs for loss/accuracy")

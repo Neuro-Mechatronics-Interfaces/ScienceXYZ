@@ -8,6 +8,7 @@ option(BUILD_DEVICE_APP "Build the Synapse device application" ON)
 
 include(CTest)
 include("cmake/protos.cmake")
+find_package(Threads REQUIRED)
 
 if(BUILD_DEVICE_APP)
 if (BUILD_FOR_ARM64 AND NOT CMAKE_HOST_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
@@ -82,6 +83,7 @@ target_link_libraries(broadband-mode-switch
         cppzmq
         protobuf::libprotobuf
         iir::iir
+        Threads::Threads
         ${SYNAPSE_APP_SDK_LIB}
 
     PRIVATE

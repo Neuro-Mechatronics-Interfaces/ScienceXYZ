@@ -113,3 +113,15 @@ lr>=~0.01 the first-layer gradients explode and the softmax collapses to uniform
 **Correction:** Initialized the local result with `control::success()` and added an MLP regression test covering successful progress and malformed data. The terminal fit check now also rejects non-finite metrics and reports `ERROR_MALFORMED`.
 
 **Candidate rule:** Initialize deferred error/result variables explicitly to the success identity when the surrounding branch uses success as the no-error sentinel.
+
+### 2026-08-31 — Assumed a successful Tap send meant the device received the command
+
+**Attempt:** Used the legacy Python control scripts to switch source mode, capture labels, and start an MLP fit after deploying `broadband-mode-switch`.
+
+**Failure:** The scripts printed successful sends, but the device emitted no corresponding app logs or `class_out` data. The `broadband_out` producer was healthy, so the apparent control-plane success was misleading.
+
+**Cause:** Synapse consumer taps use ZeroMQ PUB/SUB. The client scripts sent immediately after connecting, during the PUB/SUB slow-joiner window; `Tap.send()` only confirmed a local socket send and could not confirm device receipt. The scripts' 0.1–1 ms connection settle delay was insufficient.
+
+**Correction:** Added a 500 ms post-connect settle delay to the project command scripts before their first send. Device-side `app_logs` and `taps stream` should be monitored when validating command delivery; a local `send()` result is not an application acknowledgement.
+
+**Candidate rule:** Treat PUB/SUB command delivery as asynchronous: allow the subscription handshake to settle and verify receipt through an application result/state/log stream rather than trusting the publisher's local send return value.

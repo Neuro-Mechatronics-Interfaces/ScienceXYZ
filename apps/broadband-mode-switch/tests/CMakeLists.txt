@@ -54,6 +54,7 @@ target_sources(broadband-mode-switch-control-state-tests PRIVATE
 
 target_link_libraries(broadband-mode-switch-protocol-tests PRIVATE protobuf::libprotobuf)
 target_link_libraries(broadband-mode-switch-control-state-tests PRIVATE protobuf::libprotobuf)
+target_link_libraries(broadband-mode-switch-fit-worker-tests PRIVATE Threads::Threads)
 
 # protobuf_generate() attaches the generated source/header custom command to
 # the protocol target. Make the SDK-independent state test wait for that

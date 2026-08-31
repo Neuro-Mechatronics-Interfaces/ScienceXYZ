@@ -45,6 +45,9 @@ def main() -> None:
             print(f"Failed to connect to tap '{args.tap_name}' at {args.device_ip}",
                   file=sys.stderr)
             sys.exit(1)
+        # Allow the device-side SUB socket to finish its ZeroMQ handshake;
+        # PUB silently drops messages sent during the slow-joiner window.
+        time.sleep(0.5)
         if tap.send(list_value.SerializeToString()):
             print(f"set_capture label={args.label} enable={enable}")
         else:

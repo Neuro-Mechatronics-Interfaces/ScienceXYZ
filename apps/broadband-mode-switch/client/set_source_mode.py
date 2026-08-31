@@ -43,6 +43,11 @@ def main() -> None:
             print(f"Failed to connect to tap '{args.tap_name}' at {args.device_ip}",
                   file=sys.stderr)
             sys.exit(1)
+        # The Tap uses PUB/SUB for consumer taps.  A successful TCP connect
+        # does not mean the device subscriber has completed its ZeroMQ
+        # subscription handshake; without this settle time the first command
+        # can be silently discarded by the PUB socket.
+        time.sleep(0.5)
         if tap.send(list_value.SerializeToString()):
             print(f"Set source mode -> {mode} "
                   f"({'SAMPLING' if mode == 0 else 'SYNTHETIC'})")
