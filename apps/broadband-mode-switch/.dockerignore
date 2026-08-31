@@ -1,0 +1,11 @@
+# Generated outputs and local caches are recreated inside the SDK image.
+build/
+dist/
+
+# Repository and local-environment metadata are not build inputs.
+.git/
+.venv/
+__pycache__/
+
+# Local recordings are intentionally outside the app build context.
+data/
