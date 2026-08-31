@@ -143,6 +143,30 @@ Next (bench, staged per PLAN.md §7):
 - [ ] `fit_mlp` + `listen_class.py`; confirm separable synthetic classes learn (Stage 4).
 - [ ] Measure on-device `fit` cost; move training to a worker thread if it stalls the `main()` loop.
 
+### 2026-08-31 - broadband-mode-switch bounded producer validation
+
+The deployed app was verified read-only with `synapsectl -u 192.168.100.157
+info`: device `SFI2-0-260534` is running Synapse 2.4.1, firmware
+3164583911, with `IntanRHD2132` peripheral ID 200 and a 20 kHz, 32-channel
+source. The app was left in sampling mode with capture disabled.
+
+The bounded `client/broadband_probe.py --duration 5` checks produced:
+
+- Synthetic: 7,614 frames in 5.089 s (1,496.2 Hz), no missing or reordered
+  sequences, no timestamp regressions, fixed 50,000 ns timestamp delta, 20 kHz,
+  32 channels, empty `channel_ranges` (legacy electrode layout), 0 parse
+  errors.
+- Sampling: 6,222 frames in 5.010 s (1,242.0 Hz), 118,199 missing sequence
+  numbers, no reordered sequences, no timestamp regressions, timestamp delta
+  20,104..18,159,427 ns (mean 1,001,091.9 ns), 20 kHz, 32 channels,
+  `ELECTRODE:32`, 0 parse errors.
+
+The app log also recorded the synthetic -> sampling transitions, a sampling
+dropped-frame warning (`154340`), and the final capture-off command. Existing
+fit evidence includes `capture ... count=26 total=50` and final loss 0.0037 /
+accuracy 1.000; a fresh per-epoch fit-progress line was not present in the
+available app log. The complete GUI/socket workflow remains open under T-17.
+
 ## Initial Definition of Done
 
 The first repository milestone is complete when:
