@@ -64,6 +64,26 @@ This file records concrete mistakes encountered while working in this repository
 
 **Candidate rule:** Do not carry an electrode/reference map from a virtual/simulator peripheral to a physical one; physical front ends validate ids against real channel counts. When a `synapsectl` action fails with a generic CLI-level error, read `synapsectl ... logs` for the device-side cause before diagnosing. (Also: `synapsectl` on Windows crashes printing a U+2713 checkmark under the console's cp1252 codec -- set `PYTHONUTF8=1` for its commands.)
 
+### 2026-08-31 — Imported a generated protobuf enum from the wrong module
+
+**Attempt:** Added the read-only `broadband_out` Python probe and imported both
+`BroadbandFrame` and `ChannelType` from `synapse.api.datatype_pb2`.
+
+**Failure:** The CPython 3.13 test run failed during module import because the
+installed generated bindings expose the imported `ChannelType` enum through
+`synapse.api.channel_pb2`, not `datatype_pb2`.
+
+**Cause:** Protobuf Python generation keeps imported declarations in their
+source module; the `datatype.proto` reference does not re-export the enum.
+
+**Correction:** Imported `BroadbandFrame` from `datatype_pb2` and `ChannelType`
+from `channel_pb2`, then added offline parser tests. The full client suite
+passed.
+
+**Candidate rule:** When adding a generated-protobuf client, inspect the
+installed binding modules for imported message/enum ownership before writing
+imports; compile/import the smallest consumer immediately.
+
 ### 2026-08-26 — On-device MLP would not learn separable MPF classes (feature scale)
 
 **Attempt:** Offline smoke test of the `broadband-mode-switch` MLP: two synthetic classes, one amplitude-scaled 4x (an obvious, large feature difference), trained with the config default `mlp_lr` (~0.01-0.02) on the raw MPF feature vectors.

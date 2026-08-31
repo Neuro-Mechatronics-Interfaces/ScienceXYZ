@@ -122,6 +122,49 @@ python client/fit_mlp.py --device-ip $DEV --epochs 200
 python client/listen_class.py --device-ip $DEV
 ```
 
+For a bounded, read-only producer check, run the broadband probe in each
+source mode and compare its sequence/timestamp and channel metadata:
+
+```bash
+python client/broadband_probe.py --device-ip $DEV --duration 5
+```
+
+The report includes valid-frame count and observed rate, sequence gaps and
+reordering, timestamp regressions and deltas, sample rate, payload channel
+count, `channel_ranges`, and malformed-payload count. It never sends a device
+command. A producer subscription can miss frames before the subscriber is
+ready, so use the probe's sustained count/rate and sequence diagnostics rather
+than treating the first sequence number as a zero-based stream origin.
+
+## GUI and loopback service
+
+The graphical client owns the device Tap connections through a replaceable
+transport. The GUI never calls Synapse from the Qt thread; state snapshots are
+immutable replacements and all target changes use the atomic `prepare_capture`
+command. Install the host dependencies from `client/requirements.txt`, then
+launch the dashboard with:
+
+```bash
+python client/run_gui.py --device-ip "$DEV"
+```
+
+For external tools, the same controller can expose the versioned loopback
+NDJSON service. It binds only to localhost by default:
+
+```bash
+python client/run_service.py --device-ip "$DEV" --port 8765
+```
+
+The service supports `get_state`, `subscribe_state`, `prepare_capture`,
+`select_collection`, `select_label`, `set_capture`, `fit`, and `flush`. Remote
+binding is unauthenticated in v1 and must be an explicit operator choice.
+
+The controller's hardware-free tests run without a device:
+
+```bash
+PYTHONPATH=client python -m unittest discover -s client/tests -v
+```
+
 ## Configuration parameters
 
 All parameters have safe defaults; window/stride are in milliseconds and are converted with `sample_rate_hz`.

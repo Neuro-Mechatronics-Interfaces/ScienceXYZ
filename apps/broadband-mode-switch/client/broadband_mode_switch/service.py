@@ -1,0 +1,183 @@
+"""Loopback NDJSON service for the GUI and small external tools."""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import uuid
+from dataclasses import dataclass, field
+from typing import Any
+
+from .controller import BroadbandController, ControllerError, DeviceCommandError
+from .model import AppState, state_to_json
+
+
+MAX_LINE = 64 * 1024
+
+
+@dataclass(eq=False)
+class _Client:
+    writer: asyncio.StreamWriter
+    subscribed: bool = False
+    write_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    session_id: str = field(default_factory=lambda: uuid.uuid4().hex)
+
+
+class ControlService:
+    """Async socket facade; device I/O remains exclusively in the controller."""
+
+    def __init__(self, controller: BroadbandController, host: str = "127.0.0.1", port: int = 8765):
+        self.controller = controller
+        self.host = host
+        self.port = port
+        self._server: asyncio.AbstractServer | None = None
+        self._clients: set[_Client] = set()
+        self._command_lock = asyncio.Lock()
+        self._loop: asyncio.AbstractEventLoop | None = None
+        controller.on_state(self._state_from_thread)
+
+    async def start(self) -> None:
+        self._loop = asyncio.get_running_loop()
+        await asyncio.to_thread(self.controller.connect)
+        self._server = await asyncio.start_server(self._handle_client, self.host, self.port)
+
+    async def stop(self) -> None:
+        if self._server is not None:
+            self._server.close()
+            await self._server.wait_closed()
+            self._server = None
+        for client in tuple(self._clients):
+            client.writer.close()
+            await client.writer.wait_closed()
+        self._clients.clear()
+        await asyncio.to_thread(self.controller.disconnect)
+
+    def _state_from_thread(self, state: AppState) -> None:
+        if self._loop is not None:
+            self._loop.call_soon_threadsafe(self._broadcast_state, state)
+
+    def _broadcast_state(self, state: AppState) -> None:
+        for client in tuple(self._clients):
+            if client.subscribed:
+                asyncio.create_task(self._write(client, state_to_json(state)))
+
+    async def _write(self, client: _Client, value: dict[str, Any]) -> None:
+        try:
+            data = (json.dumps(value, separators=(",", ":")) + "\n").encode()
+            async with client.write_lock:
+                client.writer.write(data)
+                await client.writer.drain()
+        except (ConnectionError, asyncio.CancelledError):
+            self._clients.discard(client)
+
+    async def _handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        client = _Client(writer)
+        self._clients.add(client)
+        try:
+            while True:
+                try:
+                    line = await reader.readline()
+                except asyncio.LimitOverrunError:
+                    await self._write(client, self._error("", "malformed", "request line exceeds 64 KiB"))
+                    break
+                if not line:
+                    break
+                if len(line) > MAX_LINE:
+                    await self._write(client, self._error("", "malformed", "request line exceeds 64 KiB"))
+                    break
+                try:
+                    request = json.loads(line.decode("utf-8"))
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    await self._write(client, self._error("", "malformed", "request must be one UTF-8 JSON object"))
+                    continue
+                response = await self._dispatch(client, request)
+                if response is not None:
+                    await self._write(client, response)
+        finally:
+            self._clients.discard(client)
+            writer.close()
+            await writer.wait_closed()
+
+    @staticmethod
+    def _error(request_id: str, code: str, message: str) -> dict[str, Any]:
+        return {
+            "type": "result", "protocol_version": 1, "request_id": request_id,
+            "command": "unknown", "status": "failed", "state_version": "0",
+            "error": {"code": code, "message": message, "field": "", "retryable": False},
+        }
+
+    async def _dispatch(self, client: _Client, request: Any) -> dict[str, Any] | None:
+        if not isinstance(request, dict):
+            return self._error("", "malformed", "request must be a JSON object")
+        request_id = request.get("request_id")
+        command = request.get("command")
+        if not isinstance(request_id, str) or not request_id:
+            return self._error("", "invalid_argument", "request_id must be a non-empty string")
+        if request.get("protocol_version") != 1:
+            return self._error(request_id, "unsupported_version", "protocol_version must be 1")
+        if not isinstance(command, str):
+            return self._error(request_id, "invalid_argument", "command must be a string")
+
+        if command == "subscribe_state":
+            enabled = request.get("enabled")
+            if not isinstance(enabled, bool):
+                return self._error(request_id, "invalid_argument", "enabled must be boolean")
+            client.subscribed = enabled
+
+        try:
+            async with self._command_lock:
+                result = await asyncio.to_thread(self._run_command, command, request, f"socket/{client.session_id}/{request_id}")
+            from .model import result_to_json
+            return result_to_json(result) | {"request_id": request_id}
+        except DeviceCommandError as exc:
+            from .model import result_to_json
+            return result_to_json(exc.result) | {"request_id": request_id}
+        except (ControllerError, TimeoutError, ValueError, KeyError, TypeError) as exc:
+            return self._error(request_id, "invalid_argument", str(exc))
+
+    def _run_command(self, name: str, request: dict[str, Any], request_id: str):
+        c = self.controller
+        if name == "get_state":
+            return c.get_state(request_id)
+        if name == "subscribe_state":
+            return c.subscribe_state(request["enabled"], request_id)
+        if name == "prepare_capture":
+            return c.prepare_capture(self._uint(request, "collection_id"), self._uint(request, "label"), self._bool(request, "enabled"), request_id)
+        if name == "select_collection":
+            return c.select_collection(self._uint(request, "collection_id"), request_id)
+        if name == "select_label":
+            return c.select_label(self._uint(request, "label"), request_id)
+        if name == "set_capture":
+            return c.set_capture(self._bool(request, "enabled"), request_id)
+        if name == "fit":
+            return c.fit(self._uint(request, "epochs", 0), request_id)
+        if name == "flush":
+            return c.flush(request["scope"], self._optional_uint(request, "collection_id"), self._optional_uint(request, "label"), request_id)
+        raise ValueError(f"unknown command: {name}")
+
+    @staticmethod
+    def _bool(request: dict[str, Any], key: str) -> bool:
+        value = request[key]
+        if not isinstance(value, bool):
+            raise ValueError(f"{key} must be boolean")
+        return value
+
+    @staticmethod
+    def _uint(request: dict[str, Any], key: str, default: int | None = None) -> int:
+        value = request[key] if key in request else default
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            raise ValueError(f"{key} must be a non-negative integer")
+        return value
+
+    @classmethod
+    def _optional_uint(cls, request: dict[str, Any], key: str) -> int | None:
+        return None if key not in request else cls._uint(request, key)
+
+
+async def serve(controller: BroadbandController, host: str, port: int) -> None:
+    service = ControlService(controller, host, port)
+    await service.start()
+    try:
+        await asyncio.Event().wait()
+    finally:
+        await service.stop()
