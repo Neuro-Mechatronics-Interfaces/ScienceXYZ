@@ -1,0 +1,55 @@
+{
+  "name": "onnxruntime",
+  "version": "1.16.3",
+  "description": "onnxruntime",
+  "homepage": "https://github.com/microsoft/onnxruntime",
+  "license": "MIT",
+  "supports": "arm64 | x64 | linux | osx",
+  "features": {
+    "coreml": {
+      "description": "CoreML support"
+    },
+    "cuda50": {
+      "description": "CUDA architecture 5.0 support",
+      "dependencies": ["cuda"]
+    },
+    "cuda52": {
+      "description": "CUDA architecture 5.2 support",
+      "dependencies": ["cuda"]
+    },
+    "cuda60": {
+      "description": "CUDA architecture 6.0 support",
+      "dependencies": ["cuda"]
+    },
+    "cuda61": {
+      "description": "CUDA architecture 6.1 support",
+      "dependencies": ["cuda"]
+    },
+    "cuda70": {
+      "description": "CUDA architecture 7.0 support",
+      "dependencies": ["cuda"]
+    },
+    "cuda75": {
+      "description": "CUDA architecture 7.5 support",
+      "dependencies": ["cuda"]
+    },
+    "cuda80": {
+      "description": "CUDA architecture 8.0 support",
+      "dependencies": ["cuda"]
+    },
+    "cuda86": {
+      "description": "CUDA architecture 8.6 support",
+      "dependencies": ["cuda"]
+    }
+  },
+  "dependencies": [
+    {
+      "name": "vcpkg-cmake",
+      "host": true
+    },
+    {
+      "name": "vcpkg-cmake-config",
+      "host": true
+    }
+  ]
+}

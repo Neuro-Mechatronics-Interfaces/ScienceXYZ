@@ -1,0 +1,17 @@
+if(NOT TARGET ftd3xx::ftd3xx)
+    add_library(ftd3xx::ftd3xx STATIC IMPORTED)
+    set_target_properties(ftd3xx::ftd3xx PROPERTIES
+        IMPORTED_LOCATION "@CMAKE_INSTALL_PREFIX@/lib/libftd3xx-static.a"
+        INTERFACE_INCLUDE_DIRECTORIES "@CMAKE_INSTALL_PREFIX@/include"
+    )
+
+    set_target_properties(ftd3xx::ftd3xx PROPERTIES
+        INTERFACE_INCLUDE_DIRECTORIES "@CMAKE_INSTALL_PREFIX@/include"
+    )
+
+    if(APPLE)
+        set_target_properties(ftd3xx::ftd3xx PROPERTIES
+            INTERFACE_LINK_LIBRARIES "-framework CoreFoundation;-framework IOKit"
+        )
+    endif()
+endif()

@@ -1,0 +1,14 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 4d154e4..af8c1bc 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -31,8 +31,7 @@ include(TargetArch)
+ detect_target_architecture(_TARGET_ARCH)
+ 
+ check_include_file(getopt.h HAVE_GETOPT_H)
+-cmake_dependent_option(BASE64_BUILD_CLI "Build the cli for encoding and decoding" ON "HAVE_GETOPT_H" OFF)
+-add_feature_info(CLI BASE64_BUILD_CLI "enables the CLI executable for encoding and decoding")
++option(BASE64_BUILD_CLI "Build the cli for encoding and decoding" OFF)
+ 
+ ###################################################################
+ # optional/conditional dependencies

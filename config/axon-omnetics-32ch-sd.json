@@ -4,9 +4,9 @@
       "id": 1,
       "type": "kBroadbandSource",
       "broadband_source": {
-        "peripheral_id": 2,
-        "bit_width": 12,
-        "sample_rate_hz": 32000,
+        "peripheral_id": 200,
+        "bit_width": 16,
+        "sample_rate_hz": 20000,
         "gain": 200,
         "signal": {
           "electrode": {

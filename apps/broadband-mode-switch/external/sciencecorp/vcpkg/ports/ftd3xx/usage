@@ -1,0 +1,4 @@
+ftd3xx provides CMake targets:
+
+  find_package(ftd3xx CONFIG REQUIRED)
+  target_link_libraries(main PRIVATE ftd3xx::ftd3xx)

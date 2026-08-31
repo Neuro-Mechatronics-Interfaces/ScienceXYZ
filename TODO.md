@@ -137,6 +137,87 @@ The Axon Omnetics adapter no longer enumerates: device screen shows 0 peripheral
 
 Bench facts learned during the investigation: `peripheral_id` 1–2 are command-range aliases ("first broadband source"), never port numbers; the device clock is unreliable across boots (jumped backward a day; runs ~1 month behind — relevant to all future provenance/synchronization work); `axon_interface: kUSB` with the peripheral-facing USB handled by `at_usb0/1` bridge devices, invisible to the Linux USB host stack; `TIME_SOURCE_SAMPLE_COUNTER` confirmed as the device time source; the deploy channel accepts any .deb with `Section: synapse-peripherals` and can carry diagnostic payloads (mailbox pattern, `scripts/device-diag/`).
 
+### 2026-08-26 — RHD2132 SPI-master gateware track (plan only)
+
+Science confirmed the probe front end is a physical **Intan RHD2132** (32-ch SPI
+ADC/amp), to be driven by the Lattice FPGA on the SciFi-2 headstage. Radiant
+2026.1 + node-locked license are installed. **Update 2026-08-26 (evening): the adapter enumerates again.** `info` now lists
+`IntanRHD2132` (ID 200, kBroadbandSource, Intan Technologies) with the virtual
+peripherals (1000, 1001). The 2026-08-24 non-enumeration was a transient
+link-level issue, now cleared — ID 200 was never destroyed by our deploys (see
+`MISTAKES.md`, software exonerated). **The stock config-only recording path is
+therefore available now** (bind `peripheral_id: 200`; no custom gateware/Radiant)
+and is the fast path to actual probe data. The RHD2132 SPI-master gateware effort
+below is now optional/long-term — a track to own our own peripheral (`0xF200`) for
+custom on-device processing — not the only way to record.
+
+**DONE 2026-08-26: first real recording from the physical RHD2132 (ID 200).**
+`config/axon-omnetics-32ch-broadband.json` (broadband-source-only, no app node)
+streams cleanly: 5 s @ 20 kHz / 16-bit / 32 ch, 100,305 frames / 3.21M samples,
+0.00% loss. Captured to HDF5 via `synapsectl read <config> --duration N --output
+<dir>`. HDF5 confirms `lsb_uv = 0.195`, `sample_rate_hz = 20000`, and carries the
+provenance fields AGENTS.md wants: `sequence_number` (monotonic +1, no gaps),
+`timestamp_ns` (source), `unix_timestamp_ns` (host). Device log confirmed
+`clkmc 80000000 Hz`, `period 4000 cycles`. The blocker was a config bug, not
+hardware: the real RHD2132 driver validates `electrode_id` to 0-31 and rejected
+the virtual-peripheral map (122/126/...); an identity 0-31 map fixed it. On
+Windows, run `synapsectl` with `PYTHONUTF8=1` (its checkmark output crashes under
+cp1252). See MISTAKES.md.
+
+Follow-ups before this is a *correct* recording (not just a working stream):
+- [ ] Replace the identity electrode/reference map with the adapter's documented
+      Omnetics->RHD2132 channel map (needs the pinout from Science). Identity is a
+      smoke-test placeholder; electrode ids are provenance labels.
+- [ ] Understand the BroadbandFrame timestamp granularity: per-frame
+      `timestamp_ns` dt ≈ 2916 ns, not 50000 ns (1 sample @ 20 kHz). Determine
+      whether a frame carries a multi-sample block and how the device
+      sample-counter maps to ns — matters for synchronization/provenance.
+- [ ] Decide whether to run the `kBroadbandSource -> kApplication` graph
+      (`config/axon-omnetics-32ch.json`, app `synapse-example-app` v0.1.0 is
+      installed) once the source path is trusted.
+
+The current `m053m716/omnetics-32ch-adapter` scaffold is a renamed copy of the
+synthetic `axon_test_source` (fake data, no SPI). Full implementation-grounded
+plan — RHD command/register model, 80 MHz SPI timing, the 2-transaction MISO
+pipeline gotcha, driver electrical contract (0.195 µV/LSB, 192 V/V, 20 kHz),
+tests, build/license, and blocking inputs — is in
+[`docs/rhd2132-gateware-plan.md`](docs/rhd2132-gateware-plan.md). No code written
+yet. Reference bodies: the RE'd SDK `.so`, the SDK's `axon_test_source` driver, and
+`third_party/intan/firmware/rhd/xem7310_common/main.v`.
+
+Blocking before hardware bring-up: (1) adapter must electrically enumerate again;
+(2) SciFi-2 → RHD2132 SPI pinout from Science; (3) confirm a user peripheral may
+own the RHD SPI pins on the internal fabric (else Via/devkit path). Sim-only RTL +
+driver + cocotb work can proceed against an SPI-slave model in the meantime.
+
+### 2026-08-26 — broadband-mode-switch App implemented (offline; bench-verify pending)
+
+New on-device App `apps/broadband-mode-switch/` implementing all five stages of
+`PLAN.md`: live real↔synthetic source toggle, labeled per-class ring buffer,
+Kaifosh-2025 multivariate MPF features (STFT → CSD → band-average → Hermitian
+matrix-log via a hand-rolled cyclic-Jacobi eigensolver, no `eigen3`), and a
+hand-rolled 2-hidden-layer MLP (backprop + SGD, feature z-scoring, dropout).
+Three `ListValue` consumer taps (`set_source_mode`, `set_capture`, `fit_mlp`),
+two producer taps (`broadband_out` `BroadbandFrame`, `class_out` `Tensor`), plus
+`config/rhd2132_mode_switch.json` (binds ID 200) and four client scripts.
+
+Status: the four SDK-independent modules compile clean under `g++ -std=c++20
+-Wall -Wextra -Wshadow` and pass an offline smoke test; `mode_switch_app.cpp`
+mirrors the proven example-app SDK usage but needs the Docker build to compile
+(SDK headers live in the builder image). See `PLAN.md` for the vs-plan deltas.
+
+Next (bench, staged per PLAN.md §7):
+- [ ] `synapsectl apps build apps/broadband-mode-switch` — confirm it compiles;
+      resolves open-question #1 (`create_tap<synapse::BroadbandFrame>` allowed?).
+      A `Tensor` fallback for `broadband_out` is documented at the call site.
+- [ ] Deploy + start on the ID-200 chain; confirm `broadband_out` streams (Stage 0).
+- [ ] Toggle real↔synthetic via `client/set_source_mode.py` (Stage 1).
+- [ ] Capture labeled windows; confirm per-class counts (Stage 2).
+- [ ] Validate MPF feature dim + numerical sanity vs a NumPy recomputation (Stage 3).
+- [ ] `fit_mlp` + `listen_class.py`; confirm separable synthetic classes learn (Stage 4).
+- [ ] Measure on-device `fit` cost; move training to a worker thread if it stalls
+      the `main()` loop.
+
 ## Initial Definition of Done
 
 The first repository milestone is complete when:

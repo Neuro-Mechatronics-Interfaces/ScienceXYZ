@@ -1,0 +1,15 @@
+diff --git a/tools/ci_build/build.py b/tools/ci_build/build.py
+index 76cda428ca..f4f83343af 100644
+--- a/tools/ci_build/build.py
++++ b/tools/ci_build/build.py
+@@ -763,6 +763,10 @@ def is_ubuntu_1604():
+
+
+ def get_config_build_dir(build_dir, config):
++    # if environment variable 'ONNXRUNTIME_BUILD_DIR' is set, use it as build directory
++    if "ONNXRUNTIME_BUILD_DIR" in os.environ:
++        return os.environ["ONNXRUNTIME_BUILD_DIR"]
++
+     # build directory per configuration
+     return os.path.join(build_dir, config)
+

@@ -24,10 +24,19 @@ Do not hard-code a Synapse peripheral ID. Query the running device and use the I
 
 Keep third-party Science repositories under `vendor/` as Git submodules.
 
-Treat all `vendor/` repositories as upstream/read-only code. Do not make local feature changes inside a vendored repository unless explicitly requested.
+Treat all `vendor/` repositories as upstream/read-only code by default. Do not make local feature changes inside a vendored repository unless explicitly requested.
 
 Changes to Science dependencies should normally consist only of updating the
 submodule revision.
+
+**Exception -- `m053m716/`-prefixed branches.** A `vendor/` submodule checked out
+on a branch whose name begins with `m053m716/` is an intentional local fork, and
+editing it is allowed. Treat that branch as the working copy: make the feature
+changes there, commit them in the submodule, and bump the submodule pointer in
+this repository. Do not edit a vendored submodule that is on any other branch
+(e.g. upstream `main`, a tag, or a detached upstream revision) without an
+explicit request; first move it onto an `m053m716/`-prefixed branch. The
+read-only default still governs every submodule not on such a branch.
 
 Use these top-level areas as the repository grows:
 

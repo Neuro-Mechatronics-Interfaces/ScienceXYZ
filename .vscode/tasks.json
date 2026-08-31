@@ -1,0 +1,56 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Handoff: Serve Viewer",
+      "type": "shell",
+      "command": "handoff-mcp",
+      "args": [
+        "gui",
+        "--open",
+        "none",
+        "--port",
+        "8765"
+      ],
+      "isBackground": true,
+      "problemMatcher": [
+        {
+          "pattern": [
+            {
+              "regexp": ".",
+              "file": 1,
+              "location": 2,
+              "message": 3
+            }
+          ],
+          "background": {
+            "activeOnStart": true,
+            "beginsPattern": "Handoff viewer",
+            "endsPattern": "Ctrl\\+C to stop"
+          }
+        }
+      ],
+      "presentation": {
+        "reveal": "silent",
+        "panel": "dedicated"
+      }
+    },
+    {
+      "label": "Handoff: Open Viewer",
+      "dependsOn": [
+        "Handoff: Serve Viewer"
+      ],
+      "type": "shell",
+      "command": "${input:openHandoffViewer}",
+      "problemMatcher": []
+    }
+  ],
+  "inputs": [
+    {
+      "id": "openHandoffViewer",
+      "type": "command",
+      "command": "simpleBrowser.show",
+      "args": "http://127.0.0.1:8765/"
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "handoff": {
+      "command": "handoff-mcp",
+      "args": [
+        "serve"
+      ],
+      "env": {
+        "HANDOFF_MCP_PROJECT_ROOT": "C:\\MyRepos\\C\\ScienceXYZ"
+      }
+    }
+  }
+}

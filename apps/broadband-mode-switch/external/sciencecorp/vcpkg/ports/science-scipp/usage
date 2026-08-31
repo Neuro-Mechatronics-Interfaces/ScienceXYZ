@@ -1,0 +1,4 @@
+science-scipp provides CMake targets:
+
+  find_package(science-scipp CONFIG REQUIRED)
+  target_link_libraries(main PRIVATE science::scipp)

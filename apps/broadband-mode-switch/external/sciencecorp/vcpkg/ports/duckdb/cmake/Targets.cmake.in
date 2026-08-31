@@ -1,0 +1,15 @@
+if(NOT TARGET duckdb)
+    add_library(duckdb UNKNOWN IMPORTED)
+
+    if(UNIX AND NOT APPLE)
+        set_target_properties(duckdb PROPERTIES
+            IMPORTED_LOCATION "${CMAKE_CURRENT_LIST_DIR}/../../../lib/libduckdb.so"
+            INTERFACE_INCLUDE_DIRECTORIES "${CMAKE_CURRENT_LIST_DIR}/../../../include"
+        )
+    elseif(APPLE)
+        set_target_properties(duckdb PROPERTIES
+            IMPORTED_LOCATION "${CMAKE_CURRENT_LIST_DIR}/../../../lib/libduckdb.dylib"
+            INTERFACE_INCLUDE_DIRECTORIES "${CMAKE_CURRENT_LIST_DIR}/../../../include"
+        )
+    endif()
+endif()

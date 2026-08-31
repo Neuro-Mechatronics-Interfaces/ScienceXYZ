@@ -1,0 +1,27 @@
+diff --git a/tools/python/util/logger.py b/tools/python/util/logger.py
+index 9deb447572..55780739ff 100644
+--- a/tools/python/util/logger.py
++++ b/tools/python/util/logger.py
+@@ -4,7 +4,18 @@
+ import logging
+
+
+-def get_logger(name):
+-    logging.basicConfig(format="%(asctime)s %(name)s [%(levelname)s] - %(message)s", level=logging.DEBUG)
++def get_logger(name, level=logging.DEBUG):
++    formatter = logging.Formatter("%(asctime)s %(name)s [%(levelname)s] - %(message)s")
++    logger = logging.getLogger(name)
+
+-    return logging.getLogger(name)
++    file_handler = logging.FileHandler(f"build.log")
++    file_handler.setFormatter(formatter)
++    logger.addHandler(file_handler)
++
++    console_handler = logging.StreamHandler()
++    console_handler.setFormatter(formatter)
++    logger.addHandler(console_handler)
++
++    logger.setLevel(level)
++
++    return logger
+

@@ -142,3 +142,71 @@ capture the device's actual state through a read-only channel (package list,
 plugin dir, boot-scoped journal). On devices with unstable clocks, scope
 journal queries with `journalctl -b`; a curated log RPC returning nothing is
 not evidence of absence.
+
+### 2026-08-26 — Carried-over virtual electrode map rejected by the real RHD2132
+
+**Attempt:**  
+First real recording from the physical Axon Omnetics 32-ch probe (Intan
+RHD2132, `peripheral_id` 200) reused the electrode/reference map copied from the
+virtual peripheral example (`id` 1000): `electrode_id` values like 122, 126,
+116, and `reference_id` 512/513. `synapsectl start` was expected to stream.
+
+**Failure:**  
+`start` failed with a misleading top-level "Failed to start device: connection
+error" from the CLI. The device logs showed the true cause:
+`IntanRhd2132: Invalid electrode ID: 32 (max 31)` -> `Failed to configure
+channels` -> `BroadbandNode: Failed to start peripheral recording`.
+
+**Cause:**  
+The virtual peripheral (id 1000) accepts arbitrary electrode/reference ids; the
+**real RHD2132 driver validates `electrode_id` to its 32 physical amplifier
+channels, 0-31**, and hard-rejects anything above. The carried-over map was
+never a valid physical channel map (this exact risk was pre-flagged in
+`TODO.md`). The CLI's "connection error" is a downstream symptom, not the cause
+-- the device log is authoritative.
+
+**Correction:**  
+Set an identity map (`electrode_id` = channel `id`, 0..31; `reference_id` 0) in
+`config/axon-omnetics-32ch-broadband.json`. Recording then streamed cleanly: 5 s
+@ 20 kHz, 100,305 frames / 3,209,760 samples, 0.00% loss; HDF5 attrs confirm
+`lsb_uv = 0.195`, `sample_rate_hz = 20000`. Two device-side facts also confirmed
+in the logs: `clkmc 80000000 Hz`, `period 4000 cycles` at 20 kHz.
+
+**Candidate rule:**  
+Do not carry an electrode/reference map from a virtual/simulator peripheral to a
+physical one; physical front ends validate ids against real channel counts.
+When a `synapsectl` action fails with a generic CLI-level error, read
+`synapsectl ... logs` for the device-side cause before diagnosing. (Also:
+`synapsectl` on Windows crashes printing a U+2713 checkmark under the console's
+cp1252 codec -- set `PYTHONUTF8=1` for its commands.)
+
+### 2026-08-26 — On-device MLP would not learn separable MPF classes (feature scale)
+
+**Attempt:**
+Offline smoke test of the `broadband-mode-switch` MLP: two synthetic classes,
+one amplitude-scaled 4x (an obvious, large feature difference), trained with the
+config default `mlp_lr` (~0.01-0.02) on the raw MPF feature vectors.
+
+**Failure:**
+Training accuracy stuck at ~0.5 and loss pinned exactly at ln(2)=0.693 (uniform
+softmax); the network never moved. First read as an MLP/backprop bug.
+
+**Cause:**
+Not a code bug. The MLP is correct (a 2-feature toy problem trained to 100%).
+Raw MPF features are the upper triangle of a Hermitian matrix-log of a
+cross-spectral density: values span orders of magnitude and reach |x|~10. At
+lr>=~0.01 the first-layer gradients explode and the softmax collapses to
+uniform; at lr~=0.001 the same data trains to 95-100%. The default lr was simply
+too large for the unnormalized feature scale.
+
+**Correction:**
+Added per-feature standardization (z-scoring) to the MLP: fit mean/std over the
+captured training set, apply identically at inference. With standardized inputs
+the default lr converges to 100% on the smoke test. Documented in the app README
+and PLAN.md.
+
+**Candidate rule:**
+For a hand-rolled on-device classifier, standardize features before SGD rather
+than hand-tuning the learning rate to the feature scale; a loss frozen exactly
+at ln(num_classes) with no weight movement is diverging (exploding gradients),
+not a stuck optimizer -- check input magnitude and lr before suspecting backprop.

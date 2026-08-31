@@ -1,0 +1,6 @@
+@PACKAGE_INIT@
+
+find_package(lz4 CONFIG REQUIRED)
+find_package(zstd CONFIG REQUIRED)
+
+include("${CMAKE_CURRENT_LIST_DIR}/mcapTargets.cmake")
