@@ -15,7 +15,7 @@
 
 #include "mlp.hpp"
 #include "mpf_features.hpp"
-#include "ring_buffer.hpp"
+#include "collection_store.hpp"
 #include "synthetic_source.hpp"
 
 namespace app {
@@ -119,7 +119,7 @@ class ModeSwitchApp : public synapse::App {
   // Model + training data guarded by model_mutex_ (fit runs in main, but the
   // mutex documents the boundary and guards against future worker threads).
   std::mutex model_mutex_;
-  RingBuffer buffers_;
+  CollectionStore buffers_;
   Mlp mlp_;
 
   // Synthetic generator (only used in SYNTHETIC mode).

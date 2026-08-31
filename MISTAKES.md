@@ -210,3 +210,25 @@ For a hand-rolled on-device classifier, standardize features before SGD rather
 than hand-tuning the learning rate to the feature scale; a loss frozen exactly
 at ln(num_classes) with no weight movement is diverging (exploding gradients),
 not a stuck optimizer -- check input magnitude and lr before suspecting backprop.
+
+### 2026-08-31 — Omitted a helper while adding the bounded collection store
+
+**Attempt:**
+Compiled the new SDK-independent collection-store tests with strict warnings
+after adding generation-overflow checks.
+
+**Failure:**
+The compiler rejected references to `can_advance_generation()` because the
+helper had been called but not defined.
+
+**Cause:**
+The generation guard was added in the public mutation methods without completing
+the corresponding private helper in the same header-only implementation.
+
+**Correction:**
+Added the helper, then reran the strict direct g++ build and the WSL CMake/
+CTest workflow; all seven tests passed.
+
+**Candidate rule:**
+After adding a header-only API guard, run the smallest strict compile before
+continuing documentation or integration work.

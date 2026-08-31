@@ -326,7 +326,13 @@ void ModeSwitchApp::initialize_pipeline(std::size_t upstream_channels) {
 
   {
     std::lock_guard<std::mutex> lock(model_mutex_);
-    buffers_.configure(cfg_.num_classes, cfg_.ring_capacity);
+    const auto storage_status =
+        buffers_.configure(1, cfg_.num_classes, cfg_.ring_capacity, featurizer_->feature_dim());
+    if (!storage_status.success) {
+      spdlog::error("Failed to configure feature storage: {} ({})", storage_status.message,
+                    CollectionStore::error_code_name(storage_status.error));
+      return;
+    }
     Mlp::Config mcfg;
     mcfg.input_dim = featurizer_->feature_dim();
     mcfg.hidden_dim = cfg_.mlp_hidden;
@@ -385,12 +391,17 @@ void ModeSwitchApp::process_window(uint64_t window_end_timestamp_ns) {
   if (capturing) {
     const std::size_t label = static_cast<std::size_t>(active_label_.load());
     std::lock_guard<std::mutex> lock(model_mutex_);
-    buffers_.append(label, feature);
+    const auto append_status = buffers_.append(0, label, feature);
+    if (!append_status.success) {
+      spdlog::error("capture rejected: {} ({})", append_status.message,
+                    CollectionStore::error_code_name(append_status.error));
+      return;
+    }
     // Log per-class counts occasionally.
     static thread_local std::size_t log_ctr = 0;
     if ((++log_ctr % 50) == 0) {
-      spdlog::info("capture label={} count={} total={}", label, buffers_.count(label),
-                   buffers_.total());
+      spdlog::info("capture collection=0 label={} count={} total={}", label,
+                   append_status.count, append_status.total);
     }
   }
 
@@ -420,7 +431,12 @@ void ModeSwitchApp::maybe_fit() {
   float loss = 0.0f, acc = 0.0f;
   {
     std::lock_guard<std::mutex> lock(model_mutex_);
-    buffers_.collect(features, labels);
+    const auto collect_status = buffers_.collect(0, features, labels);
+    if (!collect_status.success) {
+      spdlog::warn("fit_mlp: cannot collect training data: {} ({})", collect_status.message,
+                   CollectionStore::error_code_name(collect_status.error));
+      return;
+    }
     if (features.empty()) {
       spdlog::warn("fit_mlp: no captured windows; nothing to train");
       return;

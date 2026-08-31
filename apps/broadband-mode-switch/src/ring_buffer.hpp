@@ -60,6 +60,11 @@ class RingBuffer {
     return buffers_.at(label);
   }
 
+  // Clear one label. CollectionStore validates the label before calling this.
+  void clear_label(std::size_t label) {
+    buffers_.at(label).clear();
+  }
+
   // Flatten the whole store into parallel (feature, label) arrays. Used to
   // build the training set for a fit pass.
   void collect(std::vector<std::vector<float>>& out_features,

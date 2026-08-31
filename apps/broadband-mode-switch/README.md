@@ -4,7 +4,8 @@ A Synapse App for the SciFi-2 that, over live consumer taps:
 
 1. **toggles a broadband stream** between the real RHD2132 probe (peripheral
  id 200) and an in-app **synthetic source** ported from the axon-peripherals gateware model;
-2. **collects labeled feature windows** into a per-class ring buffer;
+2. **collects labeled feature windows** into bounded independent collections
+   of per-class ring buffers;
 3. computes **Kaifosh-2025 multivariate power-frequency (MPF)** features
  (channel-wise STFT → cross-spectral density → band averaging → Hermitian matrix logarithm);
 4. **trains and runs a small MLP** classifier (2 hidden layers, dropout,
@@ -34,6 +35,7 @@ In SAMPLING mode the App forwards each upstream `BroadbandFrame` **unchanged** o
 | `src/synthetic_source.{hpp,cpp}` | ported gateware synthetic neural source |
 | `src/mpf_features.{hpp,cpp}` | STFT + CSD + band-average + Hermitian matrix-log |
 | `src/mlp.{hpp,cpp}` | hand-rolled 2-hidden-layer MLP + backprop + SGD |
+| `src/collection_store.hpp` | bounded multi-collection store, flushes, and generations |
 | `src/ring_buffer.hpp` | per-class feature store |
 | `config/rhd2132_mode_switch.json` | kBroadbandSource(200) → kApplication graph |
 | `client/*.py` | control/monitor clients |

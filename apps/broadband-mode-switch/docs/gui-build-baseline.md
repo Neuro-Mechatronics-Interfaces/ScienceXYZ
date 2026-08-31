@@ -66,10 +66,10 @@ ctest --test-dir apps/broadband-mode-switch/build/offline-tests --output-on-fail
 ```
 
 The registered test is `broadband-mode-switch-control`. It uses fixed inputs
-and currently covers `RingBuffer` configuration, per-label FIFO capacity,
-invalid/zero-capacity operations, deterministic `collect` ordering, clear, and
-reconfiguration. Future pure control-state tests can be added to the same
-target without linking the device SDK. The commands above were not executable
-on this Windows host because CMake is absent from `PATH`; the target is
-intended for the Linux build environment and can be compiled directly with
-the available g++ only as a source-level fallback.
+and covers the underlying `RingBuffer` plus the bounded `CollectionStore`:
+per-label FIFO capacity, independent collections, checked dimensions and IDs,
+deterministic collection, label/collection/all flush scopes, and monotonic data
+generation changes. It remains SDK-independent and does not link a third-party
+test framework. The documented CMake/CTest workflow was subsequently run in
+Ubuntu WSL and passed; the direct g++ fallback also passes on this Windows
+host.
