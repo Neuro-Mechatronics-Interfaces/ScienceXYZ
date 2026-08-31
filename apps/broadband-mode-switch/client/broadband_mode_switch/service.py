@@ -21,6 +21,8 @@ class _Client:
     subscribed: bool = False
     write_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     session_id: str = field(default_factory=lambda: uuid.uuid4().hex)
+    pending_state: dict[str, Any] | None = None
+    state_task: asyncio.Task | None = None
 
 
 class ControlService:
@@ -47,8 +49,13 @@ class ControlService:
             await self._server.wait_closed()
             self._server = None
         for client in tuple(self._clients):
+            if client.state_task is not None:
+                client.state_task.cancel()
             client.writer.close()
-            await client.writer.wait_closed()
+            try:
+                await client.writer.wait_closed()
+            except ConnectionError:
+                pass
         self._clients.clear()
         await asyncio.to_thread(self.controller.disconnect)
 
@@ -59,7 +66,23 @@ class ControlService:
     def _broadcast_state(self, state: AppState) -> None:
         for client in tuple(self._clients):
             if client.subscribed:
-                asyncio.create_task(self._write(client, state_to_json(state)))
+                # Keep at most one queued snapshot per client. A dashboard that
+                # cannot keep up must receive the newest state, not an
+                # unbounded backlog of stale snapshots.
+                client.pending_state = state_to_json(state)
+                if client.state_task is None or client.state_task.done():
+                    client.state_task = asyncio.create_task(self._drain_states(client))
+
+    async def _drain_states(self, client: _Client) -> None:
+        try:
+            while client.subscribed and client.pending_state is not None:
+                value = client.pending_state
+                client.pending_state = None
+                await self._write(client, value)
+        finally:
+            client.state_task = None
+            if client in self._clients and client.subscribed and client.pending_state is not None:
+                client.state_task = asyncio.create_task(self._drain_states(client))
 
     async def _write(self, client: _Client, value: dict[str, Any]) -> None:
         try:
@@ -68,6 +91,8 @@ class ControlService:
                 client.writer.write(data)
                 await client.writer.drain()
         except (ConnectionError, asyncio.CancelledError):
+            client.subscribed = False
+            client.pending_state = None
             self._clients.discard(client)
 
     async def _handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
@@ -96,14 +121,17 @@ class ControlService:
         finally:
             self._clients.discard(client)
             writer.close()
-            await writer.wait_closed()
+            try:
+                await writer.wait_closed()
+            except ConnectionError:
+                pass
 
     @staticmethod
-    def _error(request_id: str, code: str, message: str) -> dict[str, Any]:
+    def _error(request_id: str, code: str, message: str, *, retryable: bool = False) -> dict[str, Any]:
         return {
             "type": "result", "protocol_version": 1, "request_id": request_id,
             "command": "unknown", "status": "failed", "state_version": "0",
-            "error": {"code": code, "message": message, "field": "", "retryable": False},
+            "error": {"code": code, "message": message, "field": "", "retryable": retryable},
         }
 
     async def _dispatch(self, client: _Client, request: Any) -> dict[str, Any] | None:
@@ -122,18 +150,29 @@ class ControlService:
             enabled = request.get("enabled")
             if not isinstance(enabled, bool):
                 return self._error(request_id, "invalid_argument", "enabled must be boolean")
-            client.subscribed = enabled
 
         try:
             async with self._command_lock:
                 result = await asyncio.to_thread(self._run_command, command, request, f"socket/{client.session_id}/{request_id}")
             from .model import result_to_json
+            if command == "subscribe_state":
+                client.subscribed = request["enabled"]
+                if not client.subscribed:
+                    client.pending_state = None
             return result_to_json(result) | {"request_id": request_id}
         except DeviceCommandError as exc:
             from .model import result_to_json
             return result_to_json(exc.result) | {"request_id": request_id}
-        except (ControllerError, TimeoutError, ValueError, KeyError, TypeError) as exc:
+        except TimeoutError as exc:
+            return self._error(request_id, "timeout", str(exc), retryable=True)
+        except ControllerError as exc:
+            code = "transport_disconnected" if not self.controller.connected else "internal"
+            return self._error(request_id, code, str(exc), retryable=code == "transport_disconnected")
+        except (KeyError, TypeError) as exc:
             return self._error(request_id, "invalid_argument", str(exc))
+        except ValueError as exc:
+            code = "unknown_command" if str(exc).startswith("unknown command:") else "invalid_argument"
+            return self._error(request_id, code, str(exc))
 
     def _run_command(self, name: str, request: dict[str, Any], request_id: str):
         c = self.controller

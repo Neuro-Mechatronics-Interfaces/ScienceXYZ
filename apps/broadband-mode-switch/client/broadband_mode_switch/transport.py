@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import queue
 import threading
+import time
 from collections import defaultdict
 from typing import Protocol
 
@@ -68,6 +69,8 @@ class FakeTapTransport:
         self.sent: list[tuple[str, bytes]] = []
         self.incoming: dict[str, queue.Queue[bytes]] = defaultdict(queue.Queue)
         self.fail_connect: set[str] = set()
+        self.fail_receive: dict[str, Exception] = {}
+        self.fail_send: set[str] = set()
         self._lock = threading.Lock()
 
     def connect(self, tap_name: str) -> bool:
@@ -79,16 +82,27 @@ class FakeTapTransport:
 
     def send(self, tap_name: str, payload: bytes) -> bool:
         with self._lock:
-            if tap_name not in self.connected:
+            if tap_name not in self.connected or tap_name in self.fail_send:
                 return False
             self.sent.append((tap_name, payload))
         return True
 
     def receive(self, tap_name: str, timeout: float | None = None) -> bytes | None:
-        try:
-            return self.incoming[tap_name].get(timeout=timeout)
-        except queue.Empty:
-            return None
+        deadline = None if timeout is None else time.monotonic() + timeout
+        while True:
+            failure = self.fail_receive.get(tap_name)
+            if failure is not None:
+                raise failure
+            wait = 0.05
+            if deadline is not None:
+                wait = min(wait, max(0.0, deadline - time.monotonic()))
+                if wait == 0:
+                    return None
+            try:
+                return self.incoming[tap_name].get(timeout=wait)
+            except queue.Empty:
+                if deadline is not None and time.monotonic() >= deadline:
+                    return None
 
     def disconnect(self, tap_name: str) -> None:
         with self._lock:

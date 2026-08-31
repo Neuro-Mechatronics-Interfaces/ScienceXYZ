@@ -2,13 +2,14 @@ import asyncio
 import json
 import unittest
 
-from broadband_mode_switch.model import CommandResult
-from broadband_mode_switch.service import ControlService
+from broadband_mode_switch.model import AppState, CommandResult
+from broadband_mode_switch.service import ControlService, _Client
 
 
 class DummyController:
     def __init__(self):
         self.calls = []
+        self.connected = True
 
     def on_state(self, callback):
         self.state_callback = callback
@@ -63,6 +64,46 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(bad["error"]["code"], "malformed")
         self.assertEqual(version["error"]["code"], "unsupported_version")
         writer.close(); await writer.wait_closed()
+
+    async def test_two_clients_keep_request_correlation_separate(self):
+        peers = [await asyncio.open_connection("127.0.0.1", self.port) for _ in range(2)]
+        requests = [
+            {"protocol_version": 1, "request_id": "same", "command": "select_label", "label": index}
+            for index in (1, 2)
+        ]
+        for (_, writer), request in zip(peers, requests):
+            writer.write((json.dumps(request) + "\n").encode())
+            await writer.drain()
+        answers = [json.loads((await reader.readline()).decode()) for reader, _ in peers]
+        self.assertEqual([answer["request_id"] for answer in answers], ["same", "same"])
+        self.assertEqual([call[0] for call in self.controller.calls], ["select_label", "select_label"])
+        for _, writer in peers:
+            writer.close(); await writer.wait_closed()
+
+    async def test_slow_subscriber_keeps_only_latest_pending_snapshot(self):
+        client = _Client(object(), subscribed=True)
+        self.service._clients.add(client)
+        started = asyncio.Event()
+        release = asyncio.Event()
+        delivered = []
+
+        async def slow_write(target, value):
+            started.set()
+            await release.wait()
+            delivered.append(value["state_version"])
+
+        self.service._write = slow_write
+        self.service._broadcast_state(AppState(state_version=1))
+        await asyncio.wait_for(started.wait(), 1)
+        for version in range(2, 20):
+            self.service._broadcast_state(AppState(state_version=version))
+        self.assertEqual(client.pending_state["state_version"], "19")
+        release.set()
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        self.assertEqual(delivered, ["1", "19"])
+        self.assertIsNone(client.state_task)
+        self.service._clients.discard(client)
 
 
 if __name__ == "__main__":

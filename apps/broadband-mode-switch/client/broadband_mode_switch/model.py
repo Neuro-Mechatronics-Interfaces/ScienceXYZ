@@ -8,6 +8,10 @@ from typing import Any
 from . import proto
 
 
+class ProtocolMessageError(ValueError):
+    """A decoded protobuf does not satisfy the host-side protocol contract."""
+
+
 @dataclass(frozen=True)
 class ErrorState:
     code: str
@@ -118,6 +122,14 @@ def _command_name(message) -> str:
 
 
 def state_from_proto(message) -> AppState:
+    if message.protocol_version != 1:
+        raise ProtocolMessageError("unsupported state protocol version")
+    if not message.HasField("pipeline") or not message.HasField("active") or not message.HasField("model"):
+        raise ProtocolMessageError("state snapshot is missing a required section")
+    if proto.enum_name(message.pipeline, "state") == "unspecified":
+        raise ProtocolMessageError("state snapshot has an unknown pipeline state")
+    if proto.enum_name(message.pipeline, "source_mode") == "unspecified":
+        raise ProtocolMessageError("state snapshot has an unknown source mode")
     collections = tuple(
         CollectionState(
             collection_id=item.collection_id,
@@ -158,6 +170,17 @@ def state_from_proto(message) -> AppState:
 
 
 def result_from_proto(message) -> CommandResult:
+    if message.protocol_version != 1:
+        raise ProtocolMessageError("unsupported command-result protocol version")
+    if not message.request_id:
+        raise ProtocolMessageError("command result has no request id")
+    if _command_name(message) == "unspecified":
+        raise ProtocolMessageError("command result has an unknown command")
+    status = proto.enum_name(message, "status")
+    if status not in {"accepted", "succeeded", "failed"}:
+        raise ProtocolMessageError("command result has an unknown status")
+    if status == "failed" and not message.HasField("error"):
+        raise ProtocolMessageError("failed command result has no error")
     progress = None
     if message.HasField("progress"):
         progress = FitProgress(

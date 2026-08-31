@@ -167,6 +167,42 @@ fit evidence includes `capture ... count=26 total=50` and final loss 0.0037 /
 accuracy 1.000; a fresh per-epoch fit-progress line was not present in the
 available app log. The complete GUI/socket workflow remains open under T-17.
 
+### 2026-08-31 - T-10 host controller complete
+
+The replaceable-transport Python controller now owns the control/state/result
+Tap lifecycle, validates decoded protocol envelopes, correlates terminal
+results by request id and command, serializes sends, and publishes immutable
+state replacements. Malformed protobufs are surfaced as `last_error`; Tap
+transport failures publish a disconnected state and wake pending commands.
+`connect_with_backoff` and `reconnect_with_backoff` use bounded exponential
+delays. The fake transport covers connect/reconnect, malformed state,
+rejection, timeout, immutable replacement, and transport-loss behavior.
+
+Verification from the repository CPython 3.13 environment:
+
+```text
+PYTHONPATH=apps/broadband-mode-switch/client .venv/Scripts/python.exe -m unittest discover -s apps/broadband-mode-switch/client/tests -v
+Ran 11 tests ... OK
+```
+
+T-11 (loopback NDJSON service hardening and multi-client coverage) is next.
+
+### 2026-08-31 - T-11 loopback service complete
+
+The asyncio NDJSON service now serializes all mutating requests through one
+controller lock, keeps client request correlation isolated by session, and
+delivers at most the newest queued state snapshot to each subscriber. Socket
+responses distinguish malformed input, unknown commands, timeouts, controller
+disconnects, and device rejections. Subscription state changes only after the
+controller acknowledges the request, and disconnect cleanup cancels pending
+state delivery.
+
+Service tests cover fragmented/coalesced requests, malformed JSON and version
+rejection, two clients using the same request id, and a deliberately slow
+subscriber. The full client suite passes with 13 tests under CPython 3.13.
+
+T-12 (dependency-light socket client and calibration-prompter example) is next.
+
 ## Initial Definition of Done
 
 The first repository milestone is complete when:

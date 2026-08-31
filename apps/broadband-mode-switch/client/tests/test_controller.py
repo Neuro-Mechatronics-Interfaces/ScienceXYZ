@@ -3,9 +3,9 @@ import time
 import unittest
 
 from broadband_mode_switch import proto
-from broadband_mode_switch.controller import BroadbandController, DeviceCommandError
+from broadband_mode_switch.controller import BroadbandController, ControllerError, DeviceCommandError
 from broadband_mode_switch.model import state_from_proto
-from broadband_mode_switch.transport import FakeTapTransport
+from broadband_mode_switch.transport import FakeTapTransport, TransportError
 
 
 def result_payload(request_id, command, status=proto.RESULT_SUCCEEDED):
@@ -26,6 +26,7 @@ def state_payload(version=1):
     value.pipeline.source_mode = 1
     value.active.collection_id = 0
     value.active.label = 2
+    value.model.phase = 1
     collection = value.collections.add()
     collection.collection_id = 0
     collection.feature_dimension = 256
@@ -126,6 +127,55 @@ class ControllerTests(unittest.TestCase):
         with self.assertRaises(TimeoutError):
             self.controller.select_collection(0)
         self.assertFalse(self.controller._pending)
+
+    def test_malformed_state_is_reported_without_disconnecting(self):
+        updates = []
+        self.controller.on_state(updates.append)
+        self.transport.inject("state", b"not a protobuf")
+        deadline = time.monotonic() + 1
+        while (not updates or updates[-1].last_error is None) and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertTrue(self.controller.connected)
+        self.assertEqual(self.controller.state.last_error.code, "malformed")
+
+    def test_transport_loss_wakes_pending_and_publishes_disconnected(self):
+        updates = []
+        self.controller.on_state(updates.append)
+        self.transport.fail_receive["command_result"] = TransportError("tap closed")
+        outcome = []
+
+        def issue():
+            try:
+                self.controller.select_label(1)
+            except Exception as exc:
+                outcome.append(exc)
+
+        thread = threading.Thread(target=issue)
+        thread.start()
+        thread.join(1)
+        self.assertFalse(thread.is_alive())
+        self.assertIsInstance(outcome[0], ControllerError)
+        self.assertFalse(self.controller.connected)
+        self.assertEqual(self.controller.state.pipeline_state, "disconnected")
+        self.assertTrue(updates)
+
+    def test_reconnect_with_bounded_backoff(self):
+        self.controller.disconnect()
+        self.transport.fail_connect.update({"control", "state", "command_result"})
+        attempts = []
+        original = self.transport.connect
+
+        def flaky(name):
+            attempts.append(name)
+            if len(attempts) <= 3:
+                return False
+            self.transport.fail_connect.clear()
+            return original(name)
+
+        self.transport.connect = flaky
+        self.controller.connect_with_backoff(attempts=4, initial_delay=0)
+        self.assertTrue(self.controller.connected)
+        self.assertGreaterEqual(len(attempts), 4)
 
 
 if __name__ == "__main__":

@@ -141,7 +141,10 @@ than treating the first sequence number as a zero-based stream origin.
 The graphical client owns the device Tap connections through a replaceable
 transport. The GUI never calls Synapse from the Qt thread; state snapshots are
 immutable replacements and all target changes use the atomic `prepare_capture`
-command. Install the host dependencies from `client/requirements.txt`, then
+command. The controller reports malformed device messages as a state error,
+publishes `pipeline.state=disconnected` when a Tap fails, wakes pending
+commands instead of waiting for their timeout, and provides bounded reconnect
+backoff. Install the host dependencies from `client/requirements.txt`, then
 launch the dashboard with:
 
 ```bash
@@ -158,6 +161,10 @@ python client/run_service.py --device-ip "$DEV" --port 8765
 The service supports `get_state`, `subscribe_state`, `prepare_capture`,
 `select_collection`, `select_label`, `set_capture`, `fit`, and `flush`. Remote
 binding is unauthenticated in v1 and must be an explicit operator choice.
+Requests are serialized before reaching the controller. State subscribers have
+a bounded latest-snapshot queue, so a slow client cannot accumulate stale
+state indefinitely; command timeouts and controller disconnects retain
+explicit error codes in the NDJSON response.
 
 The controller's hardware-free tests run without a device:
 
