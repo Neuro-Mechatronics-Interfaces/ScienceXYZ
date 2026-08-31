@@ -1,0 +1,6 @@
+digraph "inner_002" {
+  graph [layout=neato, overlap=false, splines=true, labelloc=t, label="gui-control-architecture: inner view 2"];
+  "buffers" [color="#00695c", fillcolor="#e0f2f1", fontname="Arial", fontsize="10", height="0.5", label="Bounded collections\nof label rings", margin="0.12,0.08", pin="true", pos="0,0!", shape="box", style="rounded,filled", width="1.4587"];
+  "fit" [color="#00695c", fillcolor="#e0f2f1", fontname="Arial", fontsize="10", height="0.5", label="Snapshot-and-swap\nfit worker + live model", margin="0.12,0.08", pin="true", pos="180,0!", shape="box", style="rounded,filled", width="1.5421"];
+  "buffers" -> "fit" [color="#52606d", fontname="Arial", fontsize="9", label="immutable\ncollection snapshot"];
+}

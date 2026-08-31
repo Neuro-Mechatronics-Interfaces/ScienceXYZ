@@ -1,0 +1,14 @@
+digraph "inner_001" {
+  graph [layout=neato, overlap=false, splines=true, labelloc=t, label="gui-control-architecture: inner view 1"];
+  "client" [color="#2e7d32", fillcolor="#e8f5e9", fontname="Arial", fontsize="10", height="0.5", label="PySide6 GUI\nor loopback client", margin="0.12,0.08", pin="true", pos="0,0!", shape="box", style="rounded,filled", width="1.3025"];
+  "socket" [color="#9a6b00", fillcolor="#fff8e1", fontname="Arial", fontsize="10", height="0.5", label="Asyncio NDJSON\n127.0.0.1 by default", margin="0.12,0.08", pin="true", pos="180,0!", shape="box", style="rounded,filled", width="1.4275"];
+  "controller" [color="#9a6b00", fillcolor="#fff8e1", fontname="Arial", fontsize="10", height="0.66", label="Headless Python\ncontroller\n(single Tap owner)", margin="0.12,0.08", pin="true", pos="360,0!", shape="box", style="rounded,filled", width="1.3337"];
+  "taps" [color="#ad1457", fillcolor="#fce4ec", fontname="Arial", fontsize="10", height="0.5", label="Synapse control/status\nTap connections", margin="0.12,0.08", pin="true", pos="540,0!", shape="box", style="rounded,filled", width="1.6358"];
+  "app" [color="#6a1b9a", fillcolor="#f3e5f5", fontname="Arial", fontsize="10", height="0.5", label="ModeSwitchApp\nmain-loop command boundary", margin="0.12,0.08", pin="true", pos="720,0!", shape="box", style="rounded,filled", width="2.0525"];
+  "client" -> "socket" [color="#52606d", fontname="Arial", fontsize="9", label="JSON lines\ncommands/events"];
+  "socket" -> "controller" [color="#52606d", fontname="Arial", fontsize="9", label="validated\nrequests"];
+  "controller" -> "taps" [color="#52606d", fontname="Arial", fontsize="9", label="versioned\ncommands"];
+  "taps" -> "app" [color="#52606d", fontname="Arial", fontsize="9", label="control\nqueue"];
+  "app" -> "taps" [color="#52606d", fontname="Arial", fontsize="9", label="state + results\nclass output"];
+  "taps" -> "controller" [color="#52606d", fontname="Arial", fontsize="9", label="snapshots /\ncorrelated results"];
+}

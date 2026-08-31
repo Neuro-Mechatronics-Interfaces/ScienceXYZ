@@ -1,0 +1,23 @@
+digraph broadband_gui_control {
+  graph [rankdir=LR, bgcolor="white", pad="0.2", nodesep="0.35", ranksep="0.65"];
+  node [shape=box, style="rounded,filled", fillcolor="#eef4ff", color="#315a9b", fontname="Arial", fontsize=10, margin="0.12,0.08"];
+  edge [color="#52606d", arrowsize=0.7, fontname="Arial", fontsize=9];
+
+  client [label="PySide6 GUI\nor loopback client", fillcolor="#e8f5e9", color="#2e7d32"];
+  socket [label="Asyncio NDJSON\n127.0.0.1 by default", fillcolor="#fff8e1", color="#9a6b00"];
+  controller [label="Headless Python\ncontroller\n(single Tap owner)", fillcolor="#fff8e1", color="#9a6b00"];
+  taps [label="Synapse control/status\nTap connections", fillcolor="#fce4ec", color="#ad1457"];
+  app [label="ModeSwitchApp\nmain-loop command boundary", fillcolor="#f3e5f5", color="#6a1b9a"];
+  buffers [label="Bounded collections\nof label rings", fillcolor="#e0f2f1", color="#00695c"];
+  fit [label="Snapshot-and-swap\nfit worker + live model", fillcolor="#e0f2f1", color="#00695c"];
+
+  client -> socket [label="JSON lines\ncommands/events"];
+  socket -> controller [label="validated\nrequests"];
+  controller -> taps [label="versioned\ncommands"];
+  taps -> app [label="control\nqueue"];
+  app -> buffers [label="capture / flush\n+ generations"];
+  buffers -> fit [label="immutable\ncollection snapshot"];
+  fit -> app [label="candidate model\n+ progress"];
+  app -> taps [label="state + results\nclass output"];
+  taps -> controller [label="snapshots /\ncorrelated results"];
+}

@@ -3,14 +3,12 @@
 A Synapse App for the SciFi-2 that, over live consumer taps:
 
 1. **toggles a broadband stream** between the real RHD2132 probe (peripheral
-   id 200) and an in-app **synthetic source** ported from the axon-peripherals
-   gateware model;
+ id 200) and an in-app **synthetic source** ported from the axon-peripherals gateware model;
 2. **collects labeled feature windows** into a per-class ring buffer;
 3. computes **Kaifosh-2025 multivariate power-frequency (MPF)** features
-   (channel-wise STFT → cross-spectral density → band averaging → Hermitian
-   matrix logarithm);
+ (channel-wise STFT → cross-spectral density → band averaging → Hermitian matrix logarithm);
 4. **trains and runs a small MLP** classifier (2 hidden layers, dropout,
-   softmax + cross-entropy), all on-device.
+ softmax + cross-entropy), all on-device.
 
 Node graph:
 
@@ -26,10 +24,7 @@ kApplication(id=2, name="broadband-mode-switch")
         └─ producer  class_out        Tensor[num_classes]  softmax
 ```
 
-In SAMPLING mode the App forwards each upstream `BroadbandFrame` **unchanged**
-on `broadband_out` (source timestamps are preserved, per repo policy). In
-SYNTHETIC mode it emits its own deterministic frames with a monotonic sequence
-number and a derived timestamp.
+In SAMPLING mode the App forwards each upstream `BroadbandFrame` **unchanged** on `broadband_out` (source timestamps are preserved, per repo policy). In SYNTHETIC mode it emits its own deterministic frames with a monotonic sequence number and a derived timestamp.
 
 ## Source layout
 
@@ -43,32 +38,15 @@ number and a derived timestamp.
 | `config/rhd2132_mode_switch.json` | kBroadbandSource(200) → kApplication graph |
 | `client/*.py` | control/monitor clients |
 
-The synthetic source is a faithful port of
-`vendor/axon-peripherals/src/gateware/src/axon_test_source_peripheral.sv`
-(256-entry sine LFP LUT, 32-sample biphasic spike ROM, per-channel delay LUT,
-16-bit spike-trigger LFSR seeded from `synthetic_seed`, 32-bit noise LFSR). It
-reproduces the gateware's per-sample values and per-channel lags but does not
-emulate the AXI-stream bus timing.
+The synthetic source is a faithful port of `vendor/axon-peripherals/src/gateware/src/axon_test_source_peripheral.sv` (256-entry sine LFP LUT, 32-sample biphasic spike ROM, per-channel delay LUT, 16-bit spike-trigger LFSR seeded from `synthetic_seed`, 32-bit noise LFSR). It reproduces the gateware's per-sample values and per-channel lags but does not emulate the AXI-stream bus timing.
 
-The MPF matrix logarithm uses a hand-rolled cyclic-Jacobi Hermitian eigensolver
-(`mpf_features.cpp`), so **no `eigen3`/BLAS dependency is added** to `vcpkg.json`.
+The MPF matrix logarithm uses a hand-rolled cyclic-Jacobi Hermitian eigensolver (`mpf_features.cpp`), so **no `eigen3`/BLAS dependency is added** to `vcpkg.json`.
 
-The MLP z-scores each feature dimension using mean/std fit from the captured
-training set (applied identically at inference). Raw MPF features span orders of
-magnitude across bands and channel pairs; standardising them keeps SGD
-well-conditioned so `mlp_lr` need not be hand-tuned to the feature scale. An
-offline smoke test (`g++`-built, SDK-independent) confirms the synthetic source
-is deterministic, the feature dimension is `num_bands·C²`, and the MLP learns
-separable synthetic classes end-to-end.
+The MLP z-scores each feature dimension using mean/std fit from the captured training set (applied identically at inference). Raw MPF features span orders of magnitude across bands and channel pairs; standardising them keeps SGD well-conditioned so `mlp_lr` need not be hand-tuned to the feature scale. An offline smoke test (`g++`-built, SDK-independent) confirms the synthetic source is deterministic, the feature dimension is `num_bands·C²`, and the MLP learns separable synthetic classes end-to-end.
 
 ## Feature dimension
 
-Per window the featurizer emits `num_bands · C²` real values, where `C` is the
-featurized channel count (`channel_subset` size, default all 32). This is large
-at full resolution (32 ch, 8 bands → 8·1024 = 8192). The shipped config starts
-small — an 8-channel subset with `num_bands = 4` → **4·64 = 256** features — to
-keep on-device training tractable. Grow `channel_subset`/`num_bands` once the
-end-to-end path is verified.
+Per window the featurizer emits `num_bands · C²` real values, where `C` is the featurized channel count (`channel_subset` size, default all 32). This is large at full resolution (32 ch, 8 bands → 8·1024 = 8192). The shipped config starts small — an 8-channel subset with `num_bands = 4` → **4·64 = 256** features — to keep on-device training tractable. Grow `channel_subset`/`num_bands` once the end-to-end path is verified.
 
 > Note: this vectorization keeps the full upper triangle of each Hermitian log
 > as `C` real diagonal entries plus `C(C−1)/2` complex off-diagonals stored as
@@ -82,11 +60,7 @@ Requires Docker (cross-compiles to arm64) and `synapsectl`. From the repo root:
 synapsectl apps build apps/broadband-mode-switch
 ```
 
-The Synapse API protos and the Science `vcpkg` overlay ports/triplets are
-vendored under `external/sciencecorp/` so the app builds without a submodule
-fetch. `.gitmodules` records their upstream pins
-(`synapse-api` `de75a2c`, `vcpkg` `b4defd7`); to refresh them to upstream,
-`git submodule update --init` against those URLs and re-vendor.
+The Synapse API protos and the Science `vcpkg` overlay ports/triplets are vendored under `external/sciencecorp/` so the app builds without a submodule fetch. `.gitmodules` records their upstream pins (`synapse-api` `de75a2c`, `vcpkg` `b4defd7`); to refresh them to upstream, `git submodule update --init` against those URLs and re-vendor.
 
 ## Deploy, start, monitor
 
@@ -100,8 +74,7 @@ synapsectl -u $DEV taps list
 synapsectl -u $DEV stop
 ```
 
-On Windows run `synapsectl` with `PYTHONUTF8=1` (its check-mark output crashes
-under cp1252 — see repo `MISTAKES.md`).
+On Windows run `synapsectl` with `PYTHONUTF8=1` (its check-mark output crashes under cp1252 — see repo `MISTAKES.md`).
 
 ## Live control (clients)
 
@@ -127,8 +100,7 @@ python client/listen_class.py --device-ip $DEV
 
 ## Configuration parameters
 
-All parameters have safe defaults; window/stride are in milliseconds and are
-converted with `sample_rate_hz`.
+All parameters have safe defaults; window/stride are in milliseconds and are converted with `sample_rate_hz`.
 
 | Key | Meaning | Default |
 | --- | --- | --- |
@@ -149,7 +121,4 @@ converted with `sample_rate_hz`.
 
 ## Verification plan
 
-Staged on the bench (see repo `PLAN.md`): (0) build + republish frames, (1)
-real↔synthetic toggle, (2) labeled ring buffer counts, (3) MPF feature dim +
-numerical sanity vs a NumPy recomputation, (4) MLP learns separable synthetic
-classes end-to-end. Each stage builds/deploys/verifies before the next.
+Staged on the bench (see repo `PLAN.md`): (0) build + republish frames, (1) real↔synthetic toggle, (2) labeled ring buffer counts, (3) MPF feature dim + numerical sanity vs a NumPy recomputation, (4) MLP learns separable synthetic classes end-to-end. Each stage builds/deploys/verifies before the next.
