@@ -1,11 +1,15 @@
 cmake_minimum_required(VERSION 3.20.1)
 project(broadband-mode-switch)
 
-include("cmake/protos.cmake")
-
 option(BUILD_FOR_ARM64 "Build for ARM64 architecture" OFF)
 option(USE_LOCAL_SDK "Use locally built SDK instead of system installation" OFF)
 set(LOCAL_SDK_PATH "app-sdk" CACHE PATH "Path to local SDK build directory")
+option(BUILD_DEVICE_APP "Build the Synapse device application" ON)
+
+include(CTest)
+
+if(BUILD_DEVICE_APP)
+include("cmake/protos.cmake")
 
 if (BUILD_FOR_ARM64 AND NOT CMAKE_HOST_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
   message(STATUS "Cross compiling for ARM64")
@@ -90,3 +94,8 @@ target_link_options(broadband-mode-switch PRIVATE -Wl,-rpath-link,/opt/scifi/lib
 # Packaging configuration
 set(CPACK_PACKAGE_DIRECTORY "${CMAKE_SOURCE_DIR}/dist")
 include(CPack)
+endif()
+
+if(BUILD_TESTING)
+    add_subdirectory(tests)
+endif()

@@ -52,3 +52,24 @@ current `BroadbandFrame` producer tap is accepted by the SDK remain pending
 until `synapsectl`, Docker's Linux daemon, and the Python Synapse package are
 available. This is a pre-existing environment blocker, independent of the GUI
 protocol documentation.
+
+## Hardware-free control-plane tests
+
+The app now has an SDK-independent CTest target for the reusable control-plane
+data layer. Configure the root project with the device application disabled so
+the missing Synapse SDK and device-side dependencies are not needed:
+
+```text
+cmake -S apps/broadband-mode-switch -B apps/broadband-mode-switch/build/offline-tests -DBUILD_DEVICE_APP=OFF -DBUILD_TESTING=ON
+cmake --build apps/broadband-mode-switch/build/offline-tests
+ctest --test-dir apps/broadband-mode-switch/build/offline-tests --output-on-failure
+```
+
+The registered test is `broadband-mode-switch-control`. It uses fixed inputs
+and currently covers `RingBuffer` configuration, per-label FIFO capacity,
+invalid/zero-capacity operations, deterministic `collect` ordering, clear, and
+reconfiguration. Future pure control-state tests can be added to the same
+target without linking the device SDK. The commands above were not executable
+on this Windows host because CMake is absent from `PATH`; the target is
+intended for the Linux build environment and can be compiled directly with
+the available g++ only as a source-level fallback.
