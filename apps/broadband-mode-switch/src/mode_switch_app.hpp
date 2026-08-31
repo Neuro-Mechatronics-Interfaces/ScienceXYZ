@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -15,6 +16,7 @@
 #include <google/protobuf/struct.pb.h>
 
 #include "mlp.hpp"
+#include "fit_worker.hpp"
 #include "mpf_features.hpp"
 #include "collection_store.hpp"
 #include "control_command_queue.hpp"
@@ -41,8 +43,9 @@ namespace app {
 //   command_result   CommandResult              correlated command outcome
 //
 // Tap callbacks run on their own threads; they only validate and enqueue small
-// requests, then return fast. All control mutations and heavy work (featurise,
-// capture, fit, classify) run serially in main().
+// requests, then return fast. Control mutations, featurisation, capture,
+// classification, worker-event draining, and publication run serially in
+// main(); the FitWorker performs only private candidate training off-thread.
 class ModeSwitchApp : public synapse::App {
  public:
   ModeSwitchApp() = default;
@@ -83,6 +86,7 @@ class ModeSwitchApp : public synapse::App {
 
   // ---- main-loop helpers ----
   void drain_control_commands();
+  void drain_fit_events();
   void apply_control_request(const control::ControlRequest& request);
   void apply_protocol_command(const protocol::ControlCommand& command);
   bool enqueue_legacy_request(control::ControlRequest request, const char* tap_name);
@@ -103,7 +107,7 @@ class ModeSwitchApp : public synapse::App {
   void ingest_sample(const std::vector<int32_t>& frame_data, uint64_t timestamp_ns);
   // Featurise the current window, route to capture and/or classify.
   void process_window(uint64_t window_end_timestamp_ns);
-  // Run a training pass if one was requested.
+  // Start a queued training pass and drain_fit_events() handles worker output.
   void maybe_fit();
   void publish_class(const std::vector<float>& probs, uint64_t timestamp_ns);
 
@@ -115,7 +119,6 @@ class ModeSwitchApp : public synapse::App {
   control::ActiveTarget active_target_;
   SourceMode mode_ = SourceMode::kSampling;
   bool fit_requested_ = false;
-  int fit_epochs_override_ = -1;  // <0 => use cfg_.mlp_epochs
   bool state_subscription_enabled_ = false;
   bool model_ready_ = false;
   broadband_mode_switch::v1::ModelPhase model_phase_ =
@@ -128,7 +131,6 @@ class ModeSwitchApp : public synapse::App {
   float model_loss_ = 0.0f;
   float model_accuracy_ = 0.0f;
   std::uint64_t model_duration_ms_ = 0;
-  std::string fit_request_id_;
   std::chrono::steady_clock::time_point fit_started_at_;
 
   std::uint64_t state_version_ = 0;
@@ -161,11 +163,16 @@ class ModeSwitchApp : public synapse::App {
 
   std::unique_ptr<MpfFeaturizer> featurizer_;
 
-  // Collection/model access is guarded by model_mutex_. Synchronous fitting
-  // remains on the main thread for now; T-9 will move it to a worker.
+  // Collection/model access is guarded by model_mutex_. Collection snapshots
+  // are copied under this lock, while FitWorker trains an independent
+  // candidate without holding it. The main loop swaps a successful candidate
+  // into inference under the same lock.
   std::mutex model_mutex_;
   CollectionStore buffers_;
   Mlp mlp_;
+  FitWorker fit_worker_;
+  std::optional<FitWorker::Request> pending_fit_;
+  protocol::ControlCommand fit_command_;
 
   // Synthetic generator (only used in SYNTHETIC mode).
   std::unique_ptr<SyntheticSource> synthetic_;

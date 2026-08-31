@@ -36,6 +36,7 @@ In SAMPLING mode the App forwards each upstream `BroadbandFrame` **unchanged** o
 | `src/synthetic_source.{hpp,cpp}` | ported gateware synthetic neural source |
 | `src/mpf_features.{hpp,cpp}` | STFT + CSD + band-average + Hermitian matrix-log |
 | `src/mlp.{hpp,cpp}` | hand-rolled 2-hidden-layer MLP + backprop + SGD |
+| `src/fit_worker.hpp` | managed background fit, immutable snapshot, and candidate events |
 | `src/collection_store.hpp` | bounded multi-collection store, flushes, and generations |
 | `proto/gui_control.proto` | versioned command, result, and state protobuf schema |
 | `src/control_protocol.hpp` | v1 payload validation and protobuf serialization helpers |
@@ -62,7 +63,10 @@ taps publish complete v1 snapshots and correlated results; snapshots are emitted
 at startup, after command application, and periodically at 2 Hz. A running fit
 also emits one accepted `FitProgress` result and matching state snapshot per
 completed epoch, then one terminal result; malformed or non-finite training data
-is reported as a terminal `malformed` error.
+is reported as a terminal `malformed` error. It trains from a value-owned
+collection snapshot, keeps the existing live model available during fitting, and
+swaps a complete candidate into inference only after success; a malformed or
+failed fit does not replace a prior model.
 
 ## Feature dimension
 

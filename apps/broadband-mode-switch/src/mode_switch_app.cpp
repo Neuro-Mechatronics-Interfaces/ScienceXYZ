@@ -598,8 +598,8 @@ void ModeSwitchApp::apply_protocol_command(const protocol::ControlCommand& comma
         finish(control::failure(ERROR_PIPELINE_NOT_READY, "pipeline", "pipeline is not ready"));
         return;
       }
-      if (fit_requested_) {
-        finish(control::failure(ERROR_BUSY, "fit", "fit is already queued"));
+      if (fit_requested_ || fit_worker_.busy()) {
+        finish(control::failure(ERROR_BUSY, "fit", "fit is already queued or running"));
         return;
       }
       const auto status = check_target(active_target_.collection_id, active_target_.label);
@@ -607,29 +607,40 @@ void ModeSwitchApp::apply_protocol_command(const protocol::ControlCommand& comma
         finish(storage_failure(status));
         return;
       }
-      CollectionStore::QueryResult<std::size_t> total;
+
+      // Copy the selected collection while holding the short-lived data/model
+      // lock. The worker receives only this value-owned snapshot and never
+      // reads buffers_ while acquisition and capture continue.
+      FitWorker::Request request;
+      control::TransitionResult snapshot_failure = control::success();
       {
         std::lock_guard<std::mutex> lock(model_mutex_);
-        total = buffers_.total(active_target_.collection_id);
+        const auto collect_status =
+            buffers_.collect(active_target_.collection_id, request.features, request.labels);
+        if (!collect_status.success) {
+          snapshot_failure = storage_failure(collect_status);
+        } else if (request.features.empty()) {
+          snapshot_failure = control::failure(ERROR_EMPTY_COLLECTION, "collection",
+                                               "active collection has no captured windows");
+        } else {
+          request.config = mlp_.config();
+          if (command.fit().epochs() != 0) {
+            request.config.epochs = command.fit().epochs();
+          }
+          model_source_generation_ = collect_status.generation;
+        }
       }
-      if (!total.success() || total.value == 0) {
-        finish(control::failure(ERROR_EMPTY_COLLECTION, "collection",
-                                "active collection has no captured windows"));
+      if (!snapshot_failure.success) {
+        finish(snapshot_failure);
         return;
       }
-      fit_epochs_override_ = command.fit().epochs() == 0
-                                 ? -1
-                                 : static_cast<int>(command.fit().epochs());
+
       fit_requested_ = true;
-      fit_request_id_ = command.request_id();
+      pending_fit_ = std::move(request);
+      fit_command_ = command;
       model_phase_ = MODEL_QUEUED;
       model_has_source_collection_ = true;
       model_source_collection_ = active_target_.collection_id;
-      {
-        std::lock_guard<std::mutex> lock(model_mutex_);
-        const auto generation = buffers_.generation(active_target_.collection_id);
-        model_source_generation_ = generation.success() ? generation.value : 0;
-      }
       finish(control::success(), RESULT_ACCEPTED);
       return;
     }
@@ -699,9 +710,11 @@ void ModeSwitchApp::main() {
 
     // Apply every queued request before reading/routing the next source
     // sample. No feature window can see an intermediate target transition.
+    drain_fit_events();
     drain_control_commands();
 
-    // Handle a pending training request before touching data.
+    // Start a pending training request before touching data. Training itself
+    // runs on FitWorker and does not block this acquisition loop.
     maybe_fit();
 
     const auto mode = mode_;
@@ -960,121 +973,104 @@ void ModeSwitchApp::process_window(uint64_t window_end_timestamp_ns) {
   }
 }
 
-void ModeSwitchApp::maybe_fit() {
-  if (!fit_requested_) {
-    return;
-  }
-  fit_requested_ = false;
-
-  protocol::ControlCommand fit_command;
-  fit_command.set_protocol_version(protocol::kProtocolVersion);
-  fit_command.set_request_id(fit_request_id_);
-  fit_command.set_command(broadband_mode_switch::v1::COMMAND_FIT);
-  fit_command.mutable_fit()->set_epochs(
-      fit_epochs_override_ < 0 ? 0 : static_cast<std::uint32_t>(fit_epochs_override_));
-
-  if (!pipeline_ready_) {
-    const auto failure = control::failure(broadband_mode_switch::v1::ERROR_PIPELINE_NOT_READY,
-                                          "pipeline", "pipeline is not ready");
-    model_phase_ = broadband_mode_switch::v1::MODEL_FAILED;
-    publish_command_outcome(fit_command, broadband_mode_switch::v1::RESULT_FAILED, failure);
-    fit_request_id_.clear();
-    return;
-  }
-
-  model_phase_ = broadband_mode_switch::v1::MODEL_RUNNING;
-  model_ready_ = false;
-  model_epoch_ = 0;
-  model_total_epochs_ = fit_epochs_override_ < 0
-                            ? static_cast<std::uint32_t>(cfg_.mlp_epochs)
-                            : static_cast<std::uint32_t>(fit_epochs_override_);
-  model_loss_ = 0.0f;
-  model_accuracy_ = 0.0f;
-  fit_started_at_ = std::chrono::steady_clock::now();
-  publish_state_snapshot();
-
-  std::vector<std::vector<float>> features;
-  std::vector<std::size_t> labels;
-  float loss = 0.0f, acc = 0.0f;
-  control::TransitionResult failure = control::success();
-  {
-    std::lock_guard<std::mutex> lock(model_mutex_);
-    const auto collect_status = buffers_.collect(active_target_.collection_id, features, labels);
-    if (!collect_status.success) {
-      spdlog::warn("fit_mlp: cannot collect training data: {} ({})", collect_status.message,
-                   CollectionStore::error_code_name(collect_status.error));
-      failure = storage_failure(collect_status);
-    } else if (features.empty()) {
-      spdlog::warn("fit_mlp: no captured windows; nothing to train");
-      failure = control::failure(broadband_mode_switch::v1::ERROR_EMPTY_COLLECTION, "collection",
-                                 "active collection has no captured windows");
-    }
-  }
-
-  if (failure.success && !features.empty()) {
-    const int override_epochs = fit_epochs_override_;
-    Mlp::Config mcfg = mlp_.config();
-    if (override_epochs > 0) mcfg.epochs = static_cast<std::size_t>(override_epochs);
-    mlp_.init(mcfg);  // fresh init for a reproducible fit
-    spdlog::info("fit_mlp: training on {} windows ({} classes), {} epochs, input_dim={}",
-                 features.size(), mcfg.num_classes, mcfg.epochs, mcfg.input_dim);
-
-    const Mlp::ProgressObserver observer = [this, &fit_command](const Mlp::FitProgress& progress) {
-      model_epoch_ = static_cast<std::uint32_t>(progress.epoch);
-      model_total_epochs_ = static_cast<std::uint32_t>(progress.total_epochs);
-      model_loss_ = progress.loss;
-      model_accuracy_ = progress.accuracy;
-      model_duration_ms_ = static_cast<std::uint64_t>(
-          std::chrono::duration_cast<std::chrono::milliseconds>(
-              std::chrono::steady_clock::now() - fit_started_at_)
-              .count());
-
-      protocol::FitProgress wire_progress;
-      wire_progress.set_epoch(static_cast<std::uint32_t>(progress.epoch));
-      wire_progress.set_total_epochs(static_cast<std::uint32_t>(progress.total_epochs));
-      wire_progress.set_loss(progress.loss);
-      wire_progress.set_accuracy(progress.accuracy);
-      // Progress is an accepted, non-terminal result. The state snapshot
-      // immediately before it carries the same metrics and state_version.
-      publish_command_outcome(fit_command, broadband_mode_switch::v1::RESULT_ACCEPTED,
-                              control::success(), &wire_progress);
-    };
-    loss = mlp_.fit(features, labels, &acc, observer);
-  }
-
-  if (!failure.success || loss < 0.0f || !std::isfinite(loss) || !std::isfinite(acc)) {
-    if (failure.success) {
-      failure = control::failure(broadband_mode_switch::v1::ERROR_MALFORMED, "fit",
-                                 "training data is malformed or produced non-finite metrics");
-    }
-    spdlog::error("fit_mlp: training failed: {}", failure.message);
-    model_phase_ = broadband_mode_switch::v1::MODEL_FAILED;
+void ModeSwitchApp::drain_fit_events() {
+  FitWorker::Event event;
+  // Drain at most one event per acquisition-loop turn. A fast worker can
+  // otherwise queue many completed epochs and make result publication itself
+  // monopolize the loop that must continue reading source frames.
+  if (!fit_worker_.poll(event)) return;
+  if (event.kind == FitWorker::EventKind::kProgress) {
+    model_phase_ = broadband_mode_switch::v1::MODEL_RUNNING;
+    model_epoch_ = static_cast<std::uint32_t>(event.progress.epoch);
+    model_total_epochs_ = static_cast<std::uint32_t>(event.progress.total_epochs);
+    model_loss_ = event.progress.loss;
+    model_accuracy_ = event.progress.accuracy;
     model_duration_ms_ = static_cast<std::uint64_t>(
         std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - fit_started_at_)
             .count());
-    publish_command_outcome(fit_command, broadband_mode_switch::v1::RESULT_FAILED, failure);
-    fit_request_id_.clear();
+
+    protocol::FitProgress wire_progress;
+    wire_progress.set_epoch(static_cast<std::uint32_t>(event.progress.epoch));
+    wire_progress.set_total_epochs(static_cast<std::uint32_t>(event.progress.total_epochs));
+    wire_progress.set_loss(event.progress.loss);
+    wire_progress.set_accuracy(event.progress.accuracy);
+    // Progress is an accepted, non-terminal result. The state snapshot
+    // immediately before it carries the same metrics and state_version.
+    publish_command_outcome(fit_command_, broadband_mode_switch::v1::RESULT_ACCEPTED,
+                            control::success(), &wire_progress);
     return;
   }
-  model_ready_ = true;
-  model_phase_ = broadband_mode_switch::v1::MODEL_SUCCEEDED;
-  model_epoch_ = model_total_epochs_;
-  model_loss_ = loss;
-  model_accuracy_ = acc;
+
   model_duration_ms_ = static_cast<std::uint64_t>(
       std::chrono::duration_cast<std::chrono::milliseconds>(
           std::chrono::steady_clock::now() - fit_started_at_)
           .count());
-  spdlog::info("fit_mlp: done. final loss={:.4f} accuracy={:.3f}", loss, acc);
-  protocol::FitProgress final_progress;
-  final_progress.set_epoch(model_epoch_);
-  final_progress.set_total_epochs(model_total_epochs_);
-  final_progress.set_loss(loss);
-  final_progress.set_accuracy(acc);
-  publish_command_outcome(fit_command, broadband_mode_switch::v1::RESULT_SUCCEEDED,
-                          control::success(), &final_progress);
-  fit_request_id_.clear();
+
+  if (event.kind == FitWorker::EventKind::kSucceeded && event.candidate) {
+    // This is the only live-model mutation performed by the worker path.
+    // Inference takes the same mutex, so it observes either the old complete
+    // model or this complete candidate, never partially updated weights.
+    {
+      std::lock_guard<std::mutex> lock(model_mutex_);
+      std::swap(mlp_, *event.candidate);
+    }
+    model_ready_ = true;
+    model_phase_ = broadband_mode_switch::v1::MODEL_SUCCEEDED;
+    model_epoch_ = static_cast<std::uint32_t>(event.progress.epoch);
+    model_total_epochs_ = static_cast<std::uint32_t>(event.progress.total_epochs);
+    model_loss_ = event.progress.loss;
+    model_accuracy_ = event.progress.accuracy;
+
+    protocol::FitProgress final_progress;
+    final_progress.set_epoch(model_epoch_);
+    final_progress.set_total_epochs(model_total_epochs_);
+    final_progress.set_loss(model_loss_);
+    final_progress.set_accuracy(model_accuracy_);
+    publish_command_outcome(fit_command_, broadband_mode_switch::v1::RESULT_SUCCEEDED,
+                            control::success(), &final_progress);
+    spdlog::info("fit_mlp: done. final loss={:.4f} accuracy={:.3f}", model_loss_,
+                 model_accuracy_);
+  } else {
+    const auto code = event.malformed ? broadband_mode_switch::v1::ERROR_MALFORMED
+                                      : broadband_mode_switch::v1::ERROR_INTERNAL;
+    const auto failure =
+        control::failure(code, "fit", event.message.empty() ? "fit worker failed" : event.message);
+    model_phase_ = broadband_mode_switch::v1::MODEL_FAILED;
+    // Keep model_ready_ and mlp_ unchanged: a failed candidate is never
+    // allowed to replace a previously usable inference model.
+    publish_command_outcome(fit_command_, broadband_mode_switch::v1::RESULT_FAILED, failure);
+    spdlog::error("fit_mlp: training failed: {}", failure.message);
+  }
+  fit_requested_ = false;
+  pending_fit_.reset();
+}
+
+void ModeSwitchApp::maybe_fit() {
+  if (!fit_requested_ || !pending_fit_) return;
+
+  fit_requested_ = false;
+  model_phase_ = broadband_mode_switch::v1::MODEL_RUNNING;
+  model_epoch_ = 0;
+  model_total_epochs_ = static_cast<std::uint32_t>(pending_fit_->config.epochs);
+  model_loss_ = 0.0f;
+  model_accuracy_ = 0.0f;
+  model_duration_ms_ = 0;
+  fit_started_at_ = std::chrono::steady_clock::now();
+
+  // Publish RUNNING before starting the thread. Worker events are drained by
+  // later main-loop iterations, so accepted/progress/terminal publication
+  // remains ordered and all SDK calls stay on the App thread.
+  publish_state_snapshot();
+  if (!fit_worker_.start(std::move(*pending_fit_))) {
+    const auto failure =
+        control::failure(broadband_mode_switch::v1::ERROR_BUSY, "fit", "fit is already active");
+    model_phase_ = broadband_mode_switch::v1::MODEL_FAILED;
+    publish_command_outcome(fit_command_, broadband_mode_switch::v1::RESULT_FAILED, failure);
+    pending_fit_.reset();
+    return;
+  }
+  pending_fit_.reset();
 }
 
 void ModeSwitchApp::publish_class(const std::vector<float>& probs, uint64_t timestamp_ns) {

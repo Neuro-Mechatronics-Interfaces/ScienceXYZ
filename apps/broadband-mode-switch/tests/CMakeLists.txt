@@ -15,6 +15,11 @@ add_executable(broadband-mode-switch-mlp-tests
     ../src/mlp.cpp
 )
 
+add_executable(broadband-mode-switch-fit-worker-tests
+    fit_worker_test.cpp
+    ../src/mlp.cpp
+)
+
 generate_protobufs(
     TARGET broadband-mode-switch-protocol-tests
     OUT_PROTO_DIR PROTO_OUT_DIR
@@ -25,6 +30,7 @@ target_compile_features(broadband-mode-switch-control-tests PRIVATE cxx_std_20)
 target_compile_features(broadband-mode-switch-protocol-tests PRIVATE cxx_std_20)
 target_compile_features(broadband-mode-switch-control-state-tests PRIVATE cxx_std_20)
 target_compile_features(broadband-mode-switch-mlp-tests PRIVATE cxx_std_20)
+target_compile_features(broadband-mode-switch-fit-worker-tests PRIVATE cxx_std_20)
 target_include_directories(broadband-mode-switch-control-tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../src
 )
@@ -37,6 +43,9 @@ target_include_directories(broadband-mode-switch-control-state-tests PRIVATE
     ${PROTO_OUT_DIR}
 )
 target_include_directories(broadband-mode-switch-mlp-tests PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src
+)
+target_include_directories(broadband-mode-switch-fit-worker-tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../src
 )
 target_sources(broadband-mode-switch-control-state-tests PRIVATE
@@ -58,6 +67,7 @@ if(MSVC)
     target_compile_options(broadband-mode-switch-protocol-tests PRIVATE /W4 /WX)
     target_compile_options(broadband-mode-switch-control-state-tests PRIVATE /W4 /WX)
     target_compile_options(broadband-mode-switch-mlp-tests PRIVATE /W4 /WX)
+    target_compile_options(broadband-mode-switch-fit-worker-tests PRIVATE /W4 /WX)
 else()
     target_compile_options(broadband-mode-switch-control-tests PRIVATE
         -Wall -Wextra -Wpedantic -Werror
@@ -69,6 +79,9 @@ else()
         -Wall -Wextra -Wpedantic -Werror
     )
     target_compile_options(broadband-mode-switch-mlp-tests PRIVATE
+        -Wall -Wextra -Wpedantic -Werror
+    )
+    target_compile_options(broadband-mode-switch-fit-worker-tests PRIVATE
         -Wall -Wextra -Wpedantic -Werror
     )
 endif()
@@ -88,4 +101,8 @@ add_test(
 add_test(
     NAME broadband-mode-switch-mlp
     COMMAND broadband-mode-switch-mlp-tests
+)
+add_test(
+    NAME broadband-mode-switch-fit-worker
+    COMMAND broadband-mode-switch-fit-worker-tests
 )

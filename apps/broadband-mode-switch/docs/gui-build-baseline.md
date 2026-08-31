@@ -1,6 +1,6 @@
 # GUI control-plane build baseline
 
-Recorded 2026-08-31 before implementation work beyond the protocol design; updated for T-5 typed payloads, T-6 queue/transition tests, T-7 state/result publication, and T-8 MLP progress/malformed-data handling.
+Recorded 2026-08-31 before implementation work beyond the protocol design; updated for T-5 typed payloads, T-6 queue/transition tests, T-7 state/result publication, T-8 MLP progress/malformed-data handling, and T-9 managed fitting.
 
 ## Expected workflow
 
@@ -71,10 +71,12 @@ without a frame; startup is `not_ready`, and pipeline initialization failures
 are reported as `error` with `last_error`.
 
 Fit commands produce `accepted` when queued, followed by a terminal succeeded or
-failed result after the current synchronous fit. During training, each completed
-epoch also produces an accepted result with `FitProgress` and a matching complete
-state snapshot; the terminal success result carries the final metric. Invalid
-labels, wrong feature dimensions, non-finite training data, and non-finite fit
+failed result from the managed fit worker. During training, each completed epoch
+also produces an accepted result with `FitProgress` and a matching complete state
+snapshot; the terminal success result carries the final metric. The worker trains
+from an immutable collection snapshot and only a successful candidate replaces
+the live inference model, so a failed fit preserves a previously ready model.
+Invalid labels, wrong feature dimensions, non-finite training data, and non-finite fit
 metrics terminate with the `malformed` error code. Pre-application validation
 failures with a usable request id are also reported through the result tap.
 
@@ -89,13 +91,14 @@ ctest --test-dir apps/broadband-mode-switch/build/offline-tests --output-on-fail
 ```
 
 The registered tests are `broadband-mode-switch-control`,
-`broadband-mode-switch-protocol`, `broadband-mode-switch-control-state`, and
-`broadband-mode-switch-mlp`.
+`broadband-mode-switch-protocol`, `broadband-mode-switch-control-state`,
+`broadband-mode-switch-mlp`, and `broadband-mode-switch-fit-worker`.
 The first uses fixed inputs and covers the underlying `RingBuffer` plus the
 bounded `CollectionStore`; the second exercises typed protobuf round trips and
 validation; the third covers FIFO queue bounds/de-duplication, atomic
 `prepare_capture`, and invalid/capture-enabled target transitions. The MLP target
 covers deterministic per-epoch progress callbacks and malformed training data.
-The current Windows shell still lacks CMake, but the documented WSL/vcpkg
-Protobuf build was run for T-8 and all four tests passed. The device app itself
-still requires the SDK/Docker build path for verification.
+The fit-worker target covers immutable snapshots, continuing main-thread activity,
+candidate-only terminal visibility, and single-job admission. The documented
+WSL/vcpkg Protobuf build was run for T-9 and all five tests passed. The device app
+itself still requires the SDK/Docker build path for verification.
