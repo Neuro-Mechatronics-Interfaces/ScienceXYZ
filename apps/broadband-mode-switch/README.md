@@ -36,6 +36,8 @@ In SAMPLING mode the App forwards each upstream `BroadbandFrame` **unchanged** o
 | `src/mpf_features.{hpp,cpp}` | STFT + CSD + band-average + Hermitian matrix-log |
 | `src/mlp.{hpp,cpp}` | hand-rolled 2-hidden-layer MLP + backprop + SGD |
 | `src/collection_store.hpp` | bounded multi-collection store, flushes, and generations |
+| `proto/gui_control.proto` | versioned command, result, and state protobuf schema |
+| `src/control_protocol.hpp` | v1 payload validation and protobuf serialization helpers |
 | `src/ring_buffer.hpp` | per-class feature store |
 | `config/rhd2132_mode_switch.json` | kBroadbandSource(200) → kApplication graph |
 | `client/*.py` | control/monitor clients |
@@ -45,6 +47,12 @@ The synthetic source is a faithful port of `vendor/axon-peripherals/src/gateware
 The MPF matrix logarithm uses a hand-rolled cyclic-Jacobi Hermitian eigensolver (`mpf_features.cpp`), so **no `eigen3`/BLAS dependency is added** to `vcpkg.json`.
 
 The MLP z-scores each feature dimension using mean/std fit from the captured training set (applied identically at inference). Raw MPF features span orders of magnitude across bands and channel pairs; standardising them keeps SGD well-conditioned so `mlp_lr` need not be hand-tuned to the feature scale. An offline smoke test (`g++`-built, SDK-independent) confirms the synthetic source is deterministic, the feature dimension is `num_bands·C²`, and the MLP learns separable synthetic classes end-to-end.
+
+The canonical GUI/control-plane payloads are typed protobuf messages in
+`proto/gui_control.proto`. `src/control_protocol.hpp` validates protocol v1
+envelopes, command arguments, complete state snapshots, and correlated command
+results before serialization or application. The app still exposes only the
+legacy `ListValue` taps until the serial command application work in T-6.
 
 ## Feature dimension
 

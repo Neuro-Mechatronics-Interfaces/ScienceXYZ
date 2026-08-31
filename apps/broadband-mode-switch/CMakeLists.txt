@@ -7,10 +7,9 @@ set(LOCAL_SDK_PATH "app-sdk" CACHE PATH "Path to local SDK build directory")
 option(BUILD_DEVICE_APP "Build the Synapse device application" ON)
 
 include(CTest)
-
-if(BUILD_DEVICE_APP)
 include("cmake/protos.cmake")
 
+if(BUILD_DEVICE_APP)
 if (BUILD_FOR_ARM64 AND NOT CMAKE_HOST_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
   message(STATUS "Cross compiling for ARM64")
   set(CMAKE_SYSTEM_NAME Linux)
@@ -22,7 +21,7 @@ endif()
 
 # Required packages
 find_package(cppzmq REQUIRED)
-find_package(Protobuf REQUIRED)
+find_package(Protobuf CONFIG REQUIRED)
 find_package(spdlog REQUIRED CONFIG)
 find_package(iir REQUIRED CONFIG)
 
@@ -55,7 +54,9 @@ add_executable(broadband-mode-switch
 generate_protobufs(
     TARGET broadband-mode-switch
     OUT_PROTO_DIR PROTO_OUT_DIR
-    PROTO_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/external/sciencecorp/synapse-api"
+    PROTO_DIRS
+        "${CMAKE_CURRENT_SOURCE_DIR}/external/sciencecorp/synapse-api"
+        "${CMAKE_CURRENT_SOURCE_DIR}/proto"
 )
 
 # Be strict about the standard
@@ -97,5 +98,6 @@ include(CPack)
 endif()
 
 if(BUILD_TESTING)
+    find_package(Protobuf CONFIG REQUIRED)
     add_subdirectory(tests)
 endif()

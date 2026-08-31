@@ -28,8 +28,11 @@ function(generate_protobufs)
   set(PROTO_INCLUDE_DIRS "")
   set(PROTOS "")
 
-  # Include Synapse API proto directory in the include path
-  get_filename_component(SYNAPSE_PROTO_INCLUDE_DIR ./external/sciencecorp/synapse-api REALPATH)
+  # Include Synapse API proto directory in the include path. Resolve relative
+  # to the app source directory rather than the caller's current directory so
+  # this helper is also safe to use from tests/.
+  get_filename_component(SYNAPSE_PROTO_INCLUDE_DIR
+      ${CMAKE_CURRENT_FUNCTION_LIST_DIR}/../external/sciencecorp/synapse-api REALPATH)
   list(APPEND PROTO_INCLUDE_DIRS ${SYNAPSE_PROTO_INCLUDE_DIR})
   if(DEFINED SCIFI_PROTO_INCLUDE_DIR)
     list(APPEND PROTO_INCLUDE_DIRS ${SCIFI_PROTO_INCLUDE_DIR})

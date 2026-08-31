@@ -232,3 +232,32 @@ CTest workflow; all seven tests passed.
 **Candidate rule:**
 After adding a header-only API guard, run the smallest strict compile before
 continuing documentation or integration work.
+
+### 2026-08-31 — T-5 protobuf test integration exposed generated-name and target mistakes
+
+**Attempt:**
+Added the typed GUI protocol schema and put its serialization tests beside the
+existing collection-store test in one CMake executable.
+
+**Failure:**
+The first generated-code compile used nested enum names that this `protoc`
+version emits as namespace-level names, and the combined test target linked two
+`main` functions. A direct WSL test configuration also initially used CMake's
+module Protobuf target against the static vcpkg library without its Abseil
+dependencies.
+
+**Cause:**
+Generated C++ enum naming is determined by the protobuf generator, not by the
+source enum's visual nesting. The existing test already owns the executable
+entry point. The module-mode imported target did not carry the static package's
+transitive Abseil link interface in that ad-hoc configuration.
+
+**Correction:**
+Used the generated `Flush_Scope_*` names, split protocol tests into their own
+executable, and selected the vcpkg Protobuf config package so its dependency
+targets are linked. The WSL build then passed both CTest targets.
+
+**Candidate rule:**
+Compile a small generated-protobuf consumer immediately after changing a local
+schema; keep independently owned test programs in separate executables and
+use the package-manager config target for static dependency graphs.
