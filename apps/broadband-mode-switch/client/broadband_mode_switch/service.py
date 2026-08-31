@@ -28,7 +28,7 @@ class _Client:
 class ControlService:
     """Async socket facade; device I/O remains exclusively in the controller."""
 
-    def __init__(self, controller: BroadbandController, host: str = "127.0.0.1", port: int = 8765):
+    def __init__(self, controller: BroadbandController, host: str = "127.0.0.1", port: int = 8766):
         self.controller = controller
         self.host = host
         self.port = port
@@ -157,7 +157,11 @@ class ControlService:
             from .model import result_to_json
             if command == "subscribe_state":
                 client.subscribed = request["enabled"]
-                if not client.subscribed:
+                if client.subscribed:
+                    current_state = getattr(self.controller, "state", None)
+                    if isinstance(current_state, AppState):
+                        client.pending_state = state_to_json(current_state)
+                else:
                     client.pending_state = None
             return result_to_json(result) | {"request_id": request_id}
         except DeviceCommandError as exc:

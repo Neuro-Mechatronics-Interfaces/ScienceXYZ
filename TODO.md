@@ -203,6 +203,20 @@ subscriber. The full client suite passes with 13 tests under CPython 3.13.
 
 T-12 (dependency-light socket client and calibration-prompter example) is next.
 
+### 2026-08-31 - T-12 socket client and calibration prompter complete
+
+Added `client/broadband_mode_switch/client.py`, a standard-library-only
+blocking NDJSON client with request correlation, accepted-fit progress
+handling, queued state events, timeout/error reporting, and command helpers.
+Added `client/calibration_prompter.py`; its injectable calibration routine
+queries state, validates available targets, atomically selects each target with
+capture off, enables capture only for the prompted window, and disables it in
+cleanup before another target can be selected. Offline tests exercise
+fragmented/interleaved responses, target ordering, and cleanup after a prompt
+failure.
+
+T-13 (read-only PySide6 dashboard and Qt smoke test) is next.
+
 ## Initial Definition of Done
 
 The first repository milestone is complete when:

@@ -155,7 +155,7 @@ For external tools, the same controller can expose the versioned loopback
 NDJSON service. It binds only to localhost by default:
 
 ```bash
-python client/run_service.py --device-ip "$DEV" --port 8765
+python client/run_service.py --device-ip "$DEV" --port 8766
 ```
 
 The service supports `get_state`, `subscribe_state`, `prepare_capture`,
@@ -171,6 +171,19 @@ The controller's hardware-free tests run without a device:
 ```bash
 PYTHONPATH=client python -m unittest discover -s client/tests -v
 ```
+
+The dependency-light socket client and safe calibration example can be used
+without importing the Synapse SDK in the calling tool:
+
+```bash
+python client/calibration_prompter.py --host 127.0.0.1 --port 8765 \
+  --collection 0 --labels 0 1 2 3 4
+```
+
+The prompter first queries a complete state snapshot, then uses one atomic
+`prepare_capture(..., enabled=false)` per target. It enables capture only for
+the prompted window and disables it in a `finally` cleanup before the next
+target is selected. It never connects to device Taps directly.
 
 ## Configuration parameters
 
