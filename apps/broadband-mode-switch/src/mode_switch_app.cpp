@@ -32,6 +32,26 @@ control::TransitionResult storage_failure(const CollectionStore::OperationResult
   return control::failure(ERROR_INTERNAL, "storage", status.message);
 }
 
+broadband_mode_switch::v1::ErrorCode protocol_error_code(
+    protocol::ValidationCode code) {
+  using namespace broadband_mode_switch::v1;
+  switch (code) {
+    case protocol::ValidationCode::kMalformed:
+      return ERROR_MALFORMED;
+    case protocol::ValidationCode::kUnsupportedVersion:
+      return ERROR_UNSUPPORTED_VERSION;
+    case protocol::ValidationCode::kUnknownCommand:
+      return ERROR_UNKNOWN_COMMAND;
+    case protocol::ValidationCode::kOutOfRange:
+      return ERROR_OUT_OF_RANGE;
+    case protocol::ValidationCode::kInvalidArgument:
+    case protocol::ValidationCode::kIncompatiblePayload:
+      return ERROR_INVALID_ARGUMENT;
+    default:
+      return ERROR_INTERNAL;
+  }
+}
+
 bool ModeSwitchApp::setup() {
   if (!get_app_config(
           [this](const synapse::ApplicationNodeConfig& c) { return validate_config(c); },
@@ -89,6 +109,14 @@ bool ModeSwitchApp::setup() {
   }
   if (!create_tap<synapse::Tensor>("class_out")) {
     spdlog::error("Failed to create tap class_out");
+    return false;
+  }
+  if (!create_tap<protocol::StateSnapshot>("state")) {
+    spdlog::error("Failed to create tap state");
+    return false;
+  }
+  if (!create_tap<protocol::CommandResult>("command_result")) {
+    spdlog::error("Failed to create tap command_result");
     return false;
   }
 
@@ -157,6 +185,19 @@ bool ModeSwitchApp::parse_config(const synapse::ApplicationNodeConfig& configura
 void ModeSwitchApp::on_control_command(const protocol::ControlCommand& command) {
   const auto validation = protocol::validate_command(command);
   if (!validation) {
+    // A command with a usable request id and known command kind can still
+    // receive a correlated rejection. It is queued as a notification only;
+    // it never reaches command application.
+    if (!command.request_id().empty() &&
+        command.request_id().size() <= protocol::kMaxRequestIdLength &&
+        protocol::is_known_command(command.command())) {
+      const auto rejection = control::ControlRequest::rejected_protocol_command(
+          command, protocol_error_code(validation.code), validation.field, validation.message);
+      if (control_queue_.try_enqueue(rejection) ==
+          control::ControlCommandQueue::EnqueueResult::kAccepted) {
+        return;
+      }
+    }
     spdlog::warn("control: rejected request_id={} field={} error={}", command.request_id(),
                  validation.field, validation.message);
     return;
@@ -164,6 +205,13 @@ void ModeSwitchApp::on_control_command(const protocol::ControlCommand& command) 
   const auto result =
       control_queue_.try_enqueue(control::ControlRequest::protocol_command(command));
   if (result == control::ControlCommandQueue::EnqueueResult::kDuplicateRequestId) {
+    const auto rejection = control::ControlRequest::rejected_protocol_command(
+        command, broadband_mode_switch::v1::ERROR_DUPLICATE_REQUEST_ID, "request_id",
+        "request_id was already accepted in this App session");
+    if (control_queue_.try_enqueue(rejection) ==
+        control::ControlCommandQueue::EnqueueResult::kAccepted) {
+      return;
+    }
     spdlog::warn("control: duplicate request_id={} rejected", command.request_id());
   } else if (result == control::ControlCommandQueue::EnqueueResult::kFull) {
     spdlog::warn("control: queue full; request_id={} rejected", command.request_id());
@@ -261,19 +309,173 @@ void ModeSwitchApp::drain_control_commands() {
 
 void ModeSwitchApp::apply_control_request(const control::ControlRequest& request) {
   if (request.kind == control::ControlRequest::Kind::kLegacySourceMode) {
+    const auto previous_mode = mode_;
     mode_ = static_cast<SourceMode>(request.legacy_source_mode);
+    if (mode_ != previous_mode) {
+      source_connected_ = false;
+      have_last_source_frame_wall_time_ = false;
+    }
     spdlog::info("set_source_mode -> {}", mode_ == SourceMode::kSampling ? "SAMPLING"
                                                                           : "SYNTHETIC");
+    publish_state_snapshot();
+    return;
+  }
+  if (request.rejected_before_enqueue) {
+    const auto failure = control::failure(request.rejection_code, request.rejection_field,
+                                          request.rejection_message);
+    publish_command_outcome(request.command,
+                            broadband_mode_switch::v1::RESULT_FAILED, failure);
     return;
   }
   apply_protocol_command(request.command);
 }
 
-void ModeSwitchApp::log_command_failure(const protocol::ControlCommand& command,
-                                        const control::TransitionResult& failure) const {
-  spdlog::warn("control: request_id={} command={} rejected field={} error={}",
-               command.request_id(), static_cast<int>(command.command()), failure.field,
-               failure.message);
+void ModeSwitchApp::set_last_error(const control::TransitionResult& failure) {
+  last_error_.set_code(failure.code);
+  last_error_.set_message(failure.message.empty() ? "command failed" : failure.message);
+  last_error_.set_field(failure.field);
+  last_error_.set_retryable(failure.code == broadband_mode_switch::v1::ERROR_PIPELINE_NOT_READY ||
+                            failure.code == broadband_mode_switch::v1::ERROR_BUSY ||
+                            failure.code == broadband_mode_switch::v1::ERROR_TIMEOUT ||
+                            failure.code == broadband_mode_switch::v1::ERROR_TRANSPORT_DISCONNECTED);
+  has_last_error_ = true;
+}
+
+void ModeSwitchApp::publish_command_outcome(
+    const protocol::ControlCommand& command, broadband_mode_switch::v1::ResultStatus status,
+    const control::TransitionResult& outcome) {
+  using namespace broadband_mode_switch::v1;
+  if (!outcome.success) {
+    set_last_error(outcome);
+    spdlog::warn("control: request_id={} command={} rejected field={} error={}",
+                 command.request_id(), static_cast<int>(command.command()), outcome.field,
+                 outcome.message);
+  }
+
+  // Publish the replacement state first so the result's state_version always
+  // identifies the snapshot that describes the command outcome.
+  publish_state_snapshot();
+
+  CommandResult result;
+  result.set_protocol_version(protocol::kProtocolVersion);
+  result.set_request_id(command.request_id());
+  result.set_command(command.command());
+  result.set_status(status);
+  result.set_state_version(state_version_);
+  if (!outcome.success) {
+    auto* error = result.mutable_error();
+    error->set_code(outcome.code);
+    error->set_message(outcome.message.empty() ? "command failed" : outcome.message);
+    error->set_field(outcome.field);
+    error->set_retryable(outcome.code == ERROR_PIPELINE_NOT_READY ||
+                         outcome.code == ERROR_BUSY || outcome.code == ERROR_TIMEOUT ||
+                         outcome.code == ERROR_TRANSPORT_DISCONNECTED);
+  }
+  if (!protocol::validate_command_result(result)) {
+    spdlog::error("control: refusing to publish invalid result for request_id={}",
+                  command.request_id());
+    return;
+  }
+  if (!publish_tap("command_result", result)) {
+    spdlog::warn("control: failed to publish result for request_id={}", command.request_id());
+  }
+}
+
+void ModeSwitchApp::publish_state_snapshot() {
+  using namespace broadband_mode_switch::v1;
+
+  last_state_publication_ = std::chrono::steady_clock::now();
+  have_last_state_publication_ = true;
+  StateSnapshot snapshot;
+  snapshot.set_protocol_version(protocol::kProtocolVersion);
+  snapshot.set_state_version(++state_version_);
+  snapshot.set_timestamp_ns(synapse::get_steady_clock_now().count());
+
+  auto* pipeline = snapshot.mutable_pipeline();
+  if (pipeline_error_) {
+    pipeline->set_state(PIPELINE_ERROR);
+  } else if (!pipeline_ready_) {
+    pipeline->set_state(PIPELINE_NOT_READY);
+  } else if (!source_connected_) {
+    pipeline->set_state(PIPELINE_DISCONNECTED);
+  } else {
+    pipeline->set_state(PIPELINE_READY);
+  }
+  pipeline->set_source_mode(mode_ == SourceMode::kSampling ? SOURCE_MODE_SAMPLING
+                                                            : SOURCE_MODE_SYNTHETIC);
+
+  auto* active = snapshot.mutable_active();
+  active->set_collection_id(active_target_.collection_id);
+  active->set_label(active_target_.label);
+  active->set_capture_enabled(active_target_.capture_enabled);
+
+  {
+    // CollectionStore is intentionally not internally synchronized. Hold the
+    // short-lived model lock while copying all counts/generations into the
+    // protobuf, then release it before crossing the SDK publication boundary.
+    std::lock_guard<std::mutex> lock(model_mutex_);
+    for (std::size_t collection_id = 0; collection_id < buffers_.collection_count();
+         ++collection_id) {
+      const auto collection = buffers_.collection_info(collection_id);
+      if (!collection.success()) {
+        continue;
+      }
+      auto* collection_status = snapshot.add_collections();
+      collection_status->set_collection_id(static_cast<std::uint32_t>(collection.value.collection_id));
+      collection_status->set_feature_dimension(
+          static_cast<std::uint32_t>(collection.value.feature_dimension));
+      collection_status->set_data_generation(collection.value.data_generation);
+      for (std::size_t label = 0; label < collection.value.label_count; ++label) {
+        const auto target = buffers_.target_info(collection_id, label);
+        if (!target.success()) {
+          continue;
+        }
+        auto* label_status = collection_status->add_labels();
+        label_status->set_label(static_cast<std::uint32_t>(target.value.label));
+        label_status->set_count(static_cast<std::uint32_t>(target.value.count));
+        label_status->set_capacity(static_cast<std::uint32_t>(target.value.capacity));
+      }
+    }
+  auto* model = snapshot.mutable_model();
+  model->set_phase(model_phase_);
+  model->set_ready(model_ready_);
+  model->set_has_source_collection_id(model_has_source_collection_);
+  if (model_has_source_collection_) {
+    model->set_source_collection_id(model_source_collection_);
+    model->set_source_generation(model_source_generation_);
+    const auto generation = buffers_.generation(model_source_collection_);
+    model->set_stale(!generation.success() || generation.value != model_source_generation_);
+  }
+  model->set_epoch(model_epoch_);
+  model->set_total_epochs(model_total_epochs_);
+  model->set_loss(model_loss_);
+  model->set_accuracy(model_accuracy_);
+  model->set_duration_ms(model_duration_ms_);
+  }
+
+  if (has_last_error_) {
+    *snapshot.mutable_last_error() = last_error_;
+  }
+
+  if (!protocol::validate_state(snapshot)) {
+    spdlog::error("state: refusing to publish invalid snapshot at version {}", state_version_);
+    return;
+  }
+  if (!publish_tap("state", snapshot)) {
+    spdlog::warn("state: failed to publish snapshot version {}", state_version_);
+  }
+}
+
+void ModeSwitchApp::publish_periodic_state_if_due() {
+  const auto now = std::chrono::steady_clock::now();
+  if (pipeline_ready_ && mode_ == SourceMode::kSampling &&
+      have_last_source_frame_wall_time_ &&
+      now - last_source_frame_wall_time_ > source_disconnect_timeout_) {
+    source_connected_ = false;
+  }
+  if (!have_last_state_publication_ || now - last_state_publication_ >= state_publication_period_) {
+    publish_state_snapshot();
+  }
 }
 
 void ModeSwitchApp::apply_protocol_command(const protocol::ControlCommand& command) {
@@ -291,20 +493,23 @@ void ModeSwitchApp::apply_protocol_command(const protocol::ControlCommand& comma
     return buffers_.check_target(collection_id, label);
   };
 
+  auto finish = [this, &command](const control::TransitionResult& outcome,
+                                 ResultStatus status = RESULT_SUCCEEDED) {
+    publish_command_outcome(command, status, outcome);
+  };
+
   switch (command.command()) {
     case COMMAND_GET_STATE:
-      // State publication is T-7; this command is accepted here so it shares
-      // the canonical serial boundary during the migration.
+      finish(control::success());
       return;
     case COMMAND_SUBSCRIBE_STATE:
       state_subscription_enabled_ = command.subscribe_state().enabled();
+      finish(control::success());
       return;
     case COMMAND_PREPARE_CAPTURE: {
       const auto [collections, labels] = configured_dimensions();
       if (collections == 0 || labels == 0) {
-        log_command_failure(command,
-                            control::failure(ERROR_PIPELINE_NOT_READY, "pipeline",
-                                             "pipeline is not ready"));
+        finish(control::failure(ERROR_PIPELINE_NOT_READY, "pipeline", "pipeline is not ready"));
         return;
       }
       auto candidate = active_target_;
@@ -312,12 +517,12 @@ void ModeSwitchApp::apply_protocol_command(const protocol::ControlCommand& comma
           candidate, command.prepare_capture().collection_id(), command.prepare_capture().label(),
           command.prepare_capture().enabled(), collections, labels);
       if (!transition) {
-        log_command_failure(command, transition);
+        finish(transition);
         return;
       }
       const auto status = check_target(candidate.collection_id, candidate.label);
       if (!status.success) {
-        log_command_failure(command, storage_failure(status));
+        finish(storage_failure(status));
         return;
       }
       // The assignment is the only active-target mutation and occurs after
@@ -326,51 +531,50 @@ void ModeSwitchApp::apply_protocol_command(const protocol::ControlCommand& comma
       spdlog::info("prepare_capture -> collection={} label={} enable={}",
                    active_target_.collection_id, active_target_.label,
                    active_target_.capture_enabled);
+      finish(control::success());
       return;
     }
     case COMMAND_SELECT_COLLECTION: {
       const auto [collections, labels] = configured_dimensions();
       if (collections == 0 || labels == 0) {
-        log_command_failure(command,
-                            control::failure(ERROR_PIPELINE_NOT_READY, "pipeline",
-                                             "pipeline is not ready"));
+        finish(control::failure(ERROR_PIPELINE_NOT_READY, "pipeline", "pipeline is not ready"));
         return;
       }
       auto candidate = active_target_;
       auto transition = control::select_collection(
           candidate, command.select_collection().collection_id(), collections, labels);
       if (!transition) {
-        log_command_failure(command, transition);
+        finish(transition);
         return;
       }
       const auto status = check_target(candidate.collection_id, candidate.label);
       if (!status.success) {
-        log_command_failure(command, storage_failure(status));
+        finish(storage_failure(status));
         return;
       }
       active_target_ = candidate;
+      finish(control::success());
       return;
     }
     case COMMAND_SELECT_LABEL: {
       const auto [collections, labels] = configured_dimensions();
       if (collections == 0 || labels == 0) {
-        log_command_failure(command,
-                            control::failure(ERROR_PIPELINE_NOT_READY, "pipeline",
-                                             "pipeline is not ready"));
+        finish(control::failure(ERROR_PIPELINE_NOT_READY, "pipeline", "pipeline is not ready"));
         return;
       }
       auto candidate = active_target_;
       auto transition = control::select_label(candidate, command.select_label().label(), labels);
       if (!transition) {
-        log_command_failure(command, transition);
+        finish(transition);
         return;
       }
       const auto status = check_target(candidate.collection_id, candidate.label);
       if (!status.success) {
-        log_command_failure(command, storage_failure(status));
+        finish(storage_failure(status));
         return;
       }
       active_target_ = candidate;
+      finish(control::success());
       return;
     }
     case COMMAND_SET_CAPTURE: {
@@ -378,28 +582,26 @@ void ModeSwitchApp::apply_protocol_command(const protocol::ControlCommand& comma
       if (enabled) {
         const auto status = check_target(active_target_.collection_id, active_target_.label);
         if (!status.success) {
-          log_command_failure(command, storage_failure(status));
+          finish(storage_failure(status));
           return;
         }
       }
       active_target_.capture_enabled = enabled;
+      finish(control::success());
       return;
     }
     case COMMAND_FIT: {
       if (!pipeline_ready_) {
-        log_command_failure(command,
-                            control::failure(ERROR_PIPELINE_NOT_READY, "pipeline",
-                                             "pipeline is not ready"));
+        finish(control::failure(ERROR_PIPELINE_NOT_READY, "pipeline", "pipeline is not ready"));
         return;
       }
       if (fit_requested_) {
-        log_command_failure(command,
-                            control::failure(ERROR_BUSY, "fit", "fit is already queued"));
+        finish(control::failure(ERROR_BUSY, "fit", "fit is already queued"));
         return;
       }
       const auto status = check_target(active_target_.collection_id, active_target_.label);
       if (!status.success) {
-        log_command_failure(command, storage_failure(status));
+        finish(storage_failure(status));
         return;
       }
       CollectionStore::QueryResult<std::size_t> total;
@@ -408,20 +610,30 @@ void ModeSwitchApp::apply_protocol_command(const protocol::ControlCommand& comma
         total = buffers_.total(active_target_.collection_id);
       }
       if (!total.success() || total.value == 0) {
-        log_command_failure(command,
-                            control::failure(ERROR_EMPTY_COLLECTION, "collection",
-                                             "active collection has no captured windows"));
+        finish(control::failure(ERROR_EMPTY_COLLECTION, "collection",
+                                "active collection has no captured windows"));
         return;
       }
       fit_epochs_override_ = command.fit().epochs() == 0
                                  ? -1
                                  : static_cast<int>(command.fit().epochs());
       fit_requested_ = true;
+      fit_request_id_ = command.request_id();
+      model_phase_ = MODEL_QUEUED;
+      model_has_source_collection_ = true;
+      model_source_collection_ = active_target_.collection_id;
+      {
+        std::lock_guard<std::mutex> lock(model_mutex_);
+        const auto generation = buffers_.generation(active_target_.collection_id);
+        model_source_generation_ = generation.success() ? generation.value : 0;
+      }
+      finish(control::success(), RESULT_ACCEPTED);
       return;
     }
     case COMMAND_FLUSH: {
       const auto& flush = command.flush();
       CollectionStore::OperationResult status;
+      bool invalid_scope = false;
       {
         std::lock_guard<std::mutex> lock(model_mutex_);
         switch (flush.scope()) {
@@ -445,22 +657,24 @@ void ModeSwitchApp::apply_protocol_command(const protocol::ControlCommand& comma
             status = buffers_.clear_all();
             break;
           default:
-            log_command_failure(command,
-                                control::failure(ERROR_INVALID_ARGUMENT, "flush.scope",
-                                                 "unknown flush scope"));
-            return;
+            invalid_scope = true;
+            break;
         }
       }
-      if (!status.success) log_command_failure(command, storage_failure(status));
+      if (invalid_scope) {
+        finish(control::failure(ERROR_INVALID_ARGUMENT, "flush.scope",
+                                "unknown flush scope"));
+        return;
+      }
+      finish(status.success ? control::success() : storage_failure(status));
       return;
     }
     default:
       // The tap callback validates command shape and kind. Keep this guard so
       // a future command cannot silently mutate state before its application
       // semantics are added.
-      log_command_failure(command,
-                          control::failure(ERROR_UNKNOWN_COMMAND, "command",
-                                           "command application is not implemented"));
+      finish(control::failure(ERROR_UNKNOWN_COMMAND, "command",
+                              "command application is not implemented"));
       return;
   }
 }
@@ -472,7 +686,14 @@ void ModeSwitchApp::main() {
   synapse::BroadbandFrame in_frame;
   std::vector<int32_t> synth_data;
 
+  // Publish a complete baseline before the first source frame arrives. This
+  // makes the device discoverable by late subscribers and explicitly reports
+  // the not-ready pipeline state.
+  publish_state_snapshot();
+
   while (node_running_) {
+    publish_periodic_state_if_due();
+
     // Apply every queued request before reading/routing the next source
     // sample. No feature window can see an intermediate target transition.
     drain_control_commands();
@@ -497,6 +718,10 @@ void ModeSwitchApp::main() {
         synthetic_start_ns_ = synapse::get_steady_clock_now().count();
         spdlog::info("Synthetic source started: {} channels", ch);
       }
+
+      source_connected_ = true;
+      last_source_frame_wall_time_ = std::chrono::steady_clock::now();
+      have_last_source_frame_wall_time_ = true;
 
       synthetic_->next_frame(synth_data);
 
@@ -564,6 +789,9 @@ bool ModeSwitchApp::read_one_frame(synapse::BroadbandFrame& frame) {
     }
     last_sequence_number_ = frame.sequence_number();
     have_last_sequence_ = true;
+    source_connected_ = true;
+    last_source_frame_wall_time_ = std::chrono::steady_clock::now();
+    have_last_source_frame_wall_time_ = true;
     got = true;
   }
   // We overwrite `frame` per message and only keep the last; feeding one frame
@@ -576,7 +804,7 @@ bool ModeSwitchApp::read_one_frame(synapse::BroadbandFrame& frame) {
 // Pipeline: windowing -> featurize -> capture/classify
 // ---------------------------------------------------------------------------
 void ModeSwitchApp::initialize_pipeline(std::size_t upstream_channels) {
-  if (pipeline_ready_ || upstream_channels == 0) {
+  if (pipeline_ready_ || pipeline_error_ || upstream_channels == 0) {
     return;
   }
   upstream_channels_ = upstream_channels;
@@ -598,6 +826,10 @@ void ModeSwitchApp::initialize_pipeline(std::size_t upstream_channels) {
   featurized_channels_ = channel_map_.size();
   if (featurized_channels_ == 0) {
     spdlog::error("No valid featurized channels; pipeline disabled");
+    pipeline_error_ = true;
+    pipeline_error_message_ = "no valid featurized channels";
+    set_last_error(control::failure(broadband_mode_switch::v1::ERROR_INTERNAL, "pipeline",
+                                    pipeline_error_message_));
     return;
   }
 
@@ -631,6 +863,10 @@ void ModeSwitchApp::initialize_pipeline(std::size_t upstream_channels) {
     if (!storage_status.success) {
       spdlog::error("Failed to configure feature storage: {} ({})", storage_status.message,
                     CollectionStore::error_code_name(storage_status.error));
+      pipeline_error_ = true;
+      pipeline_error_message_ = storage_status.message;
+      set_last_error(control::failure(broadband_mode_switch::v1::ERROR_INTERNAL, "pipeline",
+                                      pipeline_error_message_));
       return;
     }
     Mlp::Config mcfg;
@@ -645,9 +881,12 @@ void ModeSwitchApp::initialize_pipeline(std::size_t upstream_channels) {
   }
 
   pipeline_ready_ = true;
+  pipeline_error_ = false;
+  pipeline_error_message_.clear();
   spdlog::info(
       "Pipeline ready: {} featurized ch, window={} samp, stride={} samp, feature_dim={}",
       featurized_channels_, window_samples_, stride_samples_, featurizer_->feature_dim());
+  publish_state_snapshot();
 }
 
 void ModeSwitchApp::ingest_sample(const std::vector<int32_t>& frame_data,
@@ -723,41 +962,88 @@ void ModeSwitchApp::maybe_fit() {
     return;
   }
   fit_requested_ = false;
+
+  protocol::ControlCommand fit_command;
+  fit_command.set_protocol_version(protocol::kProtocolVersion);
+  fit_command.set_request_id(fit_request_id_);
+  fit_command.set_command(broadband_mode_switch::v1::COMMAND_FIT);
+  fit_command.mutable_fit()->set_epochs(
+      fit_epochs_override_ < 0 ? 0 : static_cast<std::uint32_t>(fit_epochs_override_));
+
   if (!pipeline_ready_) {
-    spdlog::warn("fit_mlp: pipeline not ready yet");
+    const auto failure = control::failure(broadband_mode_switch::v1::ERROR_PIPELINE_NOT_READY,
+                                          "pipeline", "pipeline is not ready");
+    model_phase_ = broadband_mode_switch::v1::MODEL_FAILED;
+    publish_command_outcome(fit_command, broadband_mode_switch::v1::RESULT_FAILED, failure);
+    fit_request_id_.clear();
     return;
   }
+
+  model_phase_ = broadband_mode_switch::v1::MODEL_RUNNING;
+  model_ready_ = false;
+  model_epoch_ = 0;
+  model_total_epochs_ = fit_epochs_override_ < 0
+                            ? static_cast<std::uint32_t>(cfg_.mlp_epochs)
+                            : static_cast<std::uint32_t>(fit_epochs_override_);
+  model_loss_ = 0.0f;
+  model_accuracy_ = 0.0f;
+  fit_started_at_ = std::chrono::steady_clock::now();
+  publish_state_snapshot();
 
   std::vector<std::vector<float>> features;
   std::vector<std::size_t> labels;
   float loss = 0.0f, acc = 0.0f;
+  control::TransitionResult failure;
   {
     std::lock_guard<std::mutex> lock(model_mutex_);
     const auto collect_status = buffers_.collect(active_target_.collection_id, features, labels);
     if (!collect_status.success) {
       spdlog::warn("fit_mlp: cannot collect training data: {} ({})", collect_status.message,
                    CollectionStore::error_code_name(collect_status.error));
-      return;
-    }
-    if (features.empty()) {
+      failure = storage_failure(collect_status);
+    } else if (features.empty()) {
       spdlog::warn("fit_mlp: no captured windows; nothing to train");
-      return;
+      failure = control::failure(broadband_mode_switch::v1::ERROR_EMPTY_COLLECTION, "collection",
+                                 "active collection has no captured windows");
+    } else {
+      const int override_epochs = fit_epochs_override_;
+      Mlp::Config mcfg = mlp_.config();
+      if (override_epochs > 0) mcfg.epochs = static_cast<std::size_t>(override_epochs);
+      mlp_.init(mcfg);  // fresh init for a reproducible fit
+      spdlog::info("fit_mlp: training on {} windows ({} classes), {} epochs, input_dim={}",
+                   features.size(), mcfg.num_classes, mcfg.epochs, mcfg.input_dim);
+      loss = mlp_.fit(features, labels, &acc);
     }
-    const int override_epochs = fit_epochs_override_;
-    Mlp::Config mcfg = mlp_.config();
-    if (override_epochs > 0) mcfg.epochs = static_cast<std::size_t>(override_epochs);
-    mlp_.init(mcfg);  // fresh init for a reproducible fit
-    spdlog::info("fit_mlp: training on {} windows ({} classes), {} epochs, input_dim={}",
-                 features.size(), mcfg.num_classes, mcfg.epochs, mcfg.input_dim);
-    loss = mlp_.fit(features, labels, &acc);
   }
 
-  if (loss < 0.0f) {
+  if (!failure.success || loss < 0.0f) {
+    if (failure.success) {
+      failure = control::failure(broadband_mode_switch::v1::ERROR_INTERNAL, "fit",
+                                 "training failed due to malformed data");
+    }
     spdlog::error("fit_mlp: training failed (malformed data)");
+    model_phase_ = broadband_mode_switch::v1::MODEL_FAILED;
+    model_duration_ms_ = static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - fit_started_at_)
+            .count());
+    publish_command_outcome(fit_command, broadband_mode_switch::v1::RESULT_FAILED, failure);
+    fit_request_id_.clear();
     return;
   }
   model_ready_ = true;
+  model_phase_ = broadband_mode_switch::v1::MODEL_SUCCEEDED;
+  model_epoch_ = model_total_epochs_;
+  model_loss_ = loss;
+  model_accuracy_ = acc;
+  model_duration_ms_ = static_cast<std::uint64_t>(
+      std::chrono::duration_cast<std::chrono::milliseconds>(
+          std::chrono::steady_clock::now() - fit_started_at_)
+          .count());
   spdlog::info("fit_mlp: done. final loss={:.4f} accuracy={:.3f}", loss, acc);
+  publish_command_outcome(fit_command, broadband_mode_switch::v1::RESULT_SUCCEEDED,
+                          control::success());
+  fit_request_id_.clear();
 }
 
 void ModeSwitchApp::publish_class(const std::vector<float>& probs, uint64_t timestamp_ns) {

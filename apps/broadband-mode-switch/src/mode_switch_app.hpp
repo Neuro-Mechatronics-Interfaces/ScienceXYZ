@@ -1,7 +1,9 @@
 #pragma once
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <string>
 #include <vector>
 
 #include <synapse-app-sdk/app/app.hpp>
@@ -35,6 +37,8 @@ namespace app {
 // Producer taps:
 //   broadband_out    BroadbandFrame            real (forwarded) or synthetic
 //   class_out        Tensor[num_classes]       softmax distribution, on classify
+//   state            StateSnapshot              complete replacement snapshot
+//   command_result   CommandResult              correlated command outcome
 //
 // Tap callbacks run on their own threads; they only validate and enqueue small
 // requests, then return fast. All control mutations and heavy work (featurise,
@@ -82,8 +86,12 @@ class ModeSwitchApp : public synapse::App {
   void apply_control_request(const control::ControlRequest& request);
   void apply_protocol_command(const protocol::ControlCommand& command);
   bool enqueue_legacy_request(control::ControlRequest request, const char* tap_name);
-  void log_command_failure(const protocol::ControlCommand& command,
-                           const control::TransitionResult& failure) const;
+  void publish_command_outcome(const protocol::ControlCommand& command,
+                               broadband_mode_switch::v1::ResultStatus status,
+                               const control::TransitionResult& outcome);
+  void publish_state_snapshot();
+  void publish_periodic_state_if_due();
+  void set_last_error(const control::TransitionResult& failure);
 
   // Pull one frame from the reader; returns false if nothing was read.
   bool read_one_frame(synapse::BroadbandFrame& frame);
@@ -107,11 +115,36 @@ class ModeSwitchApp : public synapse::App {
   SourceMode mode_ = SourceMode::kSampling;
   bool fit_requested_ = false;
   int fit_epochs_override_ = -1;  // <0 => use cfg_.mlp_epochs
-  bool state_subscription_enabled_ = false;  // consumed by the later state publisher
+  bool state_subscription_enabled_ = false;
   bool model_ready_ = false;
+  broadband_mode_switch::v1::ModelPhase model_phase_ =
+      broadband_mode_switch::v1::MODEL_IDLE;
+  bool model_has_source_collection_ = false;
+  std::uint32_t model_source_collection_ = 0;
+  std::uint64_t model_source_generation_ = 0;
+  std::uint32_t model_epoch_ = 0;
+  std::uint32_t model_total_epochs_ = 0;
+  float model_loss_ = 0.0f;
+  float model_accuracy_ = 0.0f;
+  std::uint64_t model_duration_ms_ = 0;
+  std::string fit_request_id_;
+  std::chrono::steady_clock::time_point fit_started_at_;
+
+  std::uint64_t state_version_ = 0;
+  bool has_last_error_ = false;
+  protocol::Error last_error_;
 
   // ---- pipeline state (main-thread owned unless noted) ----
   bool pipeline_ready_ = false;
+  bool pipeline_error_ = false;
+  std::string pipeline_error_message_;
+  bool source_connected_ = false;
+  bool have_last_source_frame_wall_time_ = false;
+  std::chrono::steady_clock::time_point last_source_frame_wall_time_;
+  bool have_last_state_publication_ = false;
+  std::chrono::steady_clock::time_point last_state_publication_;
+  const std::chrono::milliseconds state_publication_period_{500};
+  const std::chrono::seconds source_disconnect_timeout_{1};
   std::size_t upstream_channels_ = 0;
   std::size_t featurized_channels_ = 0;
   std::vector<std::size_t> channel_map_;  // featurized index -> upstream index

@@ -18,6 +18,6 @@ digraph broadband_gui_control {
   app -> buffers [label="capture / flush\n+ generations"];
   buffers -> fit [label="immutable\ncollection snapshot"];
   fit -> app [label="candidate model\n+ progress"];
-  app -> taps [label="state + results\nclass output"];
+  app -> taps [label="state snapshots +\ncorrelated results\nclass output"];
   taps -> controller [label="snapshots /\ncorrelated results"];
 }

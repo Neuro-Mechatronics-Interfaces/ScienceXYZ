@@ -21,6 +21,10 @@ struct ControlRequest {
   protocol::ControlCommand command;
   int legacy_source_mode = 0;
   bool reserve_request_id = true;
+  bool rejected_before_enqueue = false;
+  protocol::ErrorCode rejection_code = broadband_mode_switch::v1::ERROR_NONE;
+  std::string rejection_field;
+  std::string rejection_message;
 
   static ControlRequest protocol_command(const protocol::ControlCommand& command) {
     ControlRequest request;
@@ -44,6 +48,21 @@ struct ControlRequest {
     // Legacy taps predate request-id de-duplication. They may be invoked
     // repeatedly with the same compatibility id and must retain that behavior.
     request.reserve_request_id = false;
+    return request;
+  }
+
+  static ControlRequest rejected_protocol_command(const protocol::ControlCommand& command,
+                                                  protocol::ErrorCode code,
+                                                  std::string field,
+                                                  std::string message) {
+    ControlRequest request;
+    request.kind = Kind::kProtocolCommand;
+    request.command = command;
+    request.reserve_request_id = false;
+    request.rejected_before_enqueue = true;
+    request.rejection_code = code;
+    request.rejection_field = std::move(field);
+    request.rejection_message = std::move(message);
     return request;
   }
 };

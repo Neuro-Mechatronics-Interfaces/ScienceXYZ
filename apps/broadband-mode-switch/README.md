@@ -58,7 +58,8 @@ results before serialization or application. The `control` consumer tap now
 validates and queues typed commands for serial application in the App main loop.
 The legacy `set_source_mode`, `set_capture`, and `fit_mlp` taps remain
 compatibility shims through the same queue. State and command-result producer
-taps are reserved for T-7.
+taps publish complete v1 snapshots and correlated results; snapshots are emitted
+at startup, after command application, and periodically at 2 Hz.
 
 ## Feature dimension
 

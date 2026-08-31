@@ -144,7 +144,7 @@ The device taps are:
 | `broadband_out` | producer | Existing `BroadbandFrame`; unchanged source timestamps in sampling mode. |
 | `class_out` | producer | Existing little-endian float `Tensor[num_classes]`. |
 
-The controller implementation belongs under `client/` and is the only layer that constructs `synapse.client.taps.Tap` connections. The existing scripts [`set_source_mode.py`](../client/set_source_mode.py), [`set_capture.py`](../client/set_capture.py), [`fit_mlp.py`](../client/fit_mlp.py), and [`listen_class.py`](../client/listen_class.py) document the legacy wire types and remain usable during migration. T-7 adds state and correlated command-result publication.
+The controller implementation belongs under `client/` and is the only layer that constructs `synapse.client.taps.Tap` connections. The existing scripts [`set_source_mode.py`](../client/set_source_mode.py), [`set_capture.py`](../client/set_capture.py), [`fit_mlp.py`](../client/fit_mlp.py), and [`listen_class.py`](../client/listen_class.py) document the legacy wire types and remain usable during migration. T-7 implements the `state` and `command_result` producer taps described above. The device emits a complete baseline snapshot before acquisition, a snapshot immediately before each correlated command result, and periodic snapshots at 2 Hz. A fit emits `accepted` when queued and one terminal result after synchronous training.
 
 Legacy behavior is deliberately limited:
 
@@ -183,5 +183,8 @@ The socket response/event shapes are the same `result` and `state` envelopes sho
 
 The bounded design and the ownership boundary are shown in [`gui-control-architecture.svg`](gui-control-architecture.svg); the editable source is [`gui-control-architecture.dot`](gui-control-architecture.dot).
 
-![GraphViz diagram](gui-control-architecture.svg) 
+![GraphViz diagram](gui-control-architecture.svg)
 
+<!-- graphviz:apps/broadband-mode-switch/docs/gui-control-architecture.dot -->
+![GraphViz diagram](gui-control-architecture.svg)
+<!-- /graphviz:apps/broadband-mode-switch/docs/gui-control-architecture.dot -->

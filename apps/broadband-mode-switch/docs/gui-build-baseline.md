@@ -1,6 +1,6 @@
 # GUI control-plane build baseline
 
-Recorded 2026-08-31 before implementation work beyond the protocol design; updated for T-5 typed payloads and T-6 queue/transition tests.
+Recorded 2026-08-31 before implementation work beyond the protocol design; updated for T-5 typed payloads, T-6 queue/transition tests, and T-7 state/result publication.
 
 ## Expected workflow
 
@@ -56,7 +56,23 @@ changes which retain their legacy no-request-id form. `src/control_state.hpp`
 contains the atomic `prepare_capture` replacement and the capture-disabled
 selection rules. The main loop drains the queue before routing the next sample
 window, so capture, target changes, and flushes cannot interleave with feature
-routing. State and command-result producer taps remain T-7 work.
+routing.
+
+## T-7 state and result publication
+
+`src/mode_switch_app.cpp` creates producer taps `state` (`StateSnapshot`) and
+`command_result` (`CommandResult`). The app publishes a complete baseline before
+the first source frame, immediately after every canonical command (state first,
+then the correlated result), and periodically at 2 Hz. The result's
+`state_version` identifies the snapshot published immediately before it.
+Collection counts and generations are copied under the short model lock before
+the SDK publish call. Sampling sources become `disconnected` after one second
+without a frame; startup is `not_ready`, and pipeline initialization failures
+are reported as `error` with `last_error`.
+
+Fit commands produce `accepted` when queued, followed by a terminal succeeded or
+failed result after the current synchronous fit. Pre-application validation
+failures with a usable request id are also reported through the result tap.
 
 ## Hardware-free control-plane tests
 
@@ -75,5 +91,5 @@ bounded `CollectionStore`; the second exercises typed protobuf round trips and
 validation; the third covers FIFO queue bounds/de-duplication, atomic
 `prepare_capture`, and invalid/capture-enabled target transitions. The current
 Windows shell still lacks CMake, but the documented WSL/vcpkg Protobuf build
-was run for T-6 and all three tests passed. The device app itself still
+was run for T-7 and all three tests passed. The device app itself still
 requires the SDK/Docker build path for verification.

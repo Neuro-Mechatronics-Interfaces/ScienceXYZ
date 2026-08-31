@@ -9,6 +9,6 @@ digraph "inner_001" {
   "socket" -> "controller" [color="#52606d", fontname="Arial", fontsize="9", label="validated\nrequests"];
   "controller" -> "taps" [color="#52606d", fontname="Arial", fontsize="9", label="versioned\ncommands"];
   "taps" -> "app" [color="#52606d", fontname="Arial", fontsize="9", label="control\nqueue"];
-  "app" -> "taps" [color="#52606d", fontname="Arial", fontsize="9", label="state + results\nclass output"];
+  "app" -> "taps" [color="#52606d", fontname="Arial", fontsize="9", label="state snapshots +\ncorrelated results\nclass output"];
   "taps" -> "controller" [color="#52606d", fontname="Arial", fontsize="9", label="snapshots /\ncorrelated results"];
 }
