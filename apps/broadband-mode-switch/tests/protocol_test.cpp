@@ -155,6 +155,19 @@ void test_state_and_result_validation() {
   result.clear_error();
   expect(!app::protocol::validate_command_result(result),
          "failed result without error rejected");
+
+  result.set_status(RESULT_ACCEPTED);
+  auto* progress = result.mutable_progress();
+  progress->set_epoch(1);
+  progress->set_total_epochs(4);
+  progress->set_loss(0.7f);
+  progress->set_accuracy(0.5f);
+  expect(static_cast<bool>(app::protocol::validate_command_result(result)),
+         "fit progress result accepted");
+
+  result.set_command(COMMAND_SET_CAPTURE);
+  expect(!app::protocol::validate_command_result(result),
+         "progress on non-fit result rejected");
 }
 
 }  // namespace

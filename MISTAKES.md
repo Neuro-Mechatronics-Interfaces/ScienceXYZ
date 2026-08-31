@@ -101,3 +101,15 @@ lr>=~0.01 the first-layer gradients explode and the softmax collapses to uniform
 **Correction:** Used the generated `Flush_Scope_*` names, split protocol tests into their own executable, and selected the vcpkg Protobuf config package so its dependency targets are linked. The WSL build then passed both CTest targets.
 
 **Candidate rule:** Compile a small generated-protobuf consumer immediately after changing a local schema; keep independently owned test programs in separate executables and use the package-manager config target for static dependency graphs.
+
+### 2026-08-31 — Fit failure status was default-initialized as unsuccessful
+
+**Attempt:** Added per-epoch MLP progress publication to the existing synchronous fit path.
+
+**Failure:** The fit path's local `TransitionResult failure` started with its default `success=false`, so the terminal check classified every otherwise successful training pass as failed.
+
+**Cause:** The result type intentionally defaults to failure for safety, but the local variable represented an as-yet-unset error and was tested as though it represented a successful operation.
+
+**Correction:** Initialized the local result with `control::success()` and added an MLP regression test covering successful progress and malformed data. The terminal fit check now also rejects non-finite metrics and reports `ERROR_MALFORMED`.
+
+**Candidate rule:** Initialize deferred error/result variables explicitly to the success identity when the surrounding branch uses success as the no-error sentinel.

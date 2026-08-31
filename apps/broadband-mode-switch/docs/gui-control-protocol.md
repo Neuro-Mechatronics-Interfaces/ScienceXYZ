@@ -83,6 +83,13 @@ Fitting takes an immutable snapshot of the requested active collection and its g
 
 The model phase is one of `idle`, `queued`, `running`, `succeeded`, `failed`, or `cancelled` (cancellation is reserved for a later command if implemented). Progress fields are meaningful in `running` and terminal phases. A fit while another fit is queued or running is rejected as `busy` in v1.
 
+While a fit is running, each completed MLP epoch emits a non-terminal
+`command_result` with `status: accepted` and a `progress` object containing the
+one-based epoch, total epochs, mean loss, and training accuracy. The complete
+state snapshot immediately before that result carries the same metrics and its
+`state_version` is copied into the result. The terminal `succeeded` result also
+carries the final progress metric. Progress is only valid on `fit` results.
+
 ## Commands
 
 All canonical commands carry `protocol_version: 1`, a non-empty unique `request_id`, and a `command`. Arguments are validated before any state is changed. Mutating commands are applied serially on the device main-loop boundary, before the next feature window is routed.
@@ -126,7 +133,7 @@ The device publishes a correlated result envelope:
 }
 ```
 
-`status` is `succeeded`, `accepted`, or `failed`. Ordinary commands produce one terminal result. A fit produces `accepted` when queued and exactly one terminal result with the same request ID when it finishes or fails; progress and state snapshots carry the live phase. Failures use a stable `error.code`, human-readable `error.message`, optional `error.field`, and `retryable` flag. The initial v1 codes are `malformed`, `unsupported_version`, `unknown_command`, `invalid_argument`, `out_of_range`, `pipeline_not_ready`, `capture_enabled`, `busy`, `empty_collection`, `duplicate_request_id`, `timeout`, `transport_disconnected`, and `internal`.
+`status` is `succeeded`, `accepted`, or `failed`. Ordinary commands produce one terminal result. A fit produces `accepted` when queued, zero or more non-terminal accepted progress results, and exactly one terminal result with the same request ID when it finishes or fails. Failures use a stable `error.code`, human-readable `error.message`, optional `error.field`, and `retryable` flag. Malformed or non-finite training data terminates the fit with `error.code: malformed`. The initial v1 codes are `malformed`, `unsupported_version`, `unknown_command`, `invalid_argument`, `out_of_range`, `pipeline_not_ready`, `capture_enabled`, `busy`, `empty_collection`, `duplicate_request_id`, `timeout`, `transport_disconnected`, and `internal`.
 
 Invalid commands and rejected commands do not mutate active state, buffers, generations, or the live model. The controller serializes outbound mutations and supplies timeouts; a device-side application of a command is not undone by a client timeout. After reconnect, the client must query/replace state and must not replay a timed-out mutation unless its request ID is known not to have been applied.
 
@@ -144,7 +151,7 @@ The device taps are:
 | `broadband_out` | producer | Existing `BroadbandFrame`; unchanged source timestamps in sampling mode. |
 | `class_out` | producer | Existing little-endian float `Tensor[num_classes]`. |
 
-The controller implementation belongs under `client/` and is the only layer that constructs `synapse.client.taps.Tap` connections. The existing scripts [`set_source_mode.py`](../client/set_source_mode.py), [`set_capture.py`](../client/set_capture.py), [`fit_mlp.py`](../client/fit_mlp.py), and [`listen_class.py`](../client/listen_class.py) document the legacy wire types and remain usable during migration. T-7 implements the `state` and `command_result` producer taps described above. The device emits a complete baseline snapshot before acquisition, a snapshot immediately before each correlated command result, and periodic snapshots at 2 Hz. A fit emits `accepted` when queued and one terminal result after synchronous training.
+The controller implementation belongs under `client/` and is the only layer that constructs `synapse.client.taps.Tap` connections. The existing scripts [`set_source_mode.py`](../client/set_source_mode.py), [`set_capture.py`](../client/set_capture.py), [`fit_mlp.py`](../client/fit_mlp.py), and [`listen_class.py`](../client/listen_class.py) document the legacy wire types and remain usable during migration. T-7 implements the `state` and `command_result` producer taps described above. The device emits a complete baseline snapshot before acquisition, a snapshot immediately before each correlated command result, and periodic snapshots at 2 Hz. T-8 adds one accepted progress result and matching state snapshot per completed epoch, followed by one terminal result after synchronous training.
 
 Legacy behavior is deliberately limited:
 

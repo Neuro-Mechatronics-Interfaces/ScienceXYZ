@@ -59,7 +59,10 @@ validates and queues typed commands for serial application in the App main loop.
 The legacy `set_source_mode`, `set_capture`, and `fit_mlp` taps remain
 compatibility shims through the same queue. State and command-result producer
 taps publish complete v1 snapshots and correlated results; snapshots are emitted
-at startup, after command application, and periodically at 2 Hz.
+at startup, after command application, and periodically at 2 Hz. A running fit
+also emits one accepted `FitProgress` result and matching state snapshot per
+completed epoch, then one terminal result; malformed or non-finite training data
+is reported as a terminal `malformed` error.
 
 ## Feature dimension
 

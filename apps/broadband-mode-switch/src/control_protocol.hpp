@@ -275,7 +275,13 @@ inline ValidationResult validate_command_result(const CommandResult& result) {
     return invalid_result(ValidationCode::kIncompatiblePayload, "error",
                           "successful result must not include an error");
   }
-  if (result.has_progress()) return validate_progress(result.progress());
+  if (result.has_progress()) {
+    if (result.command() != broadband_mode_switch::v1::COMMAND_FIT) {
+      return invalid_result(ValidationCode::kIncompatiblePayload, "progress",
+                            "progress is only valid for fit results");
+    }
+    return validate_progress(result.progress());
+  }
   return valid_result();
 }
 

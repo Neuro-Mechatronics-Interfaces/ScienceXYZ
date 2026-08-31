@@ -343,7 +343,7 @@ void ModeSwitchApp::set_last_error(const control::TransitionResult& failure) {
 
 void ModeSwitchApp::publish_command_outcome(
     const protocol::ControlCommand& command, broadband_mode_switch::v1::ResultStatus status,
-    const control::TransitionResult& outcome) {
+    const control::TransitionResult& outcome, const protocol::FitProgress* progress) {
   using namespace broadband_mode_switch::v1;
   if (!outcome.success) {
     set_last_error(outcome);
@@ -370,6 +370,9 @@ void ModeSwitchApp::publish_command_outcome(
     error->set_retryable(outcome.code == ERROR_PIPELINE_NOT_READY ||
                          outcome.code == ERROR_BUSY || outcome.code == ERROR_TIMEOUT ||
                          outcome.code == ERROR_TRANSPORT_DISCONNECTED);
+  }
+  if (progress != nullptr) {
+    *result.mutable_progress() = *progress;
   }
   if (!protocol::validate_command_result(result)) {
     spdlog::error("control: refusing to publish invalid result for request_id={}",
@@ -993,7 +996,7 @@ void ModeSwitchApp::maybe_fit() {
   std::vector<std::vector<float>> features;
   std::vector<std::size_t> labels;
   float loss = 0.0f, acc = 0.0f;
-  control::TransitionResult failure;
+  control::TransitionResult failure = control::success();
   {
     std::lock_guard<std::mutex> lock(model_mutex_);
     const auto collect_status = buffers_.collect(active_target_.collection_id, features, labels);
@@ -1005,23 +1008,46 @@ void ModeSwitchApp::maybe_fit() {
       spdlog::warn("fit_mlp: no captured windows; nothing to train");
       failure = control::failure(broadband_mode_switch::v1::ERROR_EMPTY_COLLECTION, "collection",
                                  "active collection has no captured windows");
-    } else {
-      const int override_epochs = fit_epochs_override_;
-      Mlp::Config mcfg = mlp_.config();
-      if (override_epochs > 0) mcfg.epochs = static_cast<std::size_t>(override_epochs);
-      mlp_.init(mcfg);  // fresh init for a reproducible fit
-      spdlog::info("fit_mlp: training on {} windows ({} classes), {} epochs, input_dim={}",
-                   features.size(), mcfg.num_classes, mcfg.epochs, mcfg.input_dim);
-      loss = mlp_.fit(features, labels, &acc);
     }
   }
 
-  if (!failure.success || loss < 0.0f) {
+  if (failure.success && !features.empty()) {
+    const int override_epochs = fit_epochs_override_;
+    Mlp::Config mcfg = mlp_.config();
+    if (override_epochs > 0) mcfg.epochs = static_cast<std::size_t>(override_epochs);
+    mlp_.init(mcfg);  // fresh init for a reproducible fit
+    spdlog::info("fit_mlp: training on {} windows ({} classes), {} epochs, input_dim={}",
+                 features.size(), mcfg.num_classes, mcfg.epochs, mcfg.input_dim);
+
+    const Mlp::ProgressObserver observer = [this, &fit_command](const Mlp::FitProgress& progress) {
+      model_epoch_ = static_cast<std::uint32_t>(progress.epoch);
+      model_total_epochs_ = static_cast<std::uint32_t>(progress.total_epochs);
+      model_loss_ = progress.loss;
+      model_accuracy_ = progress.accuracy;
+      model_duration_ms_ = static_cast<std::uint64_t>(
+          std::chrono::duration_cast<std::chrono::milliseconds>(
+              std::chrono::steady_clock::now() - fit_started_at_)
+              .count());
+
+      protocol::FitProgress wire_progress;
+      wire_progress.set_epoch(static_cast<std::uint32_t>(progress.epoch));
+      wire_progress.set_total_epochs(static_cast<std::uint32_t>(progress.total_epochs));
+      wire_progress.set_loss(progress.loss);
+      wire_progress.set_accuracy(progress.accuracy);
+      // Progress is an accepted, non-terminal result. The state snapshot
+      // immediately before it carries the same metrics and state_version.
+      publish_command_outcome(fit_command, broadband_mode_switch::v1::RESULT_ACCEPTED,
+                              control::success(), &wire_progress);
+    };
+    loss = mlp_.fit(features, labels, &acc, observer);
+  }
+
+  if (!failure.success || loss < 0.0f || !std::isfinite(loss) || !std::isfinite(acc)) {
     if (failure.success) {
-      failure = control::failure(broadband_mode_switch::v1::ERROR_INTERNAL, "fit",
-                                 "training failed due to malformed data");
+      failure = control::failure(broadband_mode_switch::v1::ERROR_MALFORMED, "fit",
+                                 "training data is malformed or produced non-finite metrics");
     }
-    spdlog::error("fit_mlp: training failed (malformed data)");
+    spdlog::error("fit_mlp: training failed: {}", failure.message);
     model_phase_ = broadband_mode_switch::v1::MODEL_FAILED;
     model_duration_ms_ = static_cast<std::uint64_t>(
         std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -1041,8 +1067,13 @@ void ModeSwitchApp::maybe_fit() {
           std::chrono::steady_clock::now() - fit_started_at_)
           .count());
   spdlog::info("fit_mlp: done. final loss={:.4f} accuracy={:.3f}", loss, acc);
+  protocol::FitProgress final_progress;
+  final_progress.set_epoch(model_epoch_);
+  final_progress.set_total_epochs(model_total_epochs_);
+  final_progress.set_loss(loss);
+  final_progress.set_accuracy(acc);
   publish_command_outcome(fit_command, broadband_mode_switch::v1::RESULT_SUCCEEDED,
-                          control::success());
+                          control::success(), &final_progress);
   fit_request_id_.clear();
 }
 

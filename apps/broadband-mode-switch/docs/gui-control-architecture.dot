@@ -17,7 +17,7 @@ digraph broadband_gui_control {
   taps -> app [label="control\nqueue"];
   app -> buffers [label="capture / flush\n+ generations"];
   buffers -> fit [label="immutable\ncollection snapshot"];
-  fit -> app [label="candidate model\n+ progress"];
+  fit -> app [label="epoch metrics\n+ terminal model"];
   app -> taps [label="state snapshots +\ncorrelated results\nclass output"];
   taps -> controller [label="snapshots /\ncorrelated results"];
 }

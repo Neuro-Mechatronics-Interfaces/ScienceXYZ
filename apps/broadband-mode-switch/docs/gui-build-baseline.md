@@ -1,6 +1,6 @@
 # GUI control-plane build baseline
 
-Recorded 2026-08-31 before implementation work beyond the protocol design; updated for T-5 typed payloads, T-6 queue/transition tests, and T-7 state/result publication.
+Recorded 2026-08-31 before implementation work beyond the protocol design; updated for T-5 typed payloads, T-6 queue/transition tests, T-7 state/result publication, and T-8 MLP progress/malformed-data handling.
 
 ## Expected workflow
 
@@ -71,7 +71,11 @@ without a frame; startup is `not_ready`, and pipeline initialization failures
 are reported as `error` with `last_error`.
 
 Fit commands produce `accepted` when queued, followed by a terminal succeeded or
-failed result after the current synchronous fit. Pre-application validation
+failed result after the current synchronous fit. During training, each completed
+epoch also produces an accepted result with `FitProgress` and a matching complete
+state snapshot; the terminal success result carries the final metric. Invalid
+labels, wrong feature dimensions, non-finite training data, and non-finite fit
+metrics terminate with the `malformed` error code. Pre-application validation
 failures with a usable request id are also reported through the result tap.
 
 ## Hardware-free control-plane tests
@@ -85,11 +89,13 @@ ctest --test-dir apps/broadband-mode-switch/build/offline-tests --output-on-fail
 ```
 
 The registered tests are `broadband-mode-switch-control`,
-`broadband-mode-switch-protocol`, and `broadband-mode-switch-control-state`.
+`broadband-mode-switch-protocol`, `broadband-mode-switch-control-state`, and
+`broadband-mode-switch-mlp`.
 The first uses fixed inputs and covers the underlying `RingBuffer` plus the
 bounded `CollectionStore`; the second exercises typed protobuf round trips and
 validation; the third covers FIFO queue bounds/de-duplication, atomic
-`prepare_capture`, and invalid/capture-enabled target transitions. The current
-Windows shell still lacks CMake, but the documented WSL/vcpkg Protobuf build
-was run for T-7 and all three tests passed. The device app itself still
-requires the SDK/Docker build path for verification.
+`prepare_capture`, and invalid/capture-enabled target transitions. The MLP target
+covers deterministic per-epoch progress callbacks and malformed training data.
+The current Windows shell still lacks CMake, but the documented WSL/vcpkg
+Protobuf build was run for T-8 and all four tests passed. The device app itself
+still requires the SDK/Docker build path for verification.

@@ -165,17 +165,24 @@ std::vector<float> Mlp::forward_eval(const std::vector<float>& x) const {
 }
 
 float Mlp::fit(const std::vector<std::vector<float>>& features,
-               const std::vector<std::size_t>& labels, float* out_accuracy) {
+               const std::vector<std::size_t>& labels, float* out_accuracy,
+               ProgressObserver observer) {
   const std::size_t D = cfg_.input_dim;
   const std::size_t H = cfg_.hidden_dim;
   const std::size_t K = cfg_.num_classes;
   const std::size_t M = features.size();
 
-  if (M == 0 || labels.size() != M || D == 0 || H == 0 || K == 0) {
+  if (M == 0 || labels.size() != M || D == 0 || H == 0 || K == 0 || cfg_.epochs == 0) {
     return -1.0f;
   }
   for (const auto& f : features) {
     if (f.size() != D) return -1.0f;
+    for (const float value : f) {
+      if (!std::isfinite(value)) return -1.0f;
+    }
+  }
+  for (const std::size_t label : labels) {
+    if (label >= K) return -1.0f;
   }
 
   // Fit per-feature standardisation stats (mean/std) over the training set.
@@ -196,6 +203,9 @@ float Mlp::fit(const std::vector<std::vector<float>>& features,
     for (std::size_t j = 0; j < D; ++j) {
       const double var = m2[j] / static_cast<double>(M);
       const double sd = std::sqrt(var);
+      if (!std::isfinite(mean[j]) || !std::isfinite(var) || !std::isfinite(sd)) {
+        return -1.0f;
+      }
       feat_mean_[j] = static_cast<float>(mean[j]);
       feat_inv_std_[j] = static_cast<float>(sd > 1e-8 ? 1.0 / sd : 1.0);
     }
@@ -228,6 +238,11 @@ float Mlp::fit(const std::vector<std::vector<float>>& features,
       const std::size_t y = labels[s];
 
       forward_train(x, z1, h1, z2, h2, probs, mask1, mask2);
+
+      if (!std::all_of(probs.begin(), probs.end(),
+                       [](const float value) { return std::isfinite(value); })) {
+        return -1.0f;
+      }
 
       // Cross-entropy loss on the true class.
       const float py = (y < K) ? std::max(probs[y], 1e-12f) : 1e-12f;
@@ -305,6 +320,12 @@ float Mlp::fit(const std::vector<std::vector<float>>& features,
 
     last_loss = static_cast<float>(epoch_loss / static_cast<double>(M));
     last_acc = static_cast<float>(correct) / static_cast<float>(M);
+    if (!std::isfinite(last_loss) || !std::isfinite(last_acc)) {
+      return -1.0f;
+    }
+    if (observer) {
+      observer({epoch + 1, cfg_.epochs, last_loss, last_acc});
+    }
   }
 
   ready_ = true;

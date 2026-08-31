@@ -88,7 +88,8 @@ class ModeSwitchApp : public synapse::App {
   bool enqueue_legacy_request(control::ControlRequest request, const char* tap_name);
   void publish_command_outcome(const protocol::ControlCommand& command,
                                broadband_mode_switch::v1::ResultStatus status,
-                               const control::TransitionResult& outcome);
+                               const control::TransitionResult& outcome,
+                               const protocol::FitProgress* progress = nullptr);
   void publish_state_snapshot();
   void publish_periodic_state_if_due();
   void set_last_error(const control::TransitionResult& failure);
@@ -160,8 +161,8 @@ class ModeSwitchApp : public synapse::App {
 
   std::unique_ptr<MpfFeaturizer> featurizer_;
 
-  // Model + training data guarded by model_mutex_ (fit runs in main, but the
-  // mutex documents the boundary and guards against future worker threads).
+  // Collection/model access is guarded by model_mutex_. Synchronous fitting
+  // remains on the main thread for now; T-9 will move it to a worker.
   std::mutex model_mutex_;
   CollectionStore buffers_;
   Mlp mlp_;

@@ -1,6 +1,7 @@
 #pragma once
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <vector>
 
 namespace app {
@@ -36,13 +37,25 @@ class Mlp {
   bool ready() const { return ready_; }
   const Config& config() const { return cfg_; }
 
+  struct FitProgress {
+    std::size_t epoch = 0;       // one-based completed epoch
+    std::size_t total_epochs = 0;
+    float loss = 0.0f;           // mean training loss for this epoch
+    float accuracy = 0.0f;       // training accuracy for this epoch
+  };
+
+  using ProgressObserver = std::function<void(const FitProgress&)>;
+
   // Train on the full (features,label) set for cfg.epochs, SGD over a shuffled
   // sample order each epoch. `features[i]` has length input_dim, `labels[i]` is
   // in [0,num_classes). Returns the final-epoch mean loss; `out_accuracy`, if
   // non-null, receives the final-epoch training accuracy. Sets ready() on
-  // success. Returns a negative value if the data is empty or malformed.
+  // success. If supplied, `observer` is called once after each completed epoch.
+  // Returns a negative value if the data is empty, malformed, or produces a
+  // non-finite training metric.
   float fit(const std::vector<std::vector<float>>& features,
-            const std::vector<std::size_t>& labels, float* out_accuracy = nullptr);
+            const std::vector<std::size_t>& labels, float* out_accuracy = nullptr,
+            ProgressObserver observer = {});
 
   // Run the (dropout-free) forward pass and return the softmax distribution
   // over classes (length num_classes). Empty if not ready or dim mismatch.

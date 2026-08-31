@@ -10,6 +10,11 @@ add_executable(broadband-mode-switch-control-state-tests
     control_state_test.cpp
 )
 
+add_executable(broadband-mode-switch-mlp-tests
+    mlp_test.cpp
+    ../src/mlp.cpp
+)
+
 generate_protobufs(
     TARGET broadband-mode-switch-protocol-tests
     OUT_PROTO_DIR PROTO_OUT_DIR
@@ -19,6 +24,7 @@ generate_protobufs(
 target_compile_features(broadband-mode-switch-control-tests PRIVATE cxx_std_20)
 target_compile_features(broadband-mode-switch-protocol-tests PRIVATE cxx_std_20)
 target_compile_features(broadband-mode-switch-control-state-tests PRIVATE cxx_std_20)
+target_compile_features(broadband-mode-switch-mlp-tests PRIVATE cxx_std_20)
 target_include_directories(broadband-mode-switch-control-tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../src
 )
@@ -29,6 +35,9 @@ target_include_directories(broadband-mode-switch-protocol-tests PRIVATE
 target_include_directories(broadband-mode-switch-control-state-tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../src
     ${PROTO_OUT_DIR}
+)
+target_include_directories(broadband-mode-switch-mlp-tests PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src
 )
 target_sources(broadband-mode-switch-control-state-tests PRIVATE
     ${PROTO_OUT_DIR}/gui_control.pb.cc
@@ -48,6 +57,7 @@ if(MSVC)
     target_compile_options(broadband-mode-switch-control-tests PRIVATE /W4 /WX)
     target_compile_options(broadband-mode-switch-protocol-tests PRIVATE /W4 /WX)
     target_compile_options(broadband-mode-switch-control-state-tests PRIVATE /W4 /WX)
+    target_compile_options(broadband-mode-switch-mlp-tests PRIVATE /W4 /WX)
 else()
     target_compile_options(broadband-mode-switch-control-tests PRIVATE
         -Wall -Wextra -Wpedantic -Werror
@@ -56,6 +66,9 @@ else()
         -Wall -Wextra -Wpedantic -Werror
     )
     target_compile_options(broadband-mode-switch-control-state-tests PRIVATE
+        -Wall -Wextra -Wpedantic -Werror
+    )
+    target_compile_options(broadband-mode-switch-mlp-tests PRIVATE
         -Wall -Wextra -Wpedantic -Werror
     )
 endif()
@@ -71,4 +84,8 @@ add_test(
 add_test(
     NAME broadband-mode-switch-control-state
     COMMAND broadband-mode-switch-control-state-tests
+)
+add_test(
+    NAME broadband-mode-switch-mlp
+    COMMAND broadband-mode-switch-mlp-tests
 )
