@@ -120,6 +120,15 @@ tests. Do not require physical SciFi hardware for ordinary unit tests. Hardware 
 
 When documentation, installed `synapsectl` behavior, and an example repository disagree, inspect the installed CLI with `synapsectl --help` and prefer the API supported by the installed version. Document any version-specific workaround.
 
+## Synapse CLI Execution Boundary
+
+Do not execute `synapsectl` from an agent environment. When its installed
+version, help text, device state, configuration validation, tap status, logs,
+or any other CLI evidence is needed, ask the user to run one specific command
+and provide the relevant output. Interpret that user-provided output against
+the canonical API and repository configuration; do not substitute an assumed
+local CLI installation or attempt device control directly.
+
 ## Python Environment
 
 Use 64-bit CPython 3.13 as the current project Python baseline.

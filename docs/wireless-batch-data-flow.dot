@@ -1,0 +1,23 @@
+digraph wireless_batch_data_flow {
+  graph [rankdir=LR, bgcolor="transparent", pad="0.15", nodesep="0.35", ranksep="0.55"];
+  node [shape=box, style="rounded,filled", fillcolor="#eef5ff", color="#356a9a", fontname="Arial", fontsize=10, margin="0.12,0.07"];
+  edge [color="#476b8a", arrowsize=0.75, fontname="Arial", fontsize=9];
+
+  l2cap [label="Wireless device\nL2CAP batches", fillcolor="#f2fff0", color="#4b8a4b"];
+  gateway [label="External gateway\nphone / tablet / laptop", fillcolor="#f2fff0", color="#4b8a4b"];
+  pub [label="ZeroMQ PUB\ntopic + protobuf"];
+  readers [label="Four independent\nSUB readers"];
+  mux [label="App-owned\nround-robin mux"];
+  normalize [label="Normalize\nidentity + sequence checks"];
+  clocks [label="Clock estimator\nraw clocks preserved"];
+  recorder [label="Host fusion /\nlossless recorder", fillcolor="#fff5e6", color="#c9791c"];
+
+  l2cap -> gateway [label="source batches"];
+  gateway -> pub [label="WirelessBatch v1"];
+  pub -> readers [label="LAN TCP"];
+  readers -> mux [label="nonblocking receive"];
+  mux -> normalize [label="one owner"];
+  normalize -> clocks [label="valid raw records"];
+  normalize -> recorder [label="gaps + metadata"];
+  clocks -> recorder [label="map + epsilon"];
+}

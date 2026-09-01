@@ -1,0 +1,107 @@
+syntax = "proto3";
+
+package sciencexyz.wireless.v1;
+
+// Versioned payload carried as frame 1 of a two-frame ZeroMQ message.
+// Frame 0 is the UTF-8 topic configured for the source.  The payload is
+// sample-major and channel-interleaved; see docs/wireless-batch-contract.md.
+message WirelessBatch {
+  // The only wire version accepted by this directory is 1.
+  uint32 contract_version = 1;
+
+  // Stable logical source identity.  This is not a BLE address or endpoint.
+  string source_id = 2;
+
+  // Changes whenever the source restarts or its acquisition epoch is reset.
+  string boot_session_id = 3;
+
+  // Monotonic within boot_session_id.  The receiver detects gaps and
+  // reordering; it must not repair them silently.
+  uint64 batch_sequence = 4;
+
+  // Sequence number of the first sample in payload.  Samples are contiguous
+  // within a batch and advance by one.
+  uint64 first_sample_sequence = 5;
+  uint32 sample_count = 6;
+  uint32 channel_count = 7;
+
+  // Exactly [sample_count, channel_count] for v1.
+  repeated uint32 shape = 8;
+  SampleFormat sample_format = 9;
+
+  // Little-endian, row-major, sample-major data.  No compression is defined
+  // by v1.  The expected byte count is shape[0] * shape[1] * sizeof(format).
+  bytes payload = 10;
+
+  // Acquisition rate as a rational number.  The denominator must be nonzero.
+  uint64 sample_rate_numerator_hz = 11;
+  uint64 sample_rate_denominator = 12;
+
+  // Native acquisition-clock anchor for first_sample_sequence.  A receiver
+  // uses this with sample indices for intra-batch timing.
+  uint64 first_source_tick = 13;
+  uint64 source_tick_frequency_numerator_hz = 14;
+  uint64 source_tick_frequency_denominator = 15;
+
+  // Optional source wall/monotonic acquisition anchor.  Its meaning is given
+  // by source_time_domain; it is never substituted with a gateway timestamp.
+  optional uint64 source_acquisition_time_ns = 16;
+  SourceTimeDomain source_time_domain = 17;
+
+  // Gateway identity and local monotonic clock stamps.  These clocks are not
+  // assumed comparable to source, App, or host clocks without estimation.
+  string gateway_id = 18;
+  string gateway_session_id = 19;
+  uint64 gateway_receive_time_ns = 20;
+  uint64 gateway_send_time_ns = 21;
+  string gateway_clock_id = 22;
+
+  TimestampQuality timestamp_quality = 23;
+  repeated ChannelDescriptor channels = 24;
+  SenderGap sender_gap = 25;
+
+  // True when the gateway is replaying a previously emitted batch after a
+  // reconnect.  Receivers deduplicate by (boot_session_id, batch_sequence).
+  bool replayed = 26;
+
+  // Optional end-to-end digest of payload only.  When present it is exactly
+  // 32 bytes containing SHA-256(payload).
+  bytes payload_sha256 = 27;
+}
+
+enum SampleFormat {
+  SAMPLE_FORMAT_UNSPECIFIED = 0;
+  SAMPLE_FORMAT_INT16_LE = 1;
+  SAMPLE_FORMAT_INT32_LE = 2;
+  SAMPLE_FORMAT_FLOAT32_LE = 3;
+}
+
+enum SourceTimeDomain {
+  SOURCE_TIME_DOMAIN_UNSPECIFIED = 0;
+  SOURCE_TIME_DOMAIN_MONOTONIC_NS = 1;
+  SOURCE_TIME_DOMAIN_UNIX_NS = 2;
+}
+
+enum TimestampQuality {
+  TIMESTAMP_QUALITY_UNSPECIFIED = 0;
+  TIMESTAMP_QUALITY_SOURCE_TICK_AND_TIME = 1;
+  TIMESTAMP_QUALITY_SOURCE_TICK_ONLY = 2;
+  TIMESTAMP_QUALITY_GATEWAY_RECEIPT_ONLY = 3;
+  TIMESTAMP_QUALITY_UNTIMESTAMPED = 4;
+}
+
+message ChannelDescriptor {
+  uint32 index = 1;
+  string channel_id = 2;
+  string label = 3;
+  string unit = 4;
+}
+
+// Drops known by the gateway before this batch.  Receiver-observed gaps are
+// recorded separately because a PUB/SUB receiver cannot know where loss
+// occurred from this field alone.
+message SenderGap {
+  uint64 dropped_batches_before = 1;
+  uint64 dropped_samples_before = 2;
+  string reason = 3;
+}

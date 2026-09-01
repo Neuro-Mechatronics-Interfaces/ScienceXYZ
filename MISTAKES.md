@@ -169,3 +169,150 @@ lr>=~0.01 the first-layer gradients explode and the softmax collapses to uniform
 **Correction:** Stopped the build on request. The code change remains in the working tree for the user's build.
 
 **Candidate rule:** Ask for explicit confirmation before starting any build, even when the code change itself was requested.
+
+### 2026-09-01 — Ran Axon gateware generation from the source subdirectory
+
+**Attempt:** Ran `synapsectl peripherals gateware generate` from
+`firmware/axon-virtual-sources/src/gateware/`, following the copied SDK README's
+command examples.
+
+**Failure:** The installed CLI searched for
+`src/gateware/Dockerfiles/gateware.Dockerfile` and stopped before generation.
+
+**Cause:** This CLI resolves the peripheral-plugin root from the current
+directory, whereas the copied SDK README did not state that its commands must
+be run from the directory containing `Dockerfiles/gateware.Dockerfile`.
+
+**Correction:** Documented the required plugin-root working directory in the
+parent-owned peripheral README and gateware README. No files were generated or
+deployed.
+
+**Candidate rule:** When a CLI wraps a project Dockerfile, state the required
+working directory explicitly and perform a generation-only smoke check before
+asking for a build or deployment.
+
+### 2026-09-01 — Ran Axon gateware generation through the Windows CLI
+
+**Attempt:** Ran the root-level `synapsectl peripherals gateware generate`
+command from Windows PowerShell after correcting its working directory.
+
+**Failure:** The CLI failed while starting its gateware Docker image with
+`[WinError 2] The system cannot find the file specified`.
+
+**Cause:** The installed Windows CLI cannot launch the Docker-backed Axon
+gateware workflow in this environment. The user's working environment for this
+toolchain is Ubuntu/WSL.
+
+**Correction:** Updated the parent-owned peripheral instructions to require
+Ubuntu/WSL with Docker for gateware commands. No generated files, package, or
+device state changed.
+
+**Candidate rule:** Use the established Linux/WSL toolchain for Docker-backed
+peripheral gateware commands; reserve the Windows host for source editing and
+non-gateware workflows unless a successful Windows smoke check exists.
+
+### 2026-09-01 — Axon gateware CLI omitted its required named Docker context
+
+**Attempt:** Ran `synapsectl peripherals gateware generate` from the correct
+parent-owned peripheral root in Ubuntu/WSL with Docker available.
+
+**Failure:** Docker failed before code generation, attempting to pull
+`radiant_installer:latest` and reporting access denied.
+
+**Cause:** `Dockerfiles/gateware.Dockerfile` mounts
+`from=radiant_installer`, which requires a named BuildKit context containing the
+Radiant installer ZIP. The installed CLI invoked `docker build ... .` without
+`--build-context radiant_installer=...`, so Docker interpreted the context name
+as an image name.
+
+**Correction:** Marked the gateware generation workflow blocked and documented
+the exact CLI/Docker mismatch. No generated gateware, package, or device state
+changed.
+
+**Candidate rule:** Before relying on a Dockerfile's named build context,
+inspect the wrapper CLI's emitted `docker build` command and require it to pass
+every named context explicitly.
+
+### 2026-09-01 — Gateware image unpacked Radiant before installing `unzip`
+
+**Attempt:** Built the parent-owned gateware image with the supplied
+`radiant_installer` named context.
+
+**Failure:** The first installer layer stopped with `/bin/sh: 1: unzip: not found`.
+
+**Cause:** `Dockerfiles/gateware.Dockerfile` invoked `unzip` before its later
+package-install layer provisioned build dependencies.
+
+**Correction:** Added an explicit `apt-get install ... unzip` to the installer
+layer before unpacking Radiant. No generated gateware, package, or device state
+changed.
+
+**Candidate rule:** Each Dockerfile layer must install every executable it uses;
+do not rely on a later layer to provide an earlier layer's prerequisites.
+
+### 2026-09-01 — Radiant installer lacked its XKB runtime dependency
+
+**Attempt:** Rebuilt the parent-owned gateware image after provisioning
+`unzip` in its installer layer.
+
+**Failure:** The Radiant installer started but exited with
+`libxkbcommon-x11.so.0: cannot open shared object file`.
+
+**Cause:** The installer executable dynamically links the XKB/X11 runtime even
+in console mode; the Ubuntu base image did not provide that library.
+
+**Correction:** Added the Ubuntu `libxkbcommon-x11-0` runtime package before
+invoking the installer. No generated gateware, package, or device state changed.
+
+**Candidate rule:** Treat hardware-tool installers as native GUI-linked
+executables until their runtime library dependencies have been verified, even
+when invoked in a console-only mode.
+
+### 2026-09-01 — Radiant installer exposed a second Qt/X11 dependency
+
+**Attempt:** Rebuilt the image after adding the XKB runtime required by the
+Radiant installer.
+
+**Failure:** Dynamic loading then stopped at `libxcb-cursor.so.0`.
+
+**Cause:** The console installer has a broader Qt/X11 runtime dependency set
+than the minimal Ubuntu base provides.
+
+**Correction:** Provisioned the small X11/Qt runtime closure (including
+`libxcb-cursor0`) in the installer layer rather than discovering one missing
+library per rebuild. No generated gateware, package, or device state changed.
+
+**Candidate rule:** When a GUI-linked native tool fails in a minimal container,
+install its runtime dependency set as a group and then re-test.
+
+### 2026-09-01 — Radiant installer also required the GLVND OpenGL ABI library
+
+**Attempt:** Rebuilt the image with the X11/Qt runtime dependency set.
+
+**Failure:** Dynamic loading then stopped at `libOpenGL.so.0`.
+
+**Cause:** Ubuntu packages the GLVND OpenGL ABI library (`libopengl0`) separately
+from `libgl1`; the initial runtime set included only the latter.
+
+**Correction:** Added `libopengl0` to the installer layer. No generated
+gateware, package, or device state changed.
+
+**Candidate rule:** For GLVND applications, include both the legacy `libgl1`
+loader and the `libopengl0` ABI library when the binary's dependencies require
+them.
+
+### 2026-09-01 — Gateware image cloned Verilator without installing Git
+
+**Attempt:** Continued the parent-owned gateware image build after the Radiant
+installer dependencies were supplied.
+
+**Failure:** The Verilator source layer stopped at `/bin/sh: 1: git: not found`.
+
+**Cause:** The layer runs `git clone` but the preceding build-tool package list
+did not include Git.
+
+**Correction:** Added `git` to the build-tool installation layer. No generated
+gateware, package, or device state changed.
+
+**Candidate rule:** Audit each source-fetching Docker layer for its VCS client
+as well as compiler and build-tool prerequisites.

@@ -1,0 +1,6 @@
+digraph "wireless-batch-data-flow_parent" {
+  graph [layout=neato, overlap=false, splines=true, labelloc=t, label="wireless-batch-data-flow: parent overview"];
+  "inner_001" [URL="wireless-batch-data-flow.inner-001.svg", fillcolor="#eef4ff", label="Inner view 1\n5 nodes", pin="true", pos="0,0!", shape="folder", style="filled", target="_top", tooltip="Open Inner view 1\n5 nodes"];
+  "inner_002" [URL="wireless-batch-data-flow.inner-002.svg", fillcolor="#eef4ff", label="Inner view 2\n3 nodes", pin="true", pos="180,0!", shape="folder", style="filled", target="_top", tooltip="Open Inner view 2\n3 nodes"];
+  "inner_001" -> "inner_002" [label="1 connection"];
+}

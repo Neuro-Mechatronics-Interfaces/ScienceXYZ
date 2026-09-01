@@ -352,3 +352,26 @@ The first repository milestone is complete when:
 5. One independent wireless test source can stream into the same host program.
 6. Both streams are logged with explicit source and host timestamps.
 7. Synchronization offset/drift diagnostics are recorded alongside the data.
+
+### 2026-09-01 - T-20 wireless batch contract and LAN gateway requirements
+
+T-20 is complete for the contract/schema phase. Added the versioned
+`sciencexyz.wireless.v1.WirelessBatch` protobuf under `protocol/wireless/v1/`;
+the App CMake target now generates its C++ bindings alongside the Synapse API
+bindings. The contract defines the two-frame ZeroMQ envelope, stable source
+and boot-session identity, batch/sample sequences, rational rate, native clock
+anchor, optional acquisition time, gateway stamps, shape/format/payload, and
+sender-known drops.
+
+Added `config/wireless-gateway.schema.json` and an example receiver
+configuration supporting up to four independent sources, endpoint failover,
+bounded queues, exact topics, and explicit gap policy. Added the implementation
+contract and the copy/paste LAN requirements brief in `docs/`, including
+Android/iOS permissions and background limits, Windows/macOS firewall checks,
+Wi-Fi isolation, PUB/SUB slow-joiner/reconnect behavior, and the v1 security
+boundary. The bounded GraphViz data-flow source and generated parent/inner SVGs
+are `docs/wireless-batch-data-flow.*`.
+
+Next: T-21 clock estimator and T-25 deterministic gateway simulator/adapter;
+the ingress reader spike must consume this contract and retain explicit gap
+diagnostics.

@@ -1,0 +1,23 @@
+digraph T19MultiSourceStreamingPrerequisites {
+  graph [rankdir=TB, bgcolor="white", pad="0.15", nodesep="0.35", ranksep="0.65"];
+  node [shape=box, style="rounded,filled", fontname="Arial", fontsize=10,
+        color="#33658a", fillcolor="#edf5fb", margin="0.12,0.08"];
+  edge [fontname="Arial", fontsize=9, color="#4f6d7a"];
+
+  omnetics [label="Omnetics 32-channel source\nreported peripheral ID"];
+  wireless_1 [label="Wireless source 1\nunique reported virtual ID"];
+  wireless_2 [label="Wireless source 2\nunique reported virtual ID"];
+  wireless_3 [label="Wireless source 3\nunique reported virtual ID"];
+  wireless_4 [label="Wireless source 4\nunique reported virtual ID"];
+
+  app [label="stateful-decode-and-sync\n(single reference reader)", fillcolor="#e8f5e9", color="#3a7d44"];
+  host [label="Host adapters / fusion / recorder\nindependent ZeroMQ subscriptions", fillcolor="#fff5e6", color="#c9791c"];
+
+  { rank=same; omnetics; wireless_1; wireless_2; wireless_3; wireless_4; }
+  omnetics -> app [label="configured connection"];
+  omnetics -> host [label="node output Tap"];
+  wireless_1 -> host [label="node output Tap"];
+  wireless_2 -> host [label="node output Tap"];
+  wireless_3 -> host [label="node output Tap"];
+  wireless_4 -> host [label="node output Tap"];
+}

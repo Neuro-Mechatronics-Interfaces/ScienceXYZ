@@ -1,0 +1,12 @@
+digraph "inner_001" {
+  graph [layout=neato, overlap=false, splines=true, labelloc=t, label="wireless-batch-data-flow: inner view 1"];
+  "l2cap" [color="#4b8a4b", fillcolor="#f2fff0", fontname="Arial", fontsize="10", height="0.5", label="Wireless device\nL2CAP batches", margin="0.12,0.07", pin="true", pos="0,0!", shape="box", style="rounded,filled", width="1.1879"];
+  "gateway" [color="#4b8a4b", fillcolor="#f2fff0", fontname="Arial", fontsize="10", height="0.5", label="External gateway\nphone / tablet / laptop", margin="0.12,0.07", pin="true", pos="180,0!", shape="box", style="rounded,filled", width="1.5525"];
+  "pub" [color="#356a9a", fillcolor="#eef5ff", fontname="Arial", fontsize="10", height="0.5", label="ZeroMQ PUB\ntopic + protobuf", margin="0.12,0.07", pin="true", pos="360,0!", shape="box", style="rounded,filled", width="1.1775"];
+  "readers" [color="#356a9a", fillcolor="#eef5ff", fontname="Arial", fontsize="10", height="0.5", label="Four independent\nSUB readers", margin="0.12,0.07", pin="true", pos="540,0!", shape="box", style="rounded,filled", width="1.2817"];
+  "mux" [color="#356a9a", fillcolor="#eef5ff", fontname="Arial", fontsize="10", height="0.5", label="App-owned\nround-robin mux", margin="0.12,0.07", pin="true", pos="720,0!", shape="box", style="rounded,filled", width="1.2087"];
+  "l2cap" -> "gateway" [color="#476b8a", fontname="Arial", fontsize="9", label="source batches"];
+  "gateway" -> "pub" [color="#476b8a", fontname="Arial", fontsize="9", label="WirelessBatch v1"];
+  "pub" -> "readers" [color="#476b8a", fontname="Arial", fontsize="9", label="LAN TCP"];
+  "readers" -> "mux" [color="#476b8a", fontname="Arial", fontsize="9", label="nonblocking receive"];
+}

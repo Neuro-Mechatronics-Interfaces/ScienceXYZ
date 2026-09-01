@@ -1,0 +1,90 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sciencexyz.local/schema/wireless-gateway.v1.json",
+  "title": "ScienceXYZ wireless gateway ingress configuration",
+  "description": "Receiver-side configuration for up to four external ZeroMQ PUB gateways.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "ingress_id", "sources", "mux"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "ingress_id": {"$ref": "#/$defs/id"},
+    "sources": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 4,
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/source"}
+    },
+    "mux": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "queue_capacity_batches", "max_batch_bytes", "gap_policy"],
+      "properties": {
+        "mode": {"const": "round_robin_nonblocking"},
+        "queue_capacity_batches": {"type": "integer", "minimum": 1, "maximum": 4096},
+        "max_batch_bytes": {"type": "integer", "minimum": 1024, "maximum": 8388608},
+        "gap_policy": {"enum": ["diagnose_and_preserve", "reject_source_on_gap"]}
+      }
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "endpoint": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255,
+      "pattern": "^(tcp|ipc|inproc)://[^\\s]+$"
+    },
+    "topic": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 80,
+      "pattern": "^wireless/v1/[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+    },
+    "rate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["numerator_hz", "denominator"],
+      "properties": {
+        "numerator_hz": {"type": "integer", "minimum": 1, "maximum": 10000000},
+        "denominator": {"type": "integer", "minimum": 1, "maximum": 1000000}
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_id", "endpoints", "topic", "expected_sample_rate",
+        "expected_channel_count", "expected_sample_format", "queue_capacity_batches"
+      ],
+      "properties": {
+        "source_id": {"$ref": "#/$defs/id"},
+        "expected_gateway_id": {"$ref": "#/$defs/id"},
+        "endpoints": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/endpoint"}
+        },
+        "topic": {"$ref": "#/$defs/topic"},
+        "expected_sample_rate": {"$ref": "#/$defs/rate"},
+        "expected_channel_count": {"type": "integer", "minimum": 1, "maximum": 512},
+        "expected_sample_format": {
+          "enum": ["SAMPLE_FORMAT_INT16_LE", "SAMPLE_FORMAT_INT32_LE", "SAMPLE_FORMAT_FLOAT32_LE"]
+        },
+        "max_batch_samples": {"type": "integer", "minimum": 1, "maximum": 65536, "default": 4096},
+        "queue_capacity_batches": {"type": "integer", "minimum": 1, "maximum": 1024},
+        "reconnect_min_ms": {"type": "integer", "minimum": 10, "maximum": 60000, "default": 250},
+        "reconnect_max_ms": {"type": "integer", "minimum": 100, "maximum": 300000, "default": 10000},
+        "allow_replay": {"type": "boolean", "default": true}
+      }
+    }
+  }
+}

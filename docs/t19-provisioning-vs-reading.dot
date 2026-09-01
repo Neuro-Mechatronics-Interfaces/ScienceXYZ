@@ -1,0 +1,16 @@
+digraph t19_provisioning_vs_reading {
+  graph [rankdir=LR, bgcolor="transparent", pad="0.15", nodesep="0.35", ranksep="0.55"];
+  node [shape=box, style="rounded,filled", fillcolor="#eef5ff", color="#356a9a", fontname="Arial", fontsize=10, margin="0.12,0.07"];
+  edge [color="#476b8a", arrowsize=0.75, fontname="Arial", fontsize=9];
+
+  plugin [label="Virtual peripheral plugin\nGateware + driver register ID"];
+  source [label="Broadband Source node\nconfig binds that ID"];
+  tap [label="Server output Tap\nassigns TCP/ZMQ endpoint"];
+  app [label="On-device App\nZMQDataReader × 4"];
+  host [label="Host adapters / fusion\nZMQ readers × 4"];
+
+  plugin -> source [label="makes source real"];
+  source -> tap [label="produces frames"];
+  tap -> app [label="may read"];
+  tap -> host [label="may read"];
+}

@@ -1,0 +1,16 @@
+digraph t19_external_wireless_gateway_ingestion {
+  graph [rankdir=LR, bgcolor="transparent", pad="0.15", nodesep="0.35", ranksep="0.55"];
+  node [shape=box, style="rounded,filled", fillcolor="#eef5ff", color="#356a9a", fontname="Arial", fontsize=10, margin="0.12,0.07"];
+  edge [color="#476b8a", arrowsize=0.75, fontname="Arial", fontsize=9];
+
+  sensors [label="Wireless devices ×4\nL2CAP sample batches", fillcolor="#f2fff0", color="#4b8a4b"];
+  gateway [label="Phone / tablet / laptop\nGateway PUB endpoints", fillcolor="#f2fff0", color="#4b8a4b"];
+  readers [label="SciFi App\nZMQDataReader ×4"];
+  fusion [label="Normalize + fuse\nsource clocks preserved"];
+  output [label="App output taps\nHost recorder / processing"];
+
+  sensors -> gateway [label="one gateway per stream"];
+  gateway -> readers [label="TCP/ZMQ publish"];
+  readers -> fusion [label="raw batches"];
+  fusion -> output [label="explicit outputs"];
+}

@@ -115,6 +115,7 @@ ScienceXYZ/
 ├── data/       # Local recordings; ignored by Git
 ├── firmware/   # Auxiliary sensor firmware
 ├── host/       # Host-side C++ acquisition/synchronization/fusion
+├── protocol/   # Shared versioned wire contracts
 ├── scripts/    # Reproducible setup and diagnostic utilities
 ├── vendor/     # Upstream Science dependencies as Git submodules
 ├── AGENTS.md   # Persistent repository-specific development rules
@@ -153,6 +154,12 @@ auxiliary wireless sensors
 ```
 
 The first multimodal implementation should prioritize explicit timestamps, sequence numbers, dropped-packet detection, and synchronization diagnostics over application-specific signal processing.
+
+The supported wireless architecture uses external phone/tablet/laptop gateways
+that publish versioned L2CAP batches over LAN ZeroMQ/TCP. The contract,
+receiver configuration schema, and copy/paste LAN requirements are in
+[`docs/wireless-batch-contract.md`](docs/wireless-batch-contract.md) and
+[`docs/wireless-gateway-ingress-requirements.md`](docs/wireless-gateway-ingress-requirements.md).
 
 ## Synapse Apps
 

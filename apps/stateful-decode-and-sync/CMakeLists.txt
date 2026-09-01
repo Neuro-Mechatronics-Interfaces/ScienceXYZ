@@ -58,6 +58,7 @@ generate_protobufs(
     PROTO_DIRS
         "${CMAKE_CURRENT_SOURCE_DIR}/external/sciencecorp/synapse-api"
         "${CMAKE_CURRENT_SOURCE_DIR}/proto"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../../protocol"
 )
 
 # Be strict about the standard

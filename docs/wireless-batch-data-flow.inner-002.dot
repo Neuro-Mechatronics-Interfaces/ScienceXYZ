@@ -1,0 +1,9 @@
+digraph "inner_002" {
+  graph [layout=neato, overlap=false, splines=true, labelloc=t, label="wireless-batch-data-flow: inner view 2"];
+  "clocks" [color="#356a9a", fillcolor="#eef5ff", fontname="Arial", fontsize="10", height="0.5", label="Clock estimator\nraw clocks preserved", margin="0.12,0.07", pin="true", pos="0,0!", shape="box", style="rounded,filled", width="1.5004"];
+  "normalize" [color="#356a9a", fillcolor="#eef5ff", fontname="Arial", fontsize="10", height="0.5", label="Normalize\nidentity + sequence checks", margin="0.12,0.07", pin="true", pos="180,0!", shape="box", style="rounded,filled", width="1.9067"];
+  "recorder" [color="#c9791c", fillcolor="#fff5e6", fontname="Arial", fontsize="10", height="0.5", label="Host fusion /\nlossless recorder", margin="0.12,0.07", pin="true", pos="360,0!", shape="box", style="rounded,filled", width="1.2712"];
+  "normalize" -> "clocks" [color="#476b8a", fontname="Arial", fontsize="9", label="valid raw records"];
+  "normalize" -> "recorder" [color="#476b8a", fontname="Arial", fontsize="9", label="gaps + metadata"];
+  "clocks" -> "recorder" [color="#476b8a", fontname="Arial", fontsize="9", label="map + epsilon"];
+}
