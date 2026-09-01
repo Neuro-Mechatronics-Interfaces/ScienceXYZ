@@ -78,12 +78,24 @@
           "synthetic_seed": 44257
         }
       }
+    },
+    {
+      "id": 3,
+      "type": "kDiskWriter",
+      "disk_writer": {
+        "storage_device_id": 2,
+        "filename": "test-stateful-decode-and-sync"
+      }
     }
   ],
   "connections": [
     {
       "src_node_id": 1,
       "dst_node_id": 2
+    },
+    {
+      "src_node_id": 2,
+      "dst_node_id": 3
     }
   ]
 }

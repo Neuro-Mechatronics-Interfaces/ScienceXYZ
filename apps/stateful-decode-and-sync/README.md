@@ -26,6 +26,24 @@ kApplication(id=2, name="stateful-decode-and-sync")
         └─ producer  class_out        Tensor[num_classes]  softmax
 ```
 
+For the config-only recording path, `config/rhd2132_mode_switch.json` also
+connects the App's `BroadbandFrame` output to a `kDiskWriter` node. The writer
+uses its supported static `filename` setting and writes the stream to on-device
+HDF5 while the configured device chain is running. Use the normal Synapse
+device lifecycle to define the recording epoch: stop, configure/start the JSON,
+then stop before retrieving the file. The writer records the App output, so in
+`SAMPLING` mode this is the forwarded RHD2132 stream and in `SYNTHETIC` mode it
+is the App's generated stream.
+
+The current Disk Writer contract does not provide an App runtime recording
+toggle or a filename control command. A separate writer or a documented
+multi-input/fan-in capability would be needed before treating independent
+wireless streams as one HDF5 series; this config does not invent that behavior.
+
+<!-- graphviz:apps/stateful-decode-and-sync/docs/disk-writer-recording-flow.dot -->
+![Configured BroadbandFrame recording flow](disk-writer-recording-flow.svg)
+<!-- /graphviz:apps/stateful-decode-and-sync/docs/disk-writer-recording-flow.dot -->
+
 In SAMPLING mode the App forwards each upstream `BroadbandFrame` **unchanged** on `broadband_out` (source timestamps are preserved, per repo policy). In SYNTHETIC mode it emits its own deterministic frames with a monotonic sequence number and a derived timestamp. The typed `control` tap and all legacy control shims enqueue bounded requests; the main loop applies them serially before the next source batch is routed. Raw sample batches are transferred through a bounded, thread-safe queue to `FeatureWorker`. Its ingestion thread selects channels, applies the streaming anti-alias FIR, decimates, maintains the feature-rate window, and queues immutable completed windows to a FIFO compute thread, which performs MPF and optional model inference in order. The main loop only drains bounded feature results for capture and SDK publication.
 
 The editable source for the acquisition/compute flow is

@@ -22,12 +22,15 @@ No device configuration, recording, or deployment was changed.
 ## Result
 
 The public interface supports branching DAG signal chains, Application nodes,
-and Disk Writers attached to a compatible `BroadbandFrame` output. It does
-**not** document the necessary fan-in and independent-control semantics for an
-on-device five-source recorder. The checked-in protocol provides no stronger
-guarantee. Consequently, host-side normalization, clock alignment, and
-recording remain the supported implementation direction; an all-on-SciFi
-topology is still a Phase-0 hypothesis, not a design assumption.
+and Disk Writers attached to a compatible `BroadbandFrame` output. The current
+Concepts documentation also says a signal chain may combine compatible inputs,
+but it does not specify the fan-in semantics, ordering, source identity, or
+clock behavior of a Disk Writer receiving multiple independent streams. The
+checked-in protocol provides no stronger guarantee. A config-only writer for a
+single coherent `BroadbandFrame` output is therefore a concrete candidate; an
+all-on-SciFi five-source recorder remains a Phase-0 live-validation question,
+with host-side normalization/recording as the fallback if the graph cannot
+provide the required semantics.
 
 ## Configuration prerequisite: four sources must exist before four nodes can bind them
 
@@ -67,7 +70,7 @@ or Disk Writer fan-in.
 | App output as another node's source | Documentation says a Tap's data can be passed to another node and the SDK calls output taps node-facing. `NodeConnection` connects node IDs only. | Candidate only. Connect an App `BroadbandFrame` output to a second App and prove ordered frame receipt. |
 | Multiple independent upstream readers in one App | The documented `setup_reader(node_id)` initializes the singular inherited `data_reader_`; the current App has exactly this shape. | Not supported by the documented interface. Do not implement the four wireless inputs in one App unless an SDK-supported multi-reader API is demonstrated. |
 | Tap-name uniqueness | The SDK requires a named output tap but does not define whether names are device-global, App-instance scoped, or otherwise namespaced. | Unknown. Prove both unique names and intentional duplicate-name rejection. |
-| One Disk Writer accepting multiple sources | Documentation promises a Disk Writer for *a* compatible broadband output and separately says multiple Disk Writers create separate files. `DiskWriterConfig` has only `filename` and `storage_device_id`; `NodeConnection` has no input port or multiplexing fields. | Not documented or guaranteed. Treat one-writer fan-in / one unified HDF5 file as unsupported until a live configuration and output prove it. |
+| One Disk Writer accepting multiple sources | Documentation says a Disk Writer accepts a compatible broadband-frame output, and Concepts says compatible inputs may be combined in a DAG. It does not document whether one Disk Writer accepts multiple upstream outputs, how frames are ordered, or how source identity is represented. The pinned `DiskWriterConfig` has only `filename`, and `NodeConnection` has no input-port or multiplexing fields. | Candidate only. Treat one-writer fan-in / one unified HDF5 file as unproven until a live configuration and output prove it. |
 | Independent recording start/stop | Public lifecycle operations configure/start/stop the device chain. The pinned API exposes only device-wide `Start` and `Stop`; Disk Writer has no runtime command/configuration field. | Unsupported by the public control surface. Recording epochs must be host-controlled unless the target exposes a version-specific API. |
 | On-device file provenance for four clock models | The documented writer stores one ordered broadband frame series and frame sequence/timestamps plus fixed channel metadata. | Insufficient for required per-source raw timing inputs, model epochs, `t_hat`, and uncertainty bounds. A host recorder is required even if individual source files can be written on-device. |
 
@@ -81,8 +84,9 @@ or Disk Writer fan-in.
   single-reader `setup_reader()` / `data_reader_` pattern.
   ([Synapse App SDK](https://science.xyz/docs/d/synapse/synapse-app-sdk))
 - A Disk Writer accepts a `BroadbandFrame`-format output. Multiple Disk Writers
-  are separate writers with separate files, not documented as a fan-in writer.
-  The recorded layout is a single frame-ordered electrical series.
+  can be used simultaneously, but the documentation does not define whether
+  one writer is a fan-in sink. The documented HDF5 layout is a single
+  frame-ordered series.
   ([Node reference and HDF5 layout](https://science.xyz/docs/d/synapse/node-reference))
 
 ## Required live spike when the device is available

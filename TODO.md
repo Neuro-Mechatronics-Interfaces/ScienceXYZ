@@ -451,3 +451,20 @@ contain confirmed real source IDs, topics, endpoints, gateway/session/clock
 identities, wire formats, batch sizes, source tick domains, units, or
 quaternion order. Do not create it from simulator values. See
 [`docs/t35-two-wireless-profile-gate.md`](docs/t35-two-wireless-profile-gate.md).
+
+### 2026-09-01 - Config-only Disk Writer path
+
+Added a `kDiskWriter` node to
+[`apps/stateful-decode-and-sync/config/rhd2132_mode_switch.json`](apps/stateful-decode-and-sync/config/rhd2132_mode_switch.json),
+connected from the App's `BroadbandFrame` output with the supported static
+filename `stateful-decode-and-sync.hdf5`. In `SAMPLING` mode this records the
+App's unchanged forwarded reference stream; in `SYNTHETIC` mode it records the
+App-generated stream. Start/stop of the device defines the recording epoch;
+the pinned Disk Writer protobuf exposes no runtime recording toggle or other
+recording parameters.
+
+The config parses with the installed Python Synapse `DeviceConfiguration`
+binding. The current Science documentation supports Disk Writers consuming
+compatible `BroadbandFrame` outputs, but one writer's behavior for multiple
+independent wireless inputs remains unproven. Keep the two-wireless profile
+gated until the source identities and a live graph trial are confirmed.
