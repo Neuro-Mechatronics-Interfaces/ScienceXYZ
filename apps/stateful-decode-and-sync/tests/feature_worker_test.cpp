@@ -1,6 +1,7 @@
 #include "feature_worker.hpp"
 
 #include <chrono>
+#include <cmath>
 #include <iostream>
 #include <memory>
 #include <stdexcept>
@@ -33,6 +34,116 @@ void test_off_diagonal_band_limit_controls_dimension() {
   app::MpfFeaturizer diagonal_only(config);
   expect(diagonal_only.feature_dim() == 12,
          "zero off-diagonal bands retains only the diagonal");
+}
+
+void test_explicit_frequency_bands_control_dimension() {
+  app::MpfFeaturizer::Config config;
+  config.num_channels = 4;
+  config.sample_rate_hz = 800.0;
+  config.stft_size = 8;
+  config.stft_hop = 4;
+  config.num_bands = 99;
+  config.frequency_bands_hz = {{0.0, 100.0}, {100.0, 300.0}};
+  config.num_off_diag_bands = 2;
+
+  app::MpfFeaturizer featurizer(config);
+  expect(featurizer.feature_dim() == 28,
+         "explicit Hz bands replace the legacy full-Nyquist band count");
+  std::vector<std::vector<float>> window(4, std::vector<float>(8, 1.0f));
+  expect(featurizer.compute(window).size() == 28,
+         "explicit Hz bands produce one matrix feature block per configured band");
+}
+
+void test_decimation_plan_preserves_window_and_stride_clock() {
+  expect(app::next_power_of_two(250) == 256 && app::next_power_of_two(256) == 256 &&
+             app::next_power_of_two(500) == 512,
+         "FFT sizing rounds up dynamically without expanding exact powers of two");
+  const auto plan =
+      app::make_feature_decimation_plan(20000.0, 1000.0, 1.25, 4000, 400);
+  expect(plan.factor == 8, "decimation chooses the largest exact clock divisor");
+  expect(plan.feature_sample_rate_hz == 2500.0,
+         "decimation sets the feature sample rate from the source clock");
+  expect(plan.stopband_edge_hz == 1250.0 && !plan.coefficients.empty(),
+         "anti-alias stopband starts at the decimated Nyquist frequency");
+  expect(plan.coefficients.size() % 2 == 1 &&
+             plan.group_delay_source_samples == (plan.coefficients.size() - 1) / 2,
+         "anti-alias FIR has an integer source-sample group delay");
+  double gain = 0.0;
+  for (const auto coefficient : plan.coefficients) gain += coefficient;
+  expect(std::abs(gain - 1.0) < 1e-9, "anti-alias FIR has unity DC gain");
+
+  const auto response = [&](double frequency_hz) {
+    constexpr double kPi = 3.14159265358979323846;
+    double real = 0.0;
+    double imaginary = 0.0;
+    for (std::size_t index = 0; index < plan.coefficients.size(); ++index) {
+      const double phase = -2.0 * kPi * frequency_hz * static_cast<double>(index) /
+                           plan.source_sample_rate_hz;
+      real += plan.coefficients[index] * std::cos(phase);
+      imaginary += plan.coefficients[index] * std::sin(phase);
+    }
+    return std::hypot(real, imaginary);
+  };
+  expect(response(plan.passband_edge_hz) > 0.9,
+         "anti-alias FIR preserves the highest requested feature edge");
+  expect(response(plan.stopband_edge_hz) < 0.1,
+         "anti-alias FIR attenuates at the decimated Nyquist edge");
+
+  app::MpfFeaturizer::Config requested_bands;
+  requested_bands.num_channels = 1;
+  requested_bands.sample_rate_hz = plan.feature_sample_rate_hz;
+  requested_bands.stft_size = app::next_power_of_two(4000 / plan.factor);
+  requested_bands.stft_hop = requested_bands.stft_size;
+  requested_bands.frequency_bands_hz = {
+      {0.0, 62.5},     {62.5, 125.0},  {125.0, 250.0},
+      {250.0, 375.0},  {375.0, 687.5}, {687.5, 1000.0}};
+  requested_bands.num_off_diag_bands = 0;
+  app::MpfFeaturizer requested_featurizer(requested_bands);
+  expect(requested_featurizer.feature_dim() == 6,
+         "all six requested physical bands map onto the decimated FFT grid");
+}
+
+void test_power_of_two_fft_matches_impulse_spectrum() {
+  app::MpfFeaturizer::Config config;
+  config.num_channels = 1;
+  config.stft_size = 8;
+  config.stft_hop = 8;
+  config.num_bands = 1;
+  config.num_off_diag_bands = 0;
+  config.eps = 1e-3f;
+
+  app::MpfFeaturizer featurizer(config);
+  std::vector<std::vector<float>> window(1, std::vector<float>(8, 0.0f));
+  window[0][1] = 2.0f;
+  const auto feature = featurizer.compute(window);
+
+  constexpr double kPi = 3.14159265358979323846;
+  const double hann = 0.5 * (1.0 - std::cos(2.0 * kPi / 8.0));
+  const double impulse_power = std::pow(2.0 * hann, 2.0);
+  const double expected = std::log(impulse_power + config.eps);
+  expect(feature.size() == 1, "single-channel single-band feature has one value");
+  expect(std::abs(static_cast<double>(feature.front()) - expected) < 1e-5,
+         "radix-2 STFT matches the analytic impulse spectrum");
+}
+
+void test_short_decimated_window_is_zero_padded() {
+  app::MpfFeaturizer::Config config;
+  config.num_channels = 1;
+  config.sample_rate_hz = 1250.0;
+  config.stft_size = 8;
+  config.stft_hop = 4;
+  config.num_bands = 1;
+  config.num_off_diag_bands = 0;
+  config.eps = 1e-3f;
+
+  app::MpfFeaturizer featurizer(config);
+  std::vector<std::vector<float>> window(1, std::vector<float>(4, 0.0f));
+  window[0][1] = 2.0f;
+  const auto feature = featurizer.compute(window);
+  const double expected = std::log(1.0 + config.eps);
+  expect(feature.size() == 1 &&
+             std::abs(static_cast<double>(feature.front()) - expected) < 1e-5,
+         "a short decimated window is tapered at its own duration and zero-padded");
 }
 
 void test_batches_are_windowed_off_thread() {
@@ -94,6 +205,64 @@ void test_batches_are_windowed_off_thread() {
          "worker computes and queues both windows");
   expect(stats.input_samples_dropped == 0 && stats.results_dropped == 0,
          "test batch has no queue loss");
+  expect(stats.mpf_service_calls == 2 && stats.mpf_service_ns_total > 0 &&
+             stats.mpf_service_ns_max > 0,
+         "MPF service time is measured separately");
+  expect(stats.inference_service_calls == 2 && stats.inference_service_ns_total > 0 &&
+             stats.inference_service_ns_max > 0,
+         "inference service time is measured separately");
+}
+
+void test_decimator_centers_result_metadata() {
+  app::MpfFeaturizer::Config featurizer_config;
+  featurizer_config.num_channels = 1;
+  featurizer_config.sample_rate_hz = 1000.0;
+  featurizer_config.stft_size = 2;
+  featurizer_config.stft_hop = 1;
+  featurizer_config.num_bands = 1;
+
+  app::FeatureWorker worker;
+  app::FeatureWorker::Config config;
+  config.channel_map = {0};
+  config.window_samples = 2;
+  config.stride_samples = 1;
+  config.featurizer = std::make_shared<app::MpfFeaturizer>(featurizer_config);
+  config.decimation.factor = 2;
+  config.decimation.group_delay_source_samples = 1;
+  config.decimation.coefficients = {0.0, 1.0, 0.0};
+  expect(worker.start(config), "decimating feature worker starts");
+
+  app::FeatureWorker::SampleBatch batch;
+  batch.route.capture_enabled = true;
+  for (std::int32_t i = 0; i < 7; ++i) {
+    batch.samples.push_back(
+        {{i}, static_cast<std::uint64_t>(2000 + i),
+         static_cast<std::uint64_t>(1000 + i)});
+  }
+  expect(worker.try_enqueue(std::move(batch)), "decimator batch is accepted");
+
+  std::vector<std::uint64_t> sequences;
+  app::FeatureWorker::Result result;
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+  while (std::chrono::steady_clock::now() < deadline && sequences.size() < 2) {
+    if (worker.poll(result)) {
+      sequences.push_back(result.source_sequence_number);
+    } else {
+      std::this_thread::yield();
+    }
+  }
+  auto stats = worker.stats();
+  while (std::chrono::steady_clock::now() < deadline &&
+         stats.ingest_samples_processed < 7) {
+    std::this_thread::yield();
+    stats = worker.stats();
+  }
+  worker.stop();
+
+  expect(sequences == std::vector<std::uint64_t>({2003, 2005}),
+         "decimated window results retain FIR-center source metadata");
+  expect(stats.ingest_samples_processed == 7 && stats.feature_samples_emitted == 3,
+         "raw and decimated sample counts remain distinguishable");
 }
 
 }  // namespace
@@ -101,7 +270,12 @@ void test_batches_are_windowed_off_thread() {
 int main() {
   try {
     test_off_diagonal_band_limit_controls_dimension();
+    test_explicit_frequency_bands_control_dimension();
+    test_decimation_plan_preserves_window_and_stride_clock();
+    test_power_of_two_fft_matches_impulse_spectrum();
+    test_short_decimated_window_is_zero_padded();
     test_batches_are_windowed_off_thread();
+    test_decimator_centers_result_metadata();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;

@@ -1,5 +1,7 @@
 #include "mode_switch_app.hpp"
 
+#include "feature_decimator.hpp"
+
 #include <spdlog/spdlog.h>
 
 #include <algorithm>
@@ -146,11 +148,10 @@ bool ModeSwitchApp::parse_config(const synapse::ApplicationNodeConfig& configura
     cfg_.num_classes = static_cast<std::size_t>(num("num_classes", 5));
     cfg_.window_ms = num("window_ms", 200.0);
     cfg_.stride_ms = num("stride_ms", 20.0);
-    cfg_.stft_size = static_cast<std::size_t>(num("stft_size", 256));
-    cfg_.stft_hop = static_cast<std::size_t>(num("stft_hop", 128));
     cfg_.num_bands = static_cast<std::size_t>(num("num_bands", 8));
     cfg_.num_off_diag_bands =
         static_cast<std::size_t>(num("num_off_diag_bands", 2));
+    cfg_.decimation_guard_ratio = num("decimation_guard_ratio", 1.25);
     cfg_.ring_capacity = static_cast<std::size_t>(num("ring_capacity", 2000));
     cfg_.mlp_hidden = static_cast<std::size_t>(num("mlp_hidden", 64));
     cfg_.mlp_dropout = static_cast<float>(num("mlp_dropout", 0.2));
@@ -165,19 +166,57 @@ bool ModeSwitchApp::parse_config(const synapse::ApplicationNodeConfig& configura
       }
     }
 
-    if (cfg_.num_classes == 0) {
-      spdlog::error("num_classes must be >= 1");
+    cfg_.frequency_bands_hz.clear();
+    if (p.contains("frequency_bands_hz")) {
+      for (const auto& value : p.at("frequency_bands_hz").list_value().values()) {
+        if (value.kind_case() != google::protobuf::Value::kListValue ||
+            value.list_value().values_size() != 2 ||
+            value.list_value().values(0).kind_case() !=
+                google::protobuf::Value::kNumberValue ||
+            value.list_value().values(1).kind_case() !=
+                google::protobuf::Value::kNumberValue) {
+          spdlog::error("frequency_bands_hz entries must be [low_hz, high_hz] pairs");
+          return false;
+        }
+        cfg_.frequency_bands_hz.push_back(
+            {value.list_value().values(0).number_value(),
+             value.list_value().values(1).number_value()});
+      }
+      if (cfg_.frequency_bands_hz.empty()) {
+        spdlog::error("frequency_bands_hz must contain at least one band when present");
+        return false;
+      }
+    }
+
+    if (cfg_.sample_rate_hz == 0 || cfg_.num_classes == 0 || cfg_.window_ms <= 0.0 ||
+        cfg_.stride_ms <= 0.0 ||
+        (cfg_.frequency_bands_hz.empty() && cfg_.num_bands == 0) ||
+        !std::isfinite(cfg_.decimation_guard_ratio) || cfg_.decimation_guard_ratio <= 1.0) {
+      spdlog::error("invalid non-positive feature/configuration parameter");
       return false;
+    }
+    double previous_high_hz = -1.0;
+    for (const auto& band : cfg_.frequency_bands_hz) {
+      if (!std::isfinite(band.low_hz) || !std::isfinite(band.high_hz) ||
+          band.low_hz < 0.0 || band.high_hz <= band.low_hz ||
+          band.high_hz > static_cast<double>(cfg_.sample_rate_hz) / 2.0 ||
+          band.low_hz < previous_high_hz) {
+        spdlog::error(
+            "frequency_bands_hz must be ordered, non-overlapping, and within source Nyquist");
+        return false;
+      }
+      previous_high_hz = band.high_hz;
     }
     application_config_ = configuration;
     spdlog::info(
-        "Config: fs={} Hz classes={} window={} ms stride={} ms stft={}({}) bands={} "
-        "off_diag_bands={} "
+        "Config: fs={} Hz classes={} window={} ms stride={} ms bands={} "
+        "explicit_hz_bands={} off_diag_bands={} decimation_guard={} "
         "ring={} hidden={} dropout={} lr={} epochs={} seed={:#x} subset={}",
-        cfg_.sample_rate_hz, cfg_.num_classes, cfg_.window_ms, cfg_.stride_ms, cfg_.stft_size,
-        cfg_.stft_hop, cfg_.num_bands, cfg_.num_off_diag_bands, cfg_.ring_capacity,
-        cfg_.mlp_hidden, cfg_.mlp_dropout, cfg_.mlp_lr, cfg_.mlp_epochs, cfg_.synthetic_seed,
-        cfg_.channel_subset.size());
+        cfg_.sample_rate_hz, cfg_.num_classes, cfg_.window_ms, cfg_.stride_ms,
+        cfg_.num_bands, cfg_.frequency_bands_hz.size(),
+        cfg_.num_off_diag_bands, cfg_.decimation_guard_ratio, cfg_.ring_capacity,
+        cfg_.mlp_hidden, cfg_.mlp_dropout, cfg_.mlp_lr, cfg_.mlp_epochs,
+        cfg_.synthetic_seed, cfg_.channel_subset.size());
     return true;
   } catch (const std::exception& e) {
     spdlog::error("Failed to parse configuration: {}", e.what());
@@ -908,24 +947,60 @@ void ModeSwitchApp::initialize_pipeline(std::size_t upstream_channels) {
     return;
   }
 
-  window_samples_ =
+  const auto raw_window_samples =
       static_cast<std::size_t>(std::llround(cfg_.window_ms * cfg_.sample_rate_hz / 1000.0));
-  stride_samples_ =
+  const auto raw_stride_samples =
       std::max<std::size_t>(1, static_cast<std::size_t>(
                                    std::llround(cfg_.stride_ms * cfg_.sample_rate_hz / 1000.0)));
-  if (window_samples_ < cfg_.stft_size) {
-    spdlog::warn("window_samples ({}) < stft_size ({}); clamping window up",
-                 window_samples_, cfg_.stft_size);
-    window_samples_ = cfg_.stft_size;
+  const double highest_feature_hz =
+      cfg_.frequency_bands_hz.empty()
+          ? static_cast<double>(cfg_.sample_rate_hz) / 2.0
+          : cfg_.frequency_bands_hz.back().high_hz;
+  FeatureDecimationPlan decimation;
+  try {
+    decimation = make_feature_decimation_plan(
+        cfg_.sample_rate_hz, highest_feature_hz, cfg_.decimation_guard_ratio,
+        raw_window_samples, raw_stride_samples);
+  } catch (const std::exception& error) {
+    spdlog::error("Failed to plan feature decimation: {}", error.what());
+    pipeline_error_ = true;
+    pipeline_error_message_ = error.what();
+    set_last_error(control::failure(stateful_decode_and_sync::v1::ERROR_INVALID_ARGUMENT,
+                                    "frequency_bands_hz", pipeline_error_message_));
+    return;
+  }
+  window_samples_ = raw_window_samples / decimation.factor;
+  stride_samples_ = raw_stride_samples / decimation.factor;
+  std::size_t fft_samples = 0;
+  try {
+    fft_samples = next_power_of_two(window_samples_);
+  } catch (const std::exception& error) {
+    spdlog::error("Failed to size feature FFT: {}", error.what());
+    pipeline_error_ = true;
+    pipeline_error_message_ = error.what();
+    set_last_error(control::failure(stateful_decode_and_sync::v1::ERROR_INVALID_ARGUMENT,
+                                    "window_ms", pipeline_error_message_));
+    return;
   }
 
   MpfFeaturizer::Config fcfg;
   fcfg.num_channels = featurized_channels_;
-  fcfg.stft_size = cfg_.stft_size;
-  fcfg.stft_hop = cfg_.stft_hop;
+  fcfg.sample_rate_hz = decimation.feature_sample_rate_hz;
+  fcfg.stft_size = fft_samples;
+  fcfg.stft_hop = fft_samples;
+  fcfg.frequency_bands_hz = cfg_.frequency_bands_hz;
   fcfg.num_bands = cfg_.num_bands;
   fcfg.num_off_diag_bands = cfg_.num_off_diag_bands;
-  featurizer_ = std::make_shared<MpfFeaturizer>(fcfg);
+  try {
+    featurizer_ = std::make_shared<MpfFeaturizer>(fcfg);
+  } catch (const std::exception& error) {
+    spdlog::error("Failed to configure MPF frequency bands: {}", error.what());
+    pipeline_error_ = true;
+    pipeline_error_message_ = error.what();
+    set_last_error(control::failure(stateful_decode_and_sync::v1::ERROR_INVALID_ARGUMENT,
+                                    "frequency_bands_hz", pipeline_error_message_));
+    return;
+  }
 
   {
     std::lock_guard<std::mutex> lock(model_mutex_);
@@ -956,6 +1031,7 @@ void ModeSwitchApp::initialize_pipeline(std::size_t upstream_channels) {
   worker_config.window_samples = window_samples_;
   worker_config.stride_samples = stride_samples_;
   worker_config.featurizer = featurizer_;
+  worker_config.decimation = decimation;
   worker_config.classifier = [this](const std::vector<float>& feature) {
     std::lock_guard<std::mutex> lock(model_mutex_);
     return mlp_.infer(feature);
@@ -973,8 +1049,13 @@ void ModeSwitchApp::initialize_pipeline(std::size_t upstream_channels) {
   pipeline_error_ = false;
   pipeline_error_message_.clear();
   spdlog::info(
-      "Pipeline ready: {} featurized ch, window={} samp, stride={} samp, feature_dim={}",
-      featurized_channels_, window_samples_, stride_samples_, featurizer_->feature_dim());
+      "Pipeline ready: {} featurized ch, decimation={} source_fs={} Hz feature_fs={} Hz "
+      "window={} raw/{} feature samp fft={} stride={} raw/{} feature samp "
+      "anti_alias_taps={} feature_dim={}",
+      featurized_channels_, decimation.factor, cfg_.sample_rate_hz,
+      decimation.feature_sample_rate_hz, raw_window_samples, window_samples_,
+      fft_samples, raw_stride_samples, stride_samples_, decimation.coefficients.size(),
+      featurizer_->feature_dim());
   publish_state_snapshot();
 }
 
@@ -1025,20 +1106,39 @@ void ModeSwitchApp::maybe_log_feature_worker_diagnostics() {
   last_log = now;
 
   const auto stats = feature_worker_.stats();
+  const auto mpf_avg_us =
+      stats.mpf_service_calls == 0
+          ? 0
+          : stats.mpf_service_ns_total / stats.mpf_service_calls / 1000;
+  const auto inference_avg_us =
+      stats.inference_service_calls == 0
+          ? 0
+          : stats.inference_service_ns_total / stats.inference_service_calls / 1000;
+  const auto ingest_avg_ns =
+      stats.ingest_samples_processed == 0
+          ? 0
+          : stats.ingest_service_ns_total / stats.ingest_samples_processed;
   if (stats.input_batches_dropped != 0 || stats.compute_jobs_dropped != 0 ||
       stats.results_dropped != 0 || stats.compute_errors != 0 ||
       stats.pending_input_batches != 0 || stats.pending_compute_jobs != 0 ||
-      stats.pending_results != 0) {
+      stats.pending_results != 0 || stats.windows_computed != 0) {
     spdlog::info(
         "Feature worker diagnostics: input_batches={} input_samples={} "
         "compute_enqueued={} compute_dropped={} windows={} results={} "
         "pending_batches={} pending_compute={} pending_results={} "
-        "compute_errors={} dropped_batches={} dropped_samples={} dropped_results={}",
+        "compute_errors={} dropped_batches={} dropped_samples={} dropped_results={} "
+        "ingest_processed={} feature_samples={} ingest_avg_ns={} ingest_max_batch_us={} "
+        "mpf_calls={} mpf_avg_us={} mpf_max_us={} inference_calls={} "
+        "inference_avg_us={} inference_max_us={}",
         stats.input_batches, stats.input_samples, stats.compute_jobs_enqueued,
         stats.compute_jobs_dropped, stats.windows_computed, stats.results_enqueued,
         stats.pending_input_batches, stats.pending_compute_jobs, stats.pending_results,
         stats.compute_errors, stats.input_batches_dropped, stats.input_samples_dropped,
-        stats.results_dropped);
+        stats.results_dropped, stats.ingest_samples_processed,
+        stats.feature_samples_emitted, ingest_avg_ns,
+        stats.ingest_service_ns_max_batch / 1000, stats.mpf_service_calls, mpf_avg_us,
+        stats.mpf_service_ns_max / 1000, stats.inference_service_calls, inference_avg_us,
+        stats.inference_service_ns_max / 1000);
   }
 }
 

@@ -26,9 +26,14 @@ kApplication(id=2, name="stateful-decode-and-sync")
         └─ producer  class_out        Tensor[num_classes]  softmax
 ```
 
-In SAMPLING mode the App forwards each upstream `BroadbandFrame` **unchanged** on `broadband_out` (source timestamps are preserved, per repo policy). In SYNTHETIC mode it emits its own deterministic frames with a monotonic sequence number and a derived timestamp. The typed `control` tap and all legacy control shims enqueue bounded requests; the main loop applies them serially before the next source batch is routed. Raw sample batches are transferred through a bounded, thread-safe queue to `FeatureWorker`. Its ingestion thread performs only sample-to-window bookkeeping and queues immutable completed windows to a FIFO compute thread, which performs MPF and optional model inference in order. The main loop only drains bounded feature results for capture and SDK publication.
+In SAMPLING mode the App forwards each upstream `BroadbandFrame` **unchanged** on `broadband_out` (source timestamps are preserved, per repo policy). In SYNTHETIC mode it emits its own deterministic frames with a monotonic sequence number and a derived timestamp. The typed `control` tap and all legacy control shims enqueue bounded requests; the main loop applies them serially before the next source batch is routed. Raw sample batches are transferred through a bounded, thread-safe queue to `FeatureWorker`. Its ingestion thread selects channels, applies the streaming anti-alias FIR, decimates, maintains the feature-rate window, and queues immutable completed windows to a FIFO compute thread, which performs MPF and optional model inference in order. The main loop only drains bounded feature results for capture and SDK publication.
 
-The resulting acquisition/compute flow is shown in [`docs/feature-worker-pipeline.svg`](docs/feature-worker-pipeline.svg), with the editable DOT source in [`docs/feature-worker-pipeline.dot`](docs/feature-worker-pipeline.dot).
+The editable source for the acquisition/compute flow is
+[`docs/feature-worker-pipeline.dot`](docs/feature-worker-pipeline.dot).
+
+<!-- graphviz:apps/stateful-decode-and-sync/docs/feature-worker-pipeline.dot -->
+![Feature worker acquisition and compute pipeline](docs/feature-worker-pipeline.svg)
+<!-- /graphviz:apps/stateful-decode-and-sync/docs/feature-worker-pipeline.dot -->
 
 ## Source layout
 
@@ -37,6 +42,8 @@ The resulting acquisition/compute flow is shown in [`docs/feature-worker-pipelin
 | `src/mode_switch_app.{hpp,cpp}` | App subclass: typed/legacy taps, serial command application, mode FSM, windowing |
 | `src/synthetic_source.{hpp,cpp}` | ported gateware synthetic neural source |
 | `src/mpf_features.{hpp,cpp}` | STFT + CSD + band-average + Hermitian matrix-log |
+| `src/feature_decimator.hpp` | guarded integer-decimation plan + anti-alias FIR design |
+| `src/feature_worker.hpp` | staged ingestion/decimation, windowing, ordered compute, and diagnostics |
 | `src/mlp.{hpp,cpp}` | hand-rolled 2-hidden-layer MLP + backprop + SGD |
 | `src/fit_worker.hpp` | managed background fit, immutable snapshot, and candidate events |
 | `src/collection_store.hpp` | bounded multi-collection store, flushes, and generations |
@@ -83,6 +90,35 @@ The synthetic source is a faithful port of `vendor/axon-peripherals/src/gateware
 
 The MPF matrix logarithm uses a hand-rolled cyclic-Jacobi Hermitian eigensolver (`mpf_features.cpp`), so **no `eigen3`/BLAS dependency is added** to `vcpkg.json`.
 
+When `frequency_bands_hz` is present, its ordered `[low_hz, high_hz]` pairs
+select the physical half-open frequency bands used by MPF. The feature worker
+chooses the largest integer decimation that preserves an anti-alias transition
+band above the highest configured edge and exactly divides both the source-rate
+window and stride. Thus the ring still represents 200 ms and advances every
+20 ms without clock drift. The temporal ring contains exactly
+`round(feature_sample_rate_hz * window_ms / 1000)` real samples; each immutable
+compute window is then zero-padded to the next power of two for one radix-2
+transform. Padding never lengthens the live ring or its represented time span.
+The FIR-center source sequence and timestamp are retained on each decimated
+sample. Omitting `frequency_bands_hz` preserves the legacy full-Nyquist split
+and disables automatic decimation.
+
+The shipped configuration uses `[0, 62.5)`, `[62.5, 125)`, `[125, 250)`,
+`[250, 375)`, `[375, 687.5)`, and `[687.5, 1000)` Hz. With the 20 kHz source,
+200 ms window, 20 ms stride, and 1.25 guard ratio, the exact-clock constraints
+select decimation by 8: the feature rate is 2.5 kHz, its Nyquist frequency is
+1.25 kHz, and the 500-sample temporal window is zero-padded to 512 points for
+the FFT.
+
+The dynamically sized transform uses a preplanned radix-2 FFT. MPF accumulates
+only one CSD triangle, stops Jacobi sweeps on a scale-relative tolerance, and
+reconstructs only the configured matrix-log entries. The eigendecomposition
+still uses the complete CSD: retained matrix-log entries depend on every
+selected-channel covariance, so truncating the CSD itself would change the MPF
+operator. Feature-worker diagnostics report cumulative average and maximum MPF
+and inference service times separately (`mpf_*_us`, `inference_*_us`) alongside
+the queue/drop counters.
+
 The MLP z-scores each feature dimension using mean/std fit from the captured training set (applied identically at inference). Raw MPF features span orders of magnitude across bands and channel pairs; standardising them keeps SGD well-conditioned so `mlp_lr` need not be hand-tuned to the feature scale. An offline smoke test (`g++`-built, SDK-independent) confirms the synthetic source is deterministic, the reduced feature dimension is correct, and the MLP learns separable synthetic classes end-to-end.
 
 The canonical GUI/control-plane payloads are typed protobuf messages in
@@ -103,7 +139,7 @@ failed fit does not replace a prior model.
 
 ## Feature dimension
 
-Per window the featurizer emits `num_bands · [C + K(2C − K − 1)]` real values, where `C` is the featurized channel count and `K = min(num_off_diag_bands, C − 1)`. Each frequency band retains all `C` diagonal values plus the first `K` upper off-diagonal matrix bands, with each retained off-diagonal value represented by real and imaginary parts. With `C = 32`, `K = 2`, and `num_bands = 4`, this is **616** features instead of 4096 for the full upper triangle. The shipped config uses an 8-channel subset, `num_bands = 4`, and `K = 2` → **136** features.
+Per window the featurizer emits `B · [C + K(2C − K − 1)]` real values, where `B` is the number of explicit `frequency_bands_hz` entries (or legacy `num_bands`), `C` is the featurized channel count, and `K = min(num_off_diag_bands, C − 1)`. Each frequency band retains all `C` diagonal values plus the first `K` upper off-diagonal matrix bands, with each retained off-diagonal value represented by real and imaginary parts. With the shipped `B = 6`, `C = 8`, and `K = 2`, each window contains **204** features.
 
 > `num_off_diag_bands` is a matrix-offset count, not the number of frequency
 > bands: `1` retains `(i,i+1)` and `2` additionally retains `(i,i+2)`.
@@ -237,7 +273,8 @@ as a false percentage.
 
 ## Configuration parameters
 
-All parameters have safe defaults; window/stride are in milliseconds and are converted with `sample_rate_hz`.
+All parameters have safe defaults. Window/stride are defined in source-clock
+milliseconds, then divided exactly onto the selected feature-rate clock.
 
 | Key | Meaning | Default |
 | --- | --- | --- |
@@ -245,9 +282,9 @@ All parameters have safe defaults; window/stride are in milliseconds and are con
 | `num_classes` | ring-buffer categories / MLP outputs | 5 |
 | `window_ms` | feature window length (ms) → one MPF vector | 200 |
 | `stride_ms` | decoder stride / hop (ms) | 20 |
-| `stft_size` | STFT length (samples) | 256 |
-| `stft_hop` | STFT hop within window (samples) | 128 |
-| `num_bands` | frequency bands averaged into the CSD | 4 (config) / 8 (code default) |
+| `frequency_bands_hz` | ordered, non-overlapping `[low_hz, high_hz]` MPF bands; enables guarded decimation | `[0,62.5), [62.5,125), [125,250), [250,375), [375,687.5), [687.5,1000)` |
+| `decimation_guard_ratio` | required post-decimation Nyquist / highest configured edge | 1.25 |
+| `num_bands` | legacy even full-Nyquist split used only when explicit Hz bands are absent | 8 |
 | `num_off_diag_bands` | upper matrix offsets retained in addition to the diagonal | 2 |
 | `channel_subset` | channel ids to featurize (empty ⇒ all) | 8-ch subset (config) |
 | `ring_capacity` | max feature windows stored per class | 2000 |

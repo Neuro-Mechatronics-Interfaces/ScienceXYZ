@@ -47,7 +47,7 @@ namespace app {
 // Tap callbacks run on their own threads; they only validate and enqueue small
 // requests, then return fast. The main loop forwards raw frames and transfers
 // value-owned sample batches to FeatureWorker. FeatureWorker continuously
-// drains/window-aligns samples and sends completed windows to its FIFO compute
+// anti-aliases/decimates/window-aligns samples and sends completed windows to its FIFO compute
 // thread for MPF and optional inference; the main loop drains bounded results
 // for capture and SDK publication. FitWorker performs only private candidate
 // training off-thread.
@@ -69,9 +69,9 @@ class ModeSwitchApp : public synapse::App {
     std::size_t num_classes = 5;
     double window_ms = 200.0;
     double stride_ms = 20.0;
-    std::size_t stft_size = 256;
-    std::size_t stft_hop = 128;
-    std::size_t num_bands = 8;
+    std::size_t num_bands = 8;  // legacy full-Nyquist split
+    std::vector<MpfFeaturizer::FrequencyBand> frequency_bands_hz;
+    double decimation_guard_ratio = 1.25;
     std::size_t num_off_diag_bands = 2;
     std::vector<int> channel_subset;  // empty => all upstream channels
     std::size_t ring_capacity = 2000;

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <algorithm>
+#include <chrono>
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
@@ -11,12 +13,14 @@
 #include <utility>
 #include <vector>
 
+#include "feature_decimator.hpp"
 #include "mpf_features.hpp"
 
 namespace app {
 
 // Moves stride-triggered work off the acquisition loop. The ingestion thread
-// owns window state and continuously drains value-owned sample batches. Each
+// owns channel selection, streaming anti-alias/decimation, and feature-rate
+// window state while continuously draining value-owned sample batches. Each
 // completed window is copied into a FIFO compute queue; the compute thread
 // performs MPF and optional classification in order. The App thread only
 // forwards raw frames, enqueues samples, and consumes completed results.
@@ -55,6 +59,7 @@ class FeatureWorker {
     std::size_t window_samples = 0;
     std::size_t stride_samples = 1;
     std::shared_ptr<const MpfFeaturizer> featurizer;
+    FeatureDecimationPlan decimation;
     // Called only by the compute thread, after MPF has completed. The app
     // supplies a mutex-protected snapshot/inference callback for the live
     // model; leaving it empty disables classification work.
@@ -67,6 +72,10 @@ class FeatureWorker {
   struct Stats {
     std::uint64_t input_batches = 0;
     std::uint64_t input_samples = 0;
+    std::uint64_t ingest_samples_processed = 0;
+    std::uint64_t feature_samples_emitted = 0;
+    std::uint64_t ingest_service_ns_total = 0;
+    std::uint64_t ingest_service_ns_max_batch = 0;
     std::uint64_t compute_jobs_enqueued = 0;
     std::uint64_t compute_jobs_dropped = 0;
     std::uint64_t windows_computed = 0;
@@ -75,6 +84,12 @@ class FeatureWorker {
     std::uint64_t input_batches_dropped = 0;
     std::uint64_t input_samples_dropped = 0;
     std::uint64_t results_dropped = 0;
+    std::uint64_t mpf_service_calls = 0;
+    std::uint64_t mpf_service_ns_total = 0;
+    std::uint64_t mpf_service_ns_max = 0;
+    std::uint64_t inference_service_calls = 0;
+    std::uint64_t inference_service_ns_total = 0;
+    std::uint64_t inference_service_ns_max = 0;
     std::size_t pending_input_batches = 0;
     std::size_t pending_compute_jobs = 0;
     std::size_t pending_results = 0;
@@ -89,7 +104,11 @@ class FeatureWorker {
   bool start(Config config) {
     if (config.channel_map.empty() || config.window_samples == 0 ||
         config.stride_samples == 0 || !config.featurizer || config.input_capacity == 0 ||
-        config.compute_capacity == 0 || config.result_capacity == 0) {
+        config.compute_capacity == 0 || config.result_capacity == 0 ||
+        config.decimation.factor == 0 ||
+        (config.decimation.factor > 1 &&
+         (config.decimation.coefficients.empty() ||
+          config.decimation.coefficients.size() % 2 == 0))) {
       return false;
     }
 
@@ -186,12 +205,30 @@ class FeatureWorker {
     Route route;
   };
 
+  struct FilterMetadata {
+    std::uint64_t source_sequence_number = 0;
+    std::uint64_t timestamp_ns = 0;
+    Route route;
+  };
+
   void reset_window_state() {
     window_ring_.assign(config_.channel_map.size(),
                         std::vector<float>(config_.window_samples, 0.0f));
     ring_pos_ = 0;
     samples_seen_ = 0;
     samples_since_stride_ = 0;
+    selected_scratch_.assign(config_.channel_map.size(), 0.0f);
+    filtered_scratch_.assign(config_.channel_map.size(), 0.0f);
+    filter_history_pos_ = 0;
+    raw_filter_samples_ = 0;
+    if (config_.decimation.factor > 1) {
+      const auto taps = config_.decimation.coefficients.size();
+      filter_history_.assign(config_.channel_map.size(), std::vector<float>(taps, 0.0f));
+      filter_metadata_.assign(taps, {});
+    } else {
+      filter_history_.clear();
+      filter_metadata_.clear();
+    }
   }
 
   void run_ingest() {
@@ -205,8 +242,19 @@ class FeatureWorker {
         input_.pop_front();
       }
 
+      const auto ingest_start = std::chrono::steady_clock::now();
+      std::uint64_t feature_samples = 0;
       for (auto& sample : batch.samples) {
-        ingest(std::move(sample), batch.route);
+        if (ingest(std::move(sample), batch.route)) ++feature_samples;
+      }
+      const auto ingest_ns = elapsed_ns(ingest_start);
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        stats_.ingest_samples_processed += batch.samples.size();
+        stats_.feature_samples_emitted += feature_samples;
+        stats_.ingest_service_ns_total += ingest_ns;
+        stats_.ingest_service_ns_max_batch =
+            std::max(stats_.ingest_service_ns_max_batch, ingest_ns);
       }
     }
   }
@@ -224,13 +272,29 @@ class FeatureWorker {
       }
 
       try {
+        const auto mpf_start = std::chrono::steady_clock::now();
         auto feature = config_.featurizer->compute(job.window);
+        const auto mpf_ns = elapsed_ns(mpf_start);
         std::vector<float> probabilities;
+        std::uint64_t inference_ns = 0;
+        bool inference_called = false;
         if (job.route.classify && config_.classifier) {
+          const auto inference_start = std::chrono::steady_clock::now();
           probabilities = config_.classifier(feature);
+          inference_ns = elapsed_ns(inference_start);
+          inference_called = true;
         }
 
         std::lock_guard<std::mutex> lock(mutex_);
+        ++stats_.mpf_service_calls;
+        stats_.mpf_service_ns_total += mpf_ns;
+        stats_.mpf_service_ns_max = std::max(stats_.mpf_service_ns_max, mpf_ns);
+        if (inference_called) {
+          ++stats_.inference_service_calls;
+          stats_.inference_service_ns_total += inference_ns;
+          stats_.inference_service_ns_max =
+              std::max(stats_.inference_service_ns_max, inference_ns);
+        }
         ++stats_.windows_computed;
         if (results_.size() >= config_.result_capacity) {
           ++stats_.results_dropped;
@@ -246,13 +310,65 @@ class FeatureWorker {
     }
   }
 
-  void ingest(Sample sample, const Route& route) {
+  static std::uint64_t elapsed_ns(
+      const std::chrono::steady_clock::time_point& start) {
+    return static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now() - start)
+            .count());
+  }
+
+  bool ingest(Sample sample, const Route& route) {
     for (std::size_t fc = 0; fc < config_.channel_map.size(); ++fc) {
       const auto upstream = config_.channel_map[fc];
-      const float value = upstream < sample.values.size()
-                              ? static_cast<float>(sample.values[upstream])
-                              : 0.0f;
-      window_ring_[fc][ring_pos_] = value;
+      selected_scratch_[fc] = upstream < sample.values.size()
+                                  ? static_cast<float>(sample.values[upstream])
+                                  : 0.0f;
+    }
+
+    if (config_.decimation.factor == 1) {
+      ingest_feature_sample(selected_scratch_, sample.source_sequence_number,
+                            sample.timestamp_ns, route);
+      return true;
+    }
+
+    const auto taps = config_.decimation.coefficients.size();
+    for (std::size_t fc = 0; fc < selected_scratch_.size(); ++fc) {
+      filter_history_[fc][filter_history_pos_] = selected_scratch_[fc];
+    }
+    filter_metadata_[filter_history_pos_] =
+        {sample.source_sequence_number, sample.timestamp_ns, route};
+    ++raw_filter_samples_;
+
+    const bool filter_ready = raw_filter_samples_ >= taps;
+    const bool emit = filter_ready && (raw_filter_samples_ - taps) %
+                                             config_.decimation.factor ==
+                                         0;
+    if (emit) {
+      std::fill(filtered_scratch_.begin(), filtered_scratch_.end(), 0.0f);
+      for (std::size_t fc = 0; fc < selected_scratch_.size(); ++fc) {
+        double value = 0.0;
+        for (std::size_t lag = 0; lag < taps; ++lag) {
+          const auto index = (filter_history_pos_ + taps - lag) % taps;
+          value += config_.decimation.coefficients[lag] * filter_history_[fc][index];
+        }
+        filtered_scratch_[fc] = static_cast<float>(value);
+      }
+      const auto center_index =
+          (filter_history_pos_ + taps - config_.decimation.group_delay_source_samples) % taps;
+      const auto metadata = filter_metadata_[center_index];
+      ingest_feature_sample(filtered_scratch_, metadata.source_sequence_number,
+                            metadata.timestamp_ns, metadata.route);
+    }
+    filter_history_pos_ = (filter_history_pos_ + 1) % taps;
+    return emit;
+  }
+
+  void ingest_feature_sample(const std::vector<float>& values,
+                             std::uint64_t source_sequence_number,
+                             std::uint64_t timestamp_ns, const Route& route) {
+    for (std::size_t fc = 0; fc < values.size(); ++fc) {
+      window_ring_[fc][ring_pos_] = values[fc];
     }
     ring_pos_ = (ring_pos_ + 1) % config_.window_samples;
     ++samples_seen_;
@@ -273,8 +389,8 @@ class FeatureWorker {
         job.window[fc][n] = window_ring_[fc][index];
       }
     }
-    job.source_sequence_number = sample.source_sequence_number;
-    job.timestamp_ns = sample.timestamp_ns;
+    job.source_sequence_number = source_sequence_number;
+    job.timestamp_ns = timestamp_ns;
     job.route = route;
 
     {
@@ -297,9 +413,15 @@ class FeatureWorker {
   std::deque<ComputeJob> compute_jobs_;
   std::deque<Result> results_;
   std::vector<std::vector<float>> window_ring_;
+  std::vector<std::vector<float>> filter_history_;
+  std::vector<FilterMetadata> filter_metadata_;
+  std::vector<float> selected_scratch_;
+  std::vector<float> filtered_scratch_;
   std::size_t ring_pos_ = 0;
   std::size_t samples_seen_ = 0;
   std::size_t samples_since_stride_ = 0;
+  std::size_t filter_history_pos_ = 0;
+  std::size_t raw_filter_samples_ = 0;
   Stats stats_;
   bool stopping_ = false;
   bool running_ = false;
