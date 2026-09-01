@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "profile": "rhd2132_plus_one_wireless",
+  "runtime": "host_side_fusion",
+  "description": "Composite host profile: one verified RHD2132 reference stream plus one external WirelessBatch v1 source.",
+  "deployable_with_synapsectl": false,
+  "device_config": {
+    "path": "rhd2132_mode_switch.json",
+    "reference_source": {
+      "name": "IntanRHD2132",
+      "peripheral_id_resolution": "query synapsectl info at deployment; do not use a copied/example ID",
+      "sample_rate_hz": 20000,
+      "channel_count": 32,
+      "bit_width": 16,
+      "source_timestamp_policy": "preserve source timestamp and sequence"
+    }
+  },
+  "wireless_ingress": {
+    "schema_version": 1,
+    "ingress_id": "rhd2132-plus-emg-left",
+    "sources": [
+      {
+        "source_id": "emg-left",
+        "endpoints": ["tcp://192.168.100.40:19001"],
+        "topic": "wireless/v1/emg-left",
+        "expected_sample_rate": { "numerator_hz": 1000, "denominator": 1 },
+        "expected_channel_count": 8,
+        "expected_sample_format": "SAMPLE_FORMAT_INT16_LE",
+        "max_batch_samples": 64,
+        "queue_capacity_batches": 256,
+        "allow_replay": true
+      }
+    ],
+    "mux": {
+      "mode": "round_robin_nonblocking",
+      "queue_capacity_batches": 1024,
+      "max_batch_bytes": 1048576,
+      "gap_policy": "diagnose_and_preserve"
+    }
+  },
+  "adapter": {
+    "aggregate_queue_capacity_batches": 1024,
+    "per_source_queue_capacity_batches": 256,
+    "max_batch_samples": 64,
+    "clock": {
+      "nominal_source_tick_frequency_hz": 1000000.0,
+      "max_sync_samples": 128,
+      "max_epochs": 16,
+      "source_tick_quantization_ns": 1,
+      "timestamp_jitter_ns": 500,
+      "sync_asymmetry_ns": 500,
+      "batching_ambiguity_ns": 1000,
+      "rounding_ns": 1,
+      "drift_uncertainty_ppm": 50.0,
+      "max_model_age_ns": 5000000000
+    }
+  }
+}

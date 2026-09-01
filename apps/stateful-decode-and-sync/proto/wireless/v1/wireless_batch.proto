@@ -1,0 +1,69 @@
+syntax = "proto3";
+
+package sciencexyz.wireless.v1;
+
+// Versioned payload carried as frame 1 of a two-frame ZeroMQ message.
+// Frame 0 is the UTF-8 topic configured for the source.
+message WirelessBatch {
+  uint32 contract_version = 1;
+  string source_id = 2;
+  string boot_session_id = 3;
+  uint64 batch_sequence = 4;
+  uint64 first_sample_sequence = 5;
+  uint32 sample_count = 6;
+  uint32 channel_count = 7;
+  repeated uint32 shape = 8;
+  SampleFormat sample_format = 9;
+  bytes payload = 10;
+  uint64 sample_rate_numerator_hz = 11;
+  uint64 sample_rate_denominator = 12;
+  uint64 first_source_tick = 13;
+  uint64 source_tick_frequency_numerator_hz = 14;
+  uint64 source_tick_frequency_denominator = 15;
+  optional uint64 source_acquisition_time_ns = 16;
+  SourceTimeDomain source_time_domain = 17;
+  string gateway_id = 18;
+  string gateway_session_id = 19;
+  uint64 gateway_receive_time_ns = 20;
+  uint64 gateway_send_time_ns = 21;
+  string gateway_clock_id = 22;
+  TimestampQuality timestamp_quality = 23;
+  repeated ChannelDescriptor channels = 24;
+  SenderGap sender_gap = 25;
+  bool replayed = 26;
+  bytes payload_sha256 = 27;
+}
+
+enum SampleFormat {
+  SAMPLE_FORMAT_UNSPECIFIED = 0;
+  SAMPLE_FORMAT_INT16_LE = 1;
+  SAMPLE_FORMAT_INT32_LE = 2;
+  SAMPLE_FORMAT_FLOAT32_LE = 3;
+}
+
+enum SourceTimeDomain {
+  SOURCE_TIME_DOMAIN_UNSPECIFIED = 0;
+  SOURCE_TIME_DOMAIN_MONOTONIC_NS = 1;
+  SOURCE_TIME_DOMAIN_UNIX_NS = 2;
+}
+
+enum TimestampQuality {
+  TIMESTAMP_QUALITY_UNSPECIFIED = 0;
+  TIMESTAMP_QUALITY_SOURCE_TICK_AND_TIME = 1;
+  TIMESTAMP_QUALITY_SOURCE_TICK_ONLY = 2;
+  TIMESTAMP_QUALITY_GATEWAY_RECEIPT_ONLY = 3;
+  TIMESTAMP_QUALITY_UNTIMESTAMPED = 4;
+}
+
+message ChannelDescriptor {
+  uint32 index = 1;
+  string channel_id = 2;
+  string label = 3;
+  string unit = 4;
+}
+
+message SenderGap {
+  uint64 dropped_batches_before = 1;
+  uint64 dropped_samples_before = 2;
+  string reason = 3;
+}

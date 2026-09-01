@@ -390,5 +390,15 @@ diagnosed; `diagnose_and_preserve` and `reject_source_on_gap` are both covered
 by deterministic fake-reader tests. See
 [`docs/wireless-ingress-spike.md`](docs/wireless-ingress-spike.md).
 
-Next: implement T-21's affine clock estimator and T-25's reusable four-source
-simulator/adapter on top of this accepted-batch boundary.
+T-21/T-25 implementation is now present in the SDK-independent app sources:
+the affine estimator retains model epochs and decomposed uncertainty, while the
+reusable adapter and deterministic simulator preserve source/gateway/host
+timestamps and diagnostics. The focused Linux build remains a user-run gate.
+
+### 2026-09-01 - App-context protobuf build correction
+
+The first `synapsectl apps build --clean apps/stateful-decode-and-sync` attempt
+failed during CMake protobuf generation because the Docker app context does not
+contain repository-level `protocol/`. CMake now generates the wireless bindings
+from `apps/stateful-decode-and-sync/proto/wireless/v1/wireless_batch.proto`, a
+context-local mirror of the root contract.

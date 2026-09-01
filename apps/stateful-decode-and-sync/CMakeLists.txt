@@ -50,7 +50,10 @@ add_executable(stateful-decode-and-sync
     ${CMAKE_CURRENT_SOURCE_DIR}/src/synthetic_source.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/mpf_features.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/mlp.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/clock_estimator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/wireless_ingress.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/wireless_source_adapter.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/wireless_simulator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/wireless_zmq_reader.cpp
 )
 
@@ -60,7 +63,6 @@ generate_protobufs(
     PROTO_DIRS
         "${CMAKE_CURRENT_SOURCE_DIR}/external/sciencecorp/synapse-api"
         "${CMAKE_CURRENT_SOURCE_DIR}/proto"
-        "${CMAKE_CURRENT_SOURCE_DIR}/../../protocol"
 )
 
 # Be strict about the standard

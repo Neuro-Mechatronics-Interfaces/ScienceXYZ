@@ -29,21 +29,50 @@ add_executable(stateful-decode-and-sync-feature-worker-tests
     ../src/mpf_features.cpp
 )
 
+set(WIRELESS_PROTO_FILE
+    "${CMAKE_CURRENT_SOURCE_DIR}/../proto/wireless/v1/wireless_batch.proto")
+set(WIRELESS_PROTO_OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/wireless-generated")
+set(WIRELESS_PROTO_HEADER
+    "${WIRELESS_PROTO_OUT_DIR}/wireless/v1/wireless_batch.pb.h")
+set(WIRELESS_PROTO_SOURCE
+    "${WIRELESS_PROTO_OUT_DIR}/wireless/v1/wireless_batch.pb.cc")
+file(MAKE_DIRECTORY "${WIRELESS_PROTO_OUT_DIR}")
+
+# Keep the generated header as an explicit output. The protobuf CMake helper
+# attaches generated sources to a target, but parallel consumers can otherwise
+# start compiling before the included header has been created.
+add_custom_command(
+    OUTPUT "${WIRELESS_PROTO_HEADER}" "${WIRELESS_PROTO_SOURCE}"
+    COMMAND "${Protobuf_PROTOC_EXECUTABLE}"
+        --cpp_out="${WIRELESS_PROTO_OUT_DIR}"
+        -I"${CMAKE_CURRENT_SOURCE_DIR}/../proto"
+        "${WIRELESS_PROTO_FILE}"
+    DEPENDS "${WIRELESS_PROTO_FILE}"
+    COMMENT "Generating wireless WirelessBatch protobuf sources"
+    VERBATIM
+)
+add_custom_target(stateful-decode-and-sync-wireless-protobuf-generated
+    DEPENDS "${WIRELESS_PROTO_HEADER}" "${WIRELESS_PROTO_SOURCE}"
+)
+
 add_executable(stateful-decode-and-sync-wireless-ingress-tests
     wireless_ingress_test.cpp
     ../src/wireless_ingress.cpp
+    "${WIRELESS_PROTO_SOURCE}"
+)
+
+add_executable(stateful-decode-and-sync-wireless-multisource-tests
+    wireless_multisource_test.cpp
+    ../src/clock_estimator.cpp
+    ../src/wireless_source_adapter.cpp
+    ../src/wireless_simulator.cpp
+    "${WIRELESS_PROTO_SOURCE}"
 )
 
 generate_protobufs(
     TARGET stateful-decode-and-sync-protocol-tests
     OUT_PROTO_DIR PROTO_OUT_DIR
     PROTO_FILES "${CMAKE_CURRENT_SOURCE_DIR}/../proto/gui_control.proto"
-)
-
-generate_protobufs(
-    TARGET stateful-decode-and-sync-wireless-ingress-tests
-    OUT_PROTO_DIR WIRELESS_PROTO_OUT_DIR
-    PROTO_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/../../../protocol"
 )
 
 target_compile_features(stateful-decode-and-sync-control-tests PRIVATE cxx_std_20)
@@ -54,6 +83,7 @@ target_compile_features(stateful-decode-and-sync-mlp-tests PRIVATE cxx_std_20)
 target_compile_features(stateful-decode-and-sync-fit-worker-tests PRIVATE cxx_std_20)
 target_compile_features(stateful-decode-and-sync-feature-worker-tests PRIVATE cxx_std_20)
 target_compile_features(stateful-decode-and-sync-wireless-ingress-tests PRIVATE cxx_std_20)
+target_compile_features(stateful-decode-and-sync-wireless-multisource-tests PRIVATE cxx_std_20)
 target_include_directories(stateful-decode-and-sync-control-tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../src
 )
@@ -81,6 +111,10 @@ target_include_directories(stateful-decode-and-sync-wireless-ingress-tests PRIVA
     ${CMAKE_CURRENT_SOURCE_DIR}/../src
     ${WIRELESS_PROTO_OUT_DIR}
 )
+target_include_directories(stateful-decode-and-sync-wireless-multisource-tests PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src
+    ${WIRELESS_PROTO_OUT_DIR}
+)
 target_sources(stateful-decode-and-sync-control-state-tests PRIVATE
     ${PROTO_OUT_DIR}/gui_control.pb.cc
 )
@@ -90,6 +124,14 @@ target_link_libraries(stateful-decode-and-sync-control-state-tests PRIVATE proto
 target_link_libraries(stateful-decode-and-sync-fit-worker-tests PRIVATE Threads::Threads)
 target_link_libraries(stateful-decode-and-sync-feature-worker-tests PRIVATE Threads::Threads)
 target_link_libraries(stateful-decode-and-sync-wireless-ingress-tests PRIVATE protobuf::libprotobuf)
+target_link_libraries(stateful-decode-and-sync-wireless-multisource-tests PRIVATE protobuf::libprotobuf)
+
+add_dependencies(stateful-decode-and-sync-wireless-ingress-tests
+    stateful-decode-and-sync-wireless-protobuf-generated
+)
+add_dependencies(stateful-decode-and-sync-wireless-multisource-tests
+    stateful-decode-and-sync-wireless-protobuf-generated
+)
 
 # protobuf_generate() attaches the generated source/header custom command to
 # the protocol target. Make the SDK-independent state test wait for that
@@ -106,6 +148,7 @@ if(MSVC)
     target_compile_options(stateful-decode-and-sync-fit-worker-tests PRIVATE /W4 /WX)
     target_compile_options(stateful-decode-and-sync-feature-worker-tests PRIVATE /W4 /WX)
     target_compile_options(stateful-decode-and-sync-wireless-ingress-tests PRIVATE /W4 /WX)
+    target_compile_options(stateful-decode-and-sync-wireless-multisource-tests PRIVATE /W4 /WX)
 else()
     target_compile_options(stateful-decode-and-sync-control-tests PRIVATE
         -Wall -Wextra -Wpedantic -Werror
@@ -129,6 +172,9 @@ else()
         -Wall -Wextra -Wpedantic -Werror
     )
     target_compile_options(stateful-decode-and-sync-wireless-ingress-tests PRIVATE
+        -Wall -Wextra -Wpedantic -Werror
+    )
+    target_compile_options(stateful-decode-and-sync-wireless-multisource-tests PRIVATE
         -Wall -Wextra -Wpedantic -Werror
     )
 endif()
@@ -164,4 +210,8 @@ add_test(
 add_test(
     NAME stateful-decode-and-sync-wireless-ingress
     COMMAND stateful-decode-and-sync-wireless-ingress-tests
+)
+add_test(
+    NAME stateful-decode-and-sync-wireless-multisource
+    COMMAND stateful-decode-and-sync-wireless-multisource-tests
 )

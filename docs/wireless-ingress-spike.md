@@ -55,3 +55,49 @@ ctest --test-dir build/stateful-decode-and-sync -R wireless-ingress --output-on-
 
 The current Windows shell does not have CMake/protoc installed; run these
 commands in the supported Linux/macOS or WSL development environment.
+
+## Clock mapping and four-source simulation
+
+`src/clock_estimator.{hpp,cpp}` implements the T-21 affine map
+`t_ref = a * t_source + b`. It rejects reordered sync observations, recognizes
+configured source-clock wraps, requires an explicit new epoch for a reset, and
+retains completed model epochs. A locked model records slope/offset, drift,
+sample count, RTT statistics, residuals, validity, and a decomposed epsilon
+budget. `MappedTime::interval` exposes the conservative
+`[t_hat-epsilon, t_hat+epsilon]`; before two ordered sync observations, and
+after the configured model age, mapping is explicitly unbounded.
+
+`src/wireless_source_adapter.{hpp,cpp}` is the T-25 reusable normalizer. It
+accepts value-owned `AcceptedBatch` objects, performs a bounded contract check,
+detects duplicate/gap/reorder/session conditions, preserves the complete
+source/gateway protobuf metadata, adds the host receipt stamp, and derives
+per-sample source ticks and optional affine intervals. `FourSourceAdapter` owns
+four configured instances and adds aggregate queue scheduling without copying
+source-specific implementations.
+
+`src/wireless_simulator.{hpp,cpp}` emits the same `AcceptedBatch` shape for four
+independent rates. Its deterministic controls cover clock drift, gateway jitter,
+batch loss, adjacent reordering, and a boot-session reset. It never repairs a
+gap or replaces a source/gateway timestamp with the host timestamp.
+
+The application Docker build uses the app directory as its context. Therefore
+`proto/wireless/v1/wireless_batch.proto` is a context-local mirror of the
+repository-level contract in `protocol/wireless/v1/`; CMake uses the local copy
+so `synapsectl apps build` can generate bindings inside the image.
+
+The reproducible four-source settings are in
+[`config/host/wireless_four_source_simulator.json`](../config/host/wireless_four_source_simulator.json).
+This is a host-side profile for the simulator and `FourSourceAdapter`, not a
+deployable Synapse device configuration. It deliberately contains no physical
+peripheral ID or live gateway endpoint. Replace only the source identities and
+gateway transport settings when connecting real external gateways, while
+retaining the explicit source/gateway/host timestamp fields and diagnostics.
+
+For the smallest mixed-source setup, use
+[`config/host/rhd2132_plus_one_wireless.json`](../config/host/rhd2132_plus_one_wireless.json).
+It combines the existing RHD2132 app-config reference with one `emg-left`
+WirelessBatch v1 source and the same affine-clock/diagnostic policy. The file
+is an orchestration profile for host fusion; it is not a `synapsectl start`
+input because the external wireless source is not a Synapse graph node in the
+supported topology. Resolve the actual RHD2132 peripheral identity from live
+`synapsectl info` output before deployment.

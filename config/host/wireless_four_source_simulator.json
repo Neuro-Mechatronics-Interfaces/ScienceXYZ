@@ -1,0 +1,98 @@
+{
+  "schema_version": 1,
+  "profile": "hardware_free_four_source_simulator",
+  "runtime": "host_side",
+  "description": "Deterministic T-25 simulator and AcceptedBatch adapter profile; not a Synapse device configuration.",
+  "adapter": {
+    "aggregate_queue_capacity_batches": 1024,
+    "per_source_queue_capacity_batches": 256,
+    "max_batch_samples": 64,
+    "gap_policy": "diagnose_and_preserve",
+    "clock": {
+      "nominal_source_tick_frequency_hz": 1000000.0,
+      "max_sync_samples": 128,
+      "max_epochs": 16,
+      "source_tick_quantization_ns": 1,
+      "timestamp_jitter_ns": 250,
+      "sync_asymmetry_ns": 250,
+      "batching_ambiguity_ns": 500,
+      "rounding_ns": 1,
+      "drift_uncertainty_ppm": 50.0,
+      "max_model_age_ns": 5000000000
+    }
+  },
+  "simulator": {
+    "max_output_batches": 4096,
+    "sources": [
+      {
+        "source_id": "wireless-sim-1000",
+        "topic": "wireless/v1/wireless-sim-1000",
+        "sample_rate": { "numerator_hz": 1000, "denominator": 1 },
+        "channel_count": 8,
+        "sample_format": "SAMPLE_FORMAT_INT16_LE",
+        "source_tick_frequency_hz": 1000000,
+        "samples_per_batch": 32,
+        "batch_count": 256,
+        "clock_drift_ppm": 0.0,
+        "gateway_jitter_ns": 250,
+        "loss_every_n_batches": 0,
+        "reorder_adjacent_batches": false,
+        "gateway_id": "sim-gateway-1000",
+        "gateway_session_id": "sim-session-1000",
+        "gateway_clock_id": "sim-clock-1000"
+      },
+      {
+        "source_id": "wireless-sim-1500",
+        "topic": "wireless/v1/wireless-sim-1500",
+        "sample_rate": { "numerator_hz": 1500, "denominator": 1 },
+        "channel_count": 8,
+        "sample_format": "SAMPLE_FORMAT_INT16_LE",
+        "source_tick_frequency_hz": 1000000,
+        "samples_per_batch": 48,
+        "batch_count": 256,
+        "clock_drift_ppm": 18.0,
+        "gateway_jitter_ns": 400,
+        "loss_every_n_batches": 17,
+        "reorder_adjacent_batches": true,
+        "gateway_id": "sim-gateway-1500",
+        "gateway_session_id": "sim-session-1500",
+        "gateway_clock_id": "sim-clock-1500"
+      },
+      {
+        "source_id": "wireless-sim-2000",
+        "topic": "wireless/v1/wireless-sim-2000",
+        "sample_rate": { "numerator_hz": 2000, "denominator": 1 },
+        "channel_count": 8,
+        "sample_format": "SAMPLE_FORMAT_INT16_LE",
+        "source_tick_frequency_hz": 1000000,
+        "samples_per_batch": 64,
+        "batch_count": 256,
+        "clock_drift_ppm": -23.0,
+        "gateway_jitter_ns": 500,
+        "loss_every_n_batches": 0,
+        "reorder_adjacent_batches": false,
+        "reset_at_batch": 128,
+        "gateway_id": "sim-gateway-2000",
+        "gateway_session_id": "sim-session-2000",
+        "gateway_clock_id": "sim-clock-2000"
+      },
+      {
+        "source_id": "wireless-sim-2500",
+        "topic": "wireless/v1/wireless-sim-2500",
+        "sample_rate": { "numerator_hz": 2500, "denominator": 1 },
+        "channel_count": 8,
+        "sample_format": "SAMPLE_FORMAT_INT16_LE",
+        "source_tick_frequency_hz": 1000000,
+        "samples_per_batch": 40,
+        "batch_count": 256,
+        "clock_drift_ppm": 37.0,
+        "gateway_jitter_ns": 750,
+        "loss_every_n_batches": 29,
+        "reorder_adjacent_batches": true,
+        "gateway_id": "sim-gateway-2500",
+        "gateway_session_id": "sim-session-2500",
+        "gateway_clock_id": "sim-clock-2500"
+      }
+    ]
+  }
+}

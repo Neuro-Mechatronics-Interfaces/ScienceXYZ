@@ -76,6 +76,17 @@ function(generate_protobufs)
     OUT_VAR PROTO_SOURCES
   )
 
+  # protobuf_generate() adds the generated .cc files to the target, but a
+  # source file that includes a generated .h has no implicit build dependency
+  # until its first compilation. Make generation an explicit target dependency
+  # so parallel builds cannot compile consumers before protoc has materialized
+  # the headers.
+  if(DEFINED PROTO_SOURCES AND PROTO_SOURCES)
+    set(PROTO_GENERATION_TARGET "${arg_TARGET}-protobuf-generated")
+    add_custom_target(${PROTO_GENERATION_TARGET} DEPENDS ${PROTO_SOURCES})
+    add_dependencies(${arg_TARGET} ${PROTO_GENERATION_TARGET})
+  endif()
+
   # Generate Python protobufs if requested
   if(arg_GENERATE_PYTHON)
     file(MAKE_DIRECTORY ${arg_PYTHON_OUT_DIR})

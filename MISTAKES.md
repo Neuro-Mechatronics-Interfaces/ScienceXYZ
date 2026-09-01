@@ -170,6 +170,25 @@ lr>=~0.01 the first-layer gradients explode and the softmax collapses to uniform
 
 **Candidate rule:** Ask for explicit confirmation before starting any build, even when the code change itself was requested.
 
+### 2026-09-01 — App Docker context omitted the shared wireless proto
+
+**Attempt:** The user ran `synapsectl apps build --clean apps/stateful-decode-and-sync` in WSL and supplied the build transcript.
+
+**Failure:** Docker image creation succeeded, but CMake stopped at
+`tests/CMakeLists.txt:43` with `protobuf_generate could not find any .proto files`.
+
+**Cause:** `synapsectl apps build` supplies the app directory as Docker context;
+the CMake test path referenced the repository-level `protocol/` directory,
+which is outside that context and therefore absent in the image.
+
+**Correction:** Added the wireless contract under the app's context-local
+`proto/wireless/v1/` path and changed app/test CMake generation to use it. The
+root `protocol/wireless/v1/` contract remains the repository-level reference.
+
+**Candidate rule:** Treat app Docker contexts as self-contained; every proto,
+script, and include needed by an app build must be inside the app context or be
+explicitly copied into it.
+
 ### 2026-09-01 — Ran Axon gateware generation from the source subdirectory
 
 **Attempt:** Ran `synapsectl peripherals gateware generate` from

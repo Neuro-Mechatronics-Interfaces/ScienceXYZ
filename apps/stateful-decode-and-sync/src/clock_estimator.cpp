@@ -5,16 +5,13 @@
 #include <limits>
 #include <numeric>
 #include <stdexcept>
+#include <utility>
 
 namespace app::wireless {
 
 namespace {
 
 constexpr long double kNsPerSecond = 1'000'000'000.0L;
-
-std::uint64_t abs_difference(std::uint64_t left, std::uint64_t right) {
-  return left >= right ? left - right : right - left;
-}
 
 }  // namespace
 
@@ -127,6 +124,9 @@ ClockObservationResult AffineClockEstimator::observe(
 
 void AffineClockEstimator::begin_new_epoch(std::uint64_t first_source_tick,
                                            std::uint64_t reference_time_ns) {
+  const auto next_epoch_id = current_model_.epoch_id == UINT64_MAX
+                                 ? UINT64_MAX
+                                 : current_model_.epoch_id + 1;
   if (current_model_.locked) {
     current_model_.valid_until_reference_time_ns =
         current_model_.last_update_reference_time_ns;
@@ -134,7 +134,7 @@ void AffineClockEstimator::begin_new_epoch(std::uint64_t first_source_tick,
     if (epochs_.size() > config_.max_epochs) epochs_.erase(epochs_.begin());
   }
   current_model_ = ClockModel{};
-  current_model_.epoch_id = current_model_.epoch_id + 1;
+  current_model_.epoch_id = next_epoch_id;
   current_model_.model_id = next_model_id_++;
   current_model_.valid_from_source_tick = first_source_tick;
   current_model_.valid_from_reference_time_ns = reference_time_ns;
