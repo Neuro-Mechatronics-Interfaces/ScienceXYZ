@@ -29,44 +29,29 @@ add_executable(stateful-decode-and-sync-feature-worker-tests
     ../src/mpf_features.cpp
 )
 
-# The app-level generate_protobufs() compiles this same proto successfully, so
-# the file is present in the build sandbox. Its protoc invocations run with the
-# app source directory as the working directory (that is what protobuf_generate
-# uses); an absolute "/home/workspace/proto" is only stat-able relative to that
-# location in synapsectl's build mount, not from this tests binary directory.
-# Match that: run protoc from the app source dir and give it the include root
-# and proto file as paths relative to that dir, so protoc's lexical proto_path
-# prefix check succeeds and the include directory resolves.
-get_filename_component(WIRELESS_APP_SOURCE_DIR
-    "${CMAKE_CURRENT_SOURCE_DIR}/.." REALPATH)
-set(WIRELESS_PROTO_REL_INCLUDE_DIR "proto")
-set(WIRELESS_PROTO_REL_FILE "proto/wireless/v1/wireless_batch.proto")
-set(WIRELESS_PROTO_FILE
-    "${WIRELESS_APP_SOURCE_DIR}/${WIRELESS_PROTO_REL_FILE}")
-set(WIRELESS_PROTO_OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/wireless-generated")
-set(WIRELESS_PROTO_HEADER
-    "${WIRELESS_PROTO_OUT_DIR}/wireless/v1/wireless_batch.pb.h")
+# Generate the wireless WirelessBatch protobuf via the same generate_protobufs()
+# helper the app target and the gui_control protocol-test target use. That path
+# is known to work in this build sandbox; a hand-rolled protoc add_custom_command
+# failed here regardless of absolute/relative path spelling or WORKING_DIRECTORY,
+# because protobuf_generate() and a raw protoc invocation resolve the proto_path
+# differently under synapsectl's build mount.
+#
+# Passing PROTO_DIRS *and* PROTO_FILES compiles only wireless_batch.proto (the
+# PROTO_DIRS glob is skipped when PROTO_FILES is set) while keeping ../proto as
+# the first include root, so the header is emitted as "wireless/v1/
+# wireless_batch.pb.h" and the "#include \"wireless/v1/wireless_batch.pb.h\""
+# in the sources resolves. Compiling only the one file also avoids re-emitting
+# gui_control.pb.* into the shared ${CMAKE_CURRENT_BINARY_DIR}/include output
+# dir, which would collide with the protocol-test generate_protobufs() call.
+add_custom_target(stateful-decode-and-sync-wireless-protobuf-generated)
+generate_protobufs(
+    TARGET stateful-decode-and-sync-wireless-protobuf-generated
+    OUT_PROTO_DIR WIRELESS_PROTO_OUT_DIR
+    PROTO_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/../proto"
+    PROTO_FILES "${CMAKE_CURRENT_SOURCE_DIR}/../proto/wireless/v1/wireless_batch.proto"
+)
 set(WIRELESS_PROTO_SOURCE
     "${WIRELESS_PROTO_OUT_DIR}/wireless/v1/wireless_batch.pb.cc")
-file(MAKE_DIRECTORY "${WIRELESS_PROTO_OUT_DIR}")
-
-# Keep the generated header as an explicit output. The protobuf CMake helper
-# attaches generated sources to a target, but parallel consumers can otherwise
-# start compiling before the included header has been created.
-add_custom_command(
-    OUTPUT "${WIRELESS_PROTO_HEADER}" "${WIRELESS_PROTO_SOURCE}"
-    COMMAND "${Protobuf_PROTOC_EXECUTABLE}"
-        --cpp_out="${WIRELESS_PROTO_OUT_DIR}"
-        -I"${WIRELESS_PROTO_REL_INCLUDE_DIR}"
-        "${WIRELESS_PROTO_REL_FILE}"
-    WORKING_DIRECTORY "${WIRELESS_APP_SOURCE_DIR}"
-    DEPENDS "${WIRELESS_PROTO_FILE}"
-    COMMENT "Generating wireless WirelessBatch protobuf sources"
-    VERBATIM
-)
-add_custom_target(stateful-decode-and-sync-wireless-protobuf-generated
-    DEPENDS "${WIRELESS_PROTO_HEADER}" "${WIRELESS_PROTO_SOURCE}"
-)
 
 add_executable(stateful-decode-and-sync-wireless-ingress-tests
     wireless_ingress_test.cpp
