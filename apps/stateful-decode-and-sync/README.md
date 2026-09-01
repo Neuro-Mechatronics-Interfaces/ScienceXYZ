@@ -1,4 +1,4 @@
-# Stateful Decode and Sync (`stateful_decode_and_sync`)
+# Stateful Decode and Sync (`stateful-decode-and-sync`)
 
 A Synapse App for the SciFi-2 that, over live consumer taps:
 
@@ -17,7 +17,7 @@ Node graph:
 kBroadbandSource(id=1, peripheral_id=200, 20 kHz, 16-bit, 32 ch)
         │  (connection src=1 -> dst=2)
         ▼
-kApplication(id=2, name="stateful_decode_and_sync")
+kApplication(id=2, name="stateful-decode-and-sync")
         ├─ consumer  control               ControlCommand (versioned v1)
         ├─ consumer  set_source_mode  [mode]            0=SAMPLING 1=SYNTHETIC
         ├─ consumer  set_capture      [label, enable]
@@ -53,27 +53,27 @@ or activate a virtual environment and install the client package:
 
 ```bash
 py -3.13 -m venv .venv
-.venv/Scripts/python -m pip install -e apps/stateful_decode_and_sync/client
+.venv/Scripts/python -m pip install -e apps/stateful-decode-and-sync/client
 ```
 
-This installs the `stateful_decode_and_sync-service`,
-`stateful_decode_and_sync-gui`, `stateful_decode_and_sync-calibration`, and
-`stateful_decode_and_sync-fake-demo` commands. The package depends on
+This installs the `stateful-decode-and-sync-service`,
+`stateful-decode-and-sync-gui`, `stateful-decode-and-sync-calibration`, and
+`stateful-decode-and-sync-fake-demo` commands. The package depends on
 `science-synapse` for real device Taps and PySide6 for the GUI; the fake demo
 and hardware-free tests use no SciFi-2.
 
 To verify the install without hardware:
 
 ```bash
-stateful_decode_and_sync-fake-demo
-PYTHONPATH=apps/stateful_decode_and_sync/client \
+stateful-decode-and-sync-fake-demo
+PYTHONPATH=apps/stateful-decode-and-sync/client \
   .venv/Scripts/python -m unittest discover \
-  -s apps/stateful_decode_and_sync/client/tests -v
+  -s apps/stateful-decode-and-sync/client/tests -v
 ```
 
 The fake demo exits after a controller/state round trip. To run the real
-tools, use `stateful_decode_and_sync-service --device-ip "$DEV" --port 8765`,
-`stateful_decode_and_sync-gui --device-ip "$DEV"`, or the calibration command
+tools, use `stateful-decode-and-sync-service --device-ip "$DEV" --port 8765`,
+`stateful-decode-and-sync-gui --device-ip "$DEV"`, or the calibration command
 shown below. The service host defaults to `127.0.0.1`; selecting `--host`
 outside loopback is an explicit, unauthenticated operator choice.
 
@@ -112,7 +112,7 @@ Per window the featurizer emits `num_bands · C²` real values, where `C` is the
 Requires Docker (cross-compiles to arm64) and `synapsectl`. From the repo root:
 
 ```bash
-synapsectl apps build apps/stateful_decode_and_sync
+synapsectl apps build apps/stateful-decode-and-sync
 ```
 
 The Synapse API protos and the Science `vcpkg` overlay ports/triplets are vendored under `external/sciencecorp/` so the app builds without a submodule fetch. `.gitmodules` records their upstream pins (`synapse-api` `de75a2c`, `vcpkg` `b4defd7`); to refresh them to upstream, `git submodule update --init` against those URLs and re-vendor.
@@ -122,8 +122,8 @@ The Synapse API protos and the Science `vcpkg` overlay ports/triplets are vendor
 ```bash
 DEV=192.168.100.157
 
-synapsectl -u $DEV apps deploy apps/stateful_decode_and_sync
-synapsectl -u $DEV start apps/stateful_decode_and_sync/config/rhd2132_mode_switch.json
+synapsectl -u $DEV apps deploy apps/stateful-decode-and-sync
+synapsectl -u $DEV start apps/stateful-decode-and-sync/config/rhd2132_mode_switch.json
 
 synapsectl -u $DEV taps list
 synapsectl -u $DEV stop

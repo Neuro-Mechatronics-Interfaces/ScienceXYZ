@@ -1,4 +1,4 @@
-"""Host-side controller and user interfaces for stateful_decode_and_sync."""
+"""Host-side controller and user interfaces for stateful-decode-and-sync."""
 
 from .controller import BroadbandController, ControllerError, DeviceCommandError
 from .model import AppState, CommandResult

@@ -7,7 +7,7 @@ Recorded 2026-08-31 before implementation work beyond the protocol design; updat
 The app README documents this cross-build command from the repository root:
 
 ```text
-synapsectl apps build apps/stateful_decode_and_sync
+synapsectl apps build apps/stateful-decode-and-sync
 ```
 
 The documented deployment workflow also uses `synapsectl -u <device> apps deploy ...`, `synapsectl -u <device> start ...`, and `synapsectl -u <device> taps list`. These command forms could not be verified against the installed CLI because no `synapsectl` executable is installed or available on `PATH`.
@@ -19,7 +19,7 @@ The documented deployment workflow also uses `synapsectl -u <device> apps deploy
 | `synapsectl --help` | Not run by an installed executable; PowerShell reported `synapsectl` is not recognized. |
 | `synapsectl apps --help` | Same missing-command result. |
 | `synapsectl apps build --help` | Same missing-command result. |
-| `synapsectl apps build apps/stateful_decode_and_sync` | Baseline build could not start for the same reason; no source compilation result was produced. |
+| `synapsectl apps build apps/stateful-decode-and-sync` | Baseline build could not start for the same reason; no source compilation result was produced. |
 | `py -3.13 --version` | `Python 3.13.15`. |
 | `py -3.13 -m pip show science-synapse` | Package not found. |
 | `docker info` | Docker client 29.7.2 is installed, but the Linux daemon is unavailable (`dockerDesktopLinuxEngine` pipe not found). |
@@ -36,7 +36,7 @@ No device was contacted and no deploy/start/stop command was attempted because t
 - consumer `set_source_mode`: protobuf `ListValue`;
 - consumer `set_capture`: protobuf `ListValue`;
 - consumer `fit_mlp`: protobuf `ListValue`;
-- consumer `control`: typed `stateful_decode_and_sync.v1.ControlCommand`, validated and bounded-queued for serial main-loop application;
+- consumer `control`: typed `stateful-decode-and-sync.v1.ControlCommand`, validated and bounded-queued for serial main-loop application;
 - producer `broadband_out`: `synapse::BroadbandFrame`; and
 - producer `class_out`: `synapse::Tensor`.
 
@@ -85,14 +85,14 @@ failures with a usable request id are also reported through the result tap.
 The app has a CTest target for the reusable control-plane data layer and a separate protobuf-backed protocol target. Configure the root project with the device application disabled so the missing Synapse SDK and device-side dependencies are not needed. The protocol target additionally needs the project's vcpkg Protobuf package and `protoc`:
 
 ```text
-cmake -S apps/stateful_decode_and_sync -B apps/stateful_decode_and_sync/build/offline-tests -DBUILD_DEVICE_APP=OFF -DBUILD_TESTING=ON
-cmake --build apps/stateful_decode_and_sync/build/offline-tests
-ctest --test-dir apps/stateful_decode_and_sync/build/offline-tests --output-on-failure
+cmake -S apps/stateful-decode-and-sync -B apps/stateful-decode-and-sync/build/offline-tests -DBUILD_DEVICE_APP=OFF -DBUILD_TESTING=ON
+cmake --build apps/stateful-decode-and-sync/build/offline-tests
+ctest --test-dir apps/stateful-decode-and-sync/build/offline-tests --output-on-failure
 ```
 
-The registered tests are `stateful_decode_and_sync-control`,
-`stateful_decode_and_sync-protocol`, `stateful_decode_and_sync-control-state`,
-`stateful_decode_and_sync-mlp`, and `stateful_decode_and_sync-fit-worker`.
+The registered tests are `stateful-decode-and-sync-control`,
+`stateful-decode-and-sync-protocol`, `stateful-decode-and-sync-control-state`,
+`stateful-decode-and-sync-mlp`, and `stateful-decode-and-sync-fit-worker`.
 The first uses fixed inputs and covers the underlying `RingBuffer` plus the
 bounded `CollectionStore`; the second exercises typed protobuf round trips and
 validation; the third covers FIFO queue bounds/de-duplication, atomic

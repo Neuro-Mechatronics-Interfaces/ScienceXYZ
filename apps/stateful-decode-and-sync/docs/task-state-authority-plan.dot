@@ -1,0 +1,23 @@
+digraph TaskStateAuthorityPlan {
+  graph [rankdir=LR, bgcolor="transparent", pad=0.2, nodesep=0.45, ranksep=0.65,
+         label="Authoritative task-state transition path", labelloc=t, fontsize=18];
+  node [shape=box, style="rounded,filled", fillcolor="#F7F9FC", color="#385170",
+        fontname="Arial", fontsize=10];
+  edge [color="#526D82", fontname="Arial", fontsize=9];
+
+  definition [label="Versioned task definition\nstates, edges, guards, timers"];
+  validator [label="Startup validator\nimmutable runtime graph"];
+  proposals [label="Transition proposals\noperator / timer / decoder"];
+  engine [label="On-device task engine\nvalidate + stage"];
+  boundary [label="Reference-frame boundary\ncommit exactly once"];
+  event [label="TaskTransitionEvent\nseq + old/new + ref time"];
+  consumers [label="State snapshot + GUI\nbehavior controller"];
+  fusion [label="H-22 host fusion/recorder\nraw clocks + aligned intervals"];
+
+  definition -> validator -> engine;
+  proposals -> engine;
+  engine -> boundary [label="accepted proposal"];
+  boundary -> event [label="authoritative commit"];
+  event -> consumers;
+  event -> fusion;
+}

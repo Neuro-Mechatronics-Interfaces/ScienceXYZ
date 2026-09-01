@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package stateful_decode_and_sync.v1;
 
-// Typed control-plane messages for the stateful_decode_and_sync App. The
+// Typed control-plane messages for the stateful-decode-and-sync App. The
 // protocol version is deliberately carried in every envelope so a client can
 // reject an incompatible device before interpreting any command or status.
 

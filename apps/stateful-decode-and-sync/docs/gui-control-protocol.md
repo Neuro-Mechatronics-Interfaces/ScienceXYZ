@@ -195,6 +195,6 @@ The bounded design and the ownership boundary are shown in [`gui-control-archite
 
 ![GraphViz diagram](gui-control-architecture.svg)
 
-<!-- graphviz:apps/stateful_decode_and_sync/docs/gui-control-architecture.dot -->
+<!-- graphviz:apps/stateful-decode-and-sync/docs/gui-control-architecture.dot -->
 ![GraphViz diagram](gui-control-architecture.svg)
-<!-- /graphviz:apps/stateful_decode_and_sync/docs/gui-control-architecture.dot -->
+<!-- /graphviz:apps/stateful-decode-and-sync/docs/gui-control-architecture.dot -->

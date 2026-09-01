@@ -1,5 +1,5 @@
 {
-  "name": "stateful_decode_and_sync",
+  "name": "stateful-decode-and-sync",
   "config_schema": {
 
   },
@@ -9,7 +9,7 @@
         "type": "kApplication",
         "id": 2,
         "application": {
-          "name": "stateful_decode_and_sync",
+          "name": "stateful-decode-and-sync",
           "parameters": {
             "sample_rate_hz": 20000,
             "num_classes": 5,
