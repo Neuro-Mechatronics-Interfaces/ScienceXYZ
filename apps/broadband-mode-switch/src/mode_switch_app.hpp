@@ -22,6 +22,7 @@
 #include "control_command_queue.hpp"
 #include "control_state.hpp"
 #include "synthetic_source.hpp"
+#include "multipart_drain.hpp"
 
 namespace app {
 
@@ -98,8 +99,17 @@ class ModeSwitchApp : public synapse::App {
   void publish_periodic_state_if_due();
   void set_last_error(const control::TransitionResult& failure);
 
-  // Pull one frame from the reader; returns false if nothing was read.
-  bool read_one_frame(synapse::BroadbandFrame& frame);
+  struct ReadBatch {
+    std::vector<synapse::BroadbandFrame> frames;
+    std::size_t received_message_count = 0;
+    std::size_t parsed_message_count = 0;
+    std::size_t parse_error_count = 0;
+  };
+
+  // Pull and parse every frame from one receive_multipart() result. Frames are
+  // returned in wire order; false means no valid frame was available.
+  bool read_frames(ReadBatch& batch);
+  void maybe_log_reader_diagnostics(const ReadBatch& batch);
   // Lazily size window/stride/featurizer/MLP once we know the channel layout.
   void initialize_pipeline(std::size_t upstream_channels);
   // Push one time-point (all channels) into the sliding window ring; when the
@@ -182,6 +192,13 @@ class ModeSwitchApp : public synapse::App {
   // Frame-drop detection on the upstream reader.
   uint64_t last_sequence_number_ = 0;
   bool have_last_sequence_ = false;
+  uint64_t receive_batch_count_ = 0;
+  uint64_t received_message_count_ = 0;
+  uint64_t parsed_message_count_ = 0;
+  uint64_t parse_error_count_ = 0;
+  uint64_t forwarded_frame_count_ = 0;
+  bool have_last_reader_diagnostics_log_ = false;
+  std::chrono::steady_clock::time_point last_reader_diagnostics_log_;
 };
 
 }  // namespace app

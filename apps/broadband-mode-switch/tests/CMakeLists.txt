@@ -2,6 +2,10 @@ add_executable(broadband-mode-switch-control-tests
     ring_buffer_test.cpp
 )
 
+add_executable(broadband-mode-switch-multipart-drain-tests
+    multipart_drain_test.cpp
+)
+
 add_executable(broadband-mode-switch-protocol-tests
     protocol_test.cpp
 )
@@ -27,11 +31,15 @@ generate_protobufs(
 )
 
 target_compile_features(broadband-mode-switch-control-tests PRIVATE cxx_std_20)
+target_compile_features(broadband-mode-switch-multipart-drain-tests PRIVATE cxx_std_20)
 target_compile_features(broadband-mode-switch-protocol-tests PRIVATE cxx_std_20)
 target_compile_features(broadband-mode-switch-control-state-tests PRIVATE cxx_std_20)
 target_compile_features(broadband-mode-switch-mlp-tests PRIVATE cxx_std_20)
 target_compile_features(broadband-mode-switch-fit-worker-tests PRIVATE cxx_std_20)
 target_include_directories(broadband-mode-switch-control-tests PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src
+)
+target_include_directories(broadband-mode-switch-multipart-drain-tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../src
 )
 target_include_directories(broadband-mode-switch-protocol-tests PRIVATE
@@ -73,6 +81,9 @@ else()
     target_compile_options(broadband-mode-switch-control-tests PRIVATE
         -Wall -Wextra -Wpedantic -Werror
     )
+    target_compile_options(broadband-mode-switch-multipart-drain-tests PRIVATE
+        -Wall -Wextra -Wpedantic -Werror
+    )
     target_compile_options(broadband-mode-switch-protocol-tests PRIVATE
         -Wall -Wextra -Wpedantic -Werror
     )
@@ -90,6 +101,10 @@ endif()
 add_test(
     NAME broadband-mode-switch-control
     COMMAND broadband-mode-switch-control-tests
+)
+add_test(
+    NAME broadband-mode-switch-multipart-drain
+    COMMAND broadband-mode-switch-multipart-drain-tests
 )
 add_test(
     NAME broadband-mode-switch-protocol

@@ -697,7 +697,6 @@ void ModeSwitchApp::apply_protocol_command(const protocol::ControlCommand& comma
 // Main loop
 // ---------------------------------------------------------------------------
 void ModeSwitchApp::main() {
-  synapse::BroadbandFrame in_frame;
   std::vector<int32_t> synth_data;
 
   // Publish a complete baseline before the first source frame arrives. This
@@ -764,42 +763,50 @@ void ModeSwitchApp::main() {
       continue;
     }
 
-    // SAMPLING mode: forward the upstream frame unchanged. Never overwrite the
-    // source timestamps (AGENTS.md).
-    if (!read_one_frame(in_frame)) {
+    // SAMPLING mode: forward every upstream frame unchanged. Never overwrite
+    // the source timestamps (AGENTS.md). receive_multipart() may contain more
+    // than one BroadbandFrame, so process the complete batch in wire order.
+    ReadBatch batch;
+    if (!read_frames(batch)) {
       continue;
     }
-    publish_tap("broadband_out", in_frame);
 
-    // Feed the pipeline from the real frame.
-    const int n = in_frame.frame_data_size();
-    std::vector<int32_t> data(n);
-    for (int i = 0; i < n; ++i) data[i] = in_frame.frame_data(i);
-    initialize_pipeline(static_cast<std::size_t>(n));
-    ingest_sample(data, in_frame.timestamp_ns());
+    for (const auto& in_frame : batch.frames) {
+      publish_tap("broadband_out", in_frame);
+
+      // Feed the pipeline from the real frame.
+      const int n = in_frame.frame_data_size();
+      std::vector<int32_t> data(n);
+      for (int i = 0; i < n; ++i) data[i] = in_frame.frame_data(i);
+      initialize_pipeline(static_cast<std::size_t>(n));
+      ingest_sample(data, in_frame.timestamp_ns());
+    }
   }
 }
 
-bool ModeSwitchApp::read_one_frame(synapse::BroadbandFrame& frame) {
+bool ModeSwitchApp::read_frames(ReadBatch& batch) {
+  batch = ReadBatch{};
   auto messages = data_reader_->receive_multipart();
   if (messages.empty()) {
     std::this_thread::sleep_for(std::chrono::microseconds(1));
     return false;
   }
-  bool got = false;
-  for (auto& message : messages) {
-    auto maybe = synapse::parse_protobuf_message<synapse::BroadbandFrame>(std::move(message));
-    if (!maybe.has_value()) {
-      spdlog::warn("Failed to parse broadband frame");
-      continue;
-    }
-    frame = maybe.value();
+
+  const auto stats = drain_multipart(
+      std::move(messages),
+      [](auto&& message) {
+        return synapse::parse_protobuf_message<synapse::BroadbandFrame>(
+            std::move(message));
+      },
+      [this, &batch](const synapse::BroadbandFrame& frame) {
     if (have_last_sequence_) {
       const uint64_t expected = last_sequence_number_ + 1;
-      if (frame.sequence_number() != expected) {
+      if (frame.sequence_number() > expected) {
         spdlog::warn("Dropped {} frames (expected seq {}, got {})",
-                     static_cast<int64_t>(frame.sequence_number()) -
-                         static_cast<int64_t>(expected),
+                     frame.sequence_number() - expected,
+                     expected, frame.sequence_number());
+      } else if (frame.sequence_number() < expected) {
+        spdlog::warn("Non-monotonic broadband sequence (expected seq {}, got {})",
                      expected, frame.sequence_number());
       }
     }
@@ -808,12 +815,44 @@ bool ModeSwitchApp::read_one_frame(synapse::BroadbandFrame& frame) {
     source_connected_ = true;
     last_source_frame_wall_time_ = std::chrono::steady_clock::now();
     have_last_source_frame_wall_time_ = true;
-    got = true;
+
+    batch.frames.push_back(frame);
+      });
+
+  batch.received_message_count = stats.batch_size;
+  batch.parsed_message_count = stats.parsed_count;
+  batch.parse_error_count = stats.parse_error_count;
+  if (stats.parse_error_count != 0) {
+    spdlog::warn("Failed to parse {} broadband frame message(s) in multipart batch",
+                 stats.parse_error_count);
   }
-  // We overwrite `frame` per message and only keep the last; feeding one frame
-  // per read call keeps the sliding window simple. Multipart batches are rare
-  // for a per-sample broadband node.
-  return got;
+  ++receive_batch_count_;
+  received_message_count_ += stats.batch_size;
+  parsed_message_count_ += stats.parsed_count;
+  parse_error_count_ += stats.parse_error_count;
+  forwarded_frame_count_ += stats.forwarded_count;
+  maybe_log_reader_diagnostics(batch);
+
+  return !batch.frames.empty();
+}
+
+void ModeSwitchApp::maybe_log_reader_diagnostics(const ReadBatch& batch) {
+  const auto now = std::chrono::steady_clock::now();
+  const bool periodic = !have_last_reader_diagnostics_log_ ||
+                        now - last_reader_diagnostics_log_ >= std::chrono::seconds(1);
+  if (batch.received_message_count <= 1 && batch.parse_error_count == 0 && !periodic) {
+    return;
+  }
+
+  spdlog::info(
+      "Broadband receive diagnostics: batch_size={} parsed_messages={} "
+      "forwarded_frames={} parse_errors={} totals(batches={} messages={} parsed={} "
+      "forwarded={} parse_errors={})",
+      batch.received_message_count, batch.parsed_message_count, batch.frames.size(),
+      batch.parse_error_count, receive_batch_count_, received_message_count_,
+      parsed_message_count_, forwarded_frame_count_, parse_error_count_);
+  last_reader_diagnostics_log_ = now;
+  have_last_reader_diagnostics_log_ = true;
 }
 
 // ---------------------------------------------------------------------------
