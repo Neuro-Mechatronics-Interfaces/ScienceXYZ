@@ -101,3 +101,8 @@ is an orchestration profile for host fusion; it is not a `synapsectl start`
 input because the external wireless source is not a Synapse graph node in the
 supported topology. Resolve the actual RHD2132 peripheral identity from live
 `synapsectl info` output before deployment.
+
+For the measured cross-source acceptance gate, use the JSON report checker and
+bench procedure in [`alignment-acceptance.md`](alignment-acceptance.md). It
+requires explicit edge observations, continuity counters, persisted epsilon,
+and live-device provenance; it does not infer missing measurements.

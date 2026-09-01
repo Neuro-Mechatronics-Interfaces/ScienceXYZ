@@ -162,6 +162,8 @@ receiver configuration schema, and copy/paste LAN requirements are in
 [`docs/wireless-gateway-ingress-requirements.md`](docs/wireless-gateway-ingress-requirements.md).
 The hardware-free ingress implementation and test command are documented in
 [`docs/wireless-ingress-spike.md`](docs/wireless-ingress-spike.md).
+The measured loopback/LAN/wireless acceptance schema and checker are in
+[`docs/alignment-acceptance.md`](docs/alignment-acceptance.md).
 
 ## Synapse Apps
 

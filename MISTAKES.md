@@ -335,3 +335,19 @@ gateware, package, or device state changed.
 
 **Candidate rule:** Audit each source-fetching Docker layer for its VCS client
 as well as compiler and build-tool prerequisites.
+
+### 2026-09-01 — Initial T-22 acceptance fixtures masked failures
+
+**Attempt:** Added the first measured-alignment acceptance analyzer and ran its
+unit tests.
+
+**Failure:** The fixture's requested edge error was not applied to the measured
+timestamp, and an early return on nonzero continuity counters prevented the
+report from exposing the available edge metrics.
+
+**Correction:** Made the fixture construct the actual offset, continued metric
+collection while retaining continuity failures, and added full mode ×
+rate/batch coverage checks.
+
+**Candidate rule:** Acceptance tests must exercise the measurement values they
+claim to test and should report independent evidence even when one gate fails.

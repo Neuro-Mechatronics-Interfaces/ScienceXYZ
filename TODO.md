@@ -402,3 +402,35 @@ failed during CMake protobuf generation because the Docker app context does not
 contain repository-level `protocol/`. CMake now generates the wireless bindings
 from `apps/stateful-decode-and-sync/proto/wireless/v1/wireless_batch.proto`, a
 context-local mirror of the root contract.
+
+### 2026-09-01 - T-22 measured acceptance harness prepared
+
+Added [`docs/alignment-acceptance.md`](docs/alignment-acceptance.md) and the
+dependency-free `scripts/alignment_acceptance/analyze_alignment.py` checker.
+It validates the required rate/batch matrix, explicit unexplained-loss and
+continuity counters, matched-edge epsilon coverage, model/protocol/device
+provenance, and reports median/p95/max error, epsilon, drift, RTT/dispersion,
+batch latency/jitter, and degraded/unbounded quality. Deterministic tests are
+in `scripts/alignment_acceptance/test_analyze_alignment.py`.
+
+T-22 remains open pending measured loopback, LAN, and real-wireless captures.
+Before the bench run, ask the operator to execute exactly
+`synapsectl -u 192.168.100.157 info` in the supported Synapse environment and
+use the reported live peripheral ID; do not run `synapsectl` from an agent
+environment or hard-code an ID.
+
+### 2026-09-01 - T-22 live inventory gate remains blocked
+
+The operator ran the required read-only inventory command. The device is
+`nml-scifi-2`, stopped, running Synapse 2.4.1 / firmware 3164583911. The live
+peripheral list contains only the SciFi Virtual Recording Peripheral (ID 1000,
+`kBroadbandSource`) and VirtualOpticalStimPeripheral (ID 1001,
+`kOpticalStimulation`). The configured 32-channel BroadbandSource reports
+`Connected to: Unknown (id: Unknown)`, so there is no live Omnetics/RHD2132
+reference peripheral ID to use for T-22. The application is not running; its
+displayed error log is historical (July 24) and is not current trial evidence.
+
+Do not substitute ID 1000 for the missing physical reference. Reconnect or
+restore the adapter/probe path, then rerun `synapsectl -u 192.168.100.157 info`
+and use only the newly reported physical `kBroadbandSource` ID before any
+deployment or measured alignment trial.
