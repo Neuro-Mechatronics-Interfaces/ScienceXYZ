@@ -375,3 +375,20 @@ are `docs/wireless-batch-data-flow.*`.
 Next: T-21 clock estimator and T-25 deterministic gateway simulator/adapter;
 the ingress reader spike must consume this contract and retain explicit gap
 diagnostics.
+
+### 2026-09-01 - hardware-free wireless ingress spike
+
+Implemented the SDK-independent `app::wireless::IngressMux` and the
+single-source `ZmqNonblockingReader` transport boundary. The mux owns one
+reader per configured source (one to four), polls them in rotating
+round-robin/nonblocking order, validates the exact topic/protobuf envelope and
+per-source identity/shape/rate/session/sequence rules, and preserves accepted
+protobuf batches by value. Per-source and aggregate queue limits are enforced
+with explicit overflow accounting. Sender drops, receiver gaps, duplicates,
+reordering, malformed messages, session resets, and source quarantine are
+diagnosed; `diagnose_and_preserve` and `reject_source_on_gap` are both covered
+by deterministic fake-reader tests. See
+[`docs/wireless-ingress-spike.md`](docs/wireless-ingress-spike.md).
+
+Next: implement T-21's affine clock estimator and T-25's reusable four-source
+simulator/adapter on top of this accepted-batch boundary.

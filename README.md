@@ -160,6 +160,8 @@ that publish versioned L2CAP batches over LAN ZeroMQ/TCP. The contract,
 receiver configuration schema, and copy/paste LAN requirements are in
 [`docs/wireless-batch-contract.md`](docs/wireless-batch-contract.md) and
 [`docs/wireless-gateway-ingress-requirements.md`](docs/wireless-gateway-ingress-requirements.md).
+The hardware-free ingress implementation and test command are documented in
+[`docs/wireless-ingress-spike.md`](docs/wireless-ingress-spike.md).
 
 ## Synapse Apps
 

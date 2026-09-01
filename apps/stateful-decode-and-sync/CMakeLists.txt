@@ -50,6 +50,8 @@ add_executable(stateful-decode-and-sync
     ${CMAKE_CURRENT_SOURCE_DIR}/src/synthetic_source.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/mpf_features.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/mlp.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/wireless_ingress.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/wireless_zmq_reader.cpp
 )
 
 generate_protobufs(
