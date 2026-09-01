@@ -54,13 +54,14 @@ void test_affine_fit_uncertainty_and_reordering() {
          "affine slope is recovered exactly");
   expect(model.rtt_min_ns == 40 && model.rtt_median_ns == 60 && model.rtt_max_ns == 60,
          "RTT statistics are persisted");
-  const auto mapped = estimator.map_source_tick(600, 1'020'000);
+  const auto mapped =
+      estimator.map_source_tick(std::uint64_t{600}, 1'020'000);
   expect(mapped.bounded && mapped.interval.has_value() &&
              mapped.estimated_reference_time_ns == 1'005'000,
          "mapped time exposes a bounded estimate and interval");
   expect(mapped.epsilon_ns >= 10 + 20 + 30 + 5 + 1,
          "epsilon includes explicit uncertainty components");
-  expect(!estimator.map_source_tick(600, 6'020'000'000ULL).bounded,
+  expect(!estimator.map_source_tick(std::uint64_t{600}, 6'020'000'000ULL).bounded,
          "stale models become explicitly unbounded");
 }
 

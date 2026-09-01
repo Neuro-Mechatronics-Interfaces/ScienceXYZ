@@ -155,6 +155,19 @@ Requires Docker (cross-compiles to arm64) and `synapsectl`. From the repo root:
 synapsectl apps build apps/stateful-decode-and-sync
 ```
 
+To build tests:
+```bash
+cd /mnt/c/MyRepos/C/ScienceXYZ/apps/stateful-decode-and-sync
+
+cmake -S . -B build/host-tests \
+  -DBUILD_DEVICE_APP=OFF \
+  -DBUILD_TESTING=ON \
+  -DCMAKE_PREFIX_PATH="$PWD/build/host/vcpkg_installed/x64-linux"
+
+cmake --build build/host-tests --parallel
+ctest --test-dir build/host-tests --output-on-failure
+```
+
 The Synapse API protos and the Science `vcpkg` overlay ports/triplets are vendored under `external/sciencecorp/` so the app builds without a submodule fetch. `.gitmodules` records their upstream pins (`synapse-api` `de75a2c`, `vcpkg` `b4defd7`); to refresh them to upstream, `git submodule update --init` against those URLs and re-vendor.
 
 ## Deploy, start, monitor
