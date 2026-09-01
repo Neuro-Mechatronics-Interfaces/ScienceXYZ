@@ -29,8 +29,20 @@ add_executable(stateful-decode-and-sync-feature-worker-tests
     ../src/mpf_features.cpp
 )
 
+# The app-level generate_protobufs() compiles this same proto successfully, so
+# the file is present in the build sandbox. Its protoc invocations run with the
+# app source directory as the working directory (that is what protobuf_generate
+# uses); an absolute "/home/workspace/proto" is only stat-able relative to that
+# location in synapsectl's build mount, not from this tests binary directory.
+# Match that: run protoc from the app source dir and give it the include root
+# and proto file as paths relative to that dir, so protoc's lexical proto_path
+# prefix check succeeds and the include directory resolves.
+get_filename_component(WIRELESS_APP_SOURCE_DIR
+    "${CMAKE_CURRENT_SOURCE_DIR}/.." REALPATH)
+set(WIRELESS_PROTO_REL_INCLUDE_DIR "proto")
+set(WIRELESS_PROTO_REL_FILE "proto/wireless/v1/wireless_batch.proto")
 set(WIRELESS_PROTO_FILE
-    "${CMAKE_CURRENT_SOURCE_DIR}/../proto/wireless/v1/wireless_batch.proto")
+    "${WIRELESS_APP_SOURCE_DIR}/${WIRELESS_PROTO_REL_FILE}")
 set(WIRELESS_PROTO_OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/wireless-generated")
 set(WIRELESS_PROTO_HEADER
     "${WIRELESS_PROTO_OUT_DIR}/wireless/v1/wireless_batch.pb.h")
@@ -45,8 +57,9 @@ add_custom_command(
     OUTPUT "${WIRELESS_PROTO_HEADER}" "${WIRELESS_PROTO_SOURCE}"
     COMMAND "${Protobuf_PROTOC_EXECUTABLE}"
         --cpp_out="${WIRELESS_PROTO_OUT_DIR}"
-        -I"${CMAKE_CURRENT_SOURCE_DIR}/../proto"
-        "${WIRELESS_PROTO_FILE}"
+        -I"${WIRELESS_PROTO_REL_INCLUDE_DIR}"
+        "${WIRELESS_PROTO_REL_FILE}"
+    WORKING_DIRECTORY "${WIRELESS_APP_SOURCE_DIR}"
     DEPENDS "${WIRELESS_PROTO_FILE}"
     COMMENT "Generating wireless WirelessBatch protobuf sources"
     VERBATIM
