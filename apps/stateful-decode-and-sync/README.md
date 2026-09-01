@@ -26,7 +26,9 @@ kApplication(id=2, name="stateful-decode-and-sync")
         └─ producer  class_out        Tensor[num_classes]  softmax
 ```
 
-In SAMPLING mode the App forwards each upstream `BroadbandFrame` **unchanged** on `broadband_out` (source timestamps are preserved, per repo policy). In SYNTHETIC mode it emits its own deterministic frames with a monotonic sequence number and a derived timestamp. The typed `control` tap and all legacy control shims enqueue bounded requests; the main loop applies them serially before the next feature window is routed.
+In SAMPLING mode the App forwards each upstream `BroadbandFrame` **unchanged** on `broadband_out` (source timestamps are preserved, per repo policy). In SYNTHETIC mode it emits its own deterministic frames with a monotonic sequence number and a derived timestamp. The typed `control` tap and all legacy control shims enqueue bounded requests; the main loop applies them serially before the next source batch is routed. Raw sample batches are transferred through a bounded, thread-safe queue to `FeatureWorker`. Its ingestion thread performs only sample-to-window bookkeeping and queues immutable completed windows to a FIFO compute thread, which performs MPF and optional model inference in order. The main loop only drains bounded feature results for capture and SDK publication.
+
+The resulting acquisition/compute flow is shown in [`docs/feature-worker-pipeline.svg`](docs/feature-worker-pipeline.svg), with the editable DOT source in [`docs/feature-worker-pipeline.dot`](docs/feature-worker-pipeline.dot).
 
 ## Source layout
 
@@ -81,7 +83,7 @@ The synthetic source is a faithful port of `vendor/axon-peripherals/src/gateware
 
 The MPF matrix logarithm uses a hand-rolled cyclic-Jacobi Hermitian eigensolver (`mpf_features.cpp`), so **no `eigen3`/BLAS dependency is added** to `vcpkg.json`.
 
-The MLP z-scores each feature dimension using mean/std fit from the captured training set (applied identically at inference). Raw MPF features span orders of magnitude across bands and channel pairs; standardising them keeps SGD well-conditioned so `mlp_lr` need not be hand-tuned to the feature scale. An offline smoke test (`g++`-built, SDK-independent) confirms the synthetic source is deterministic, the feature dimension is `num_bands·C²`, and the MLP learns separable synthetic classes end-to-end.
+The MLP z-scores each feature dimension using mean/std fit from the captured training set (applied identically at inference). Raw MPF features span orders of magnitude across bands and channel pairs; standardising them keeps SGD well-conditioned so `mlp_lr` need not be hand-tuned to the feature scale. An offline smoke test (`g++`-built, SDK-independent) confirms the synthetic source is deterministic, the reduced feature dimension is correct, and the MLP learns separable synthetic classes end-to-end.
 
 The canonical GUI/control-plane payloads are typed protobuf messages in
 `proto/gui_control.proto`. `src/control_protocol.hpp` validates protocol v1
@@ -101,11 +103,10 @@ failed fit does not replace a prior model.
 
 ## Feature dimension
 
-Per window the featurizer emits `num_bands · C²` real values, where `C` is the featurized channel count (`channel_subset` size, default all 32). This is large at full resolution (32 ch, 8 bands → 8·1024 = 8192). The shipped config starts small — an 8-channel subset with `num_bands = 4` → **4·64 = 256** features — to keep on-device training tractable. Grow `channel_subset`/`num_bands` once the end-to-end path is verified.
+Per window the featurizer emits `num_bands · [C + K(2C − K − 1)]` real values, where `C` is the featurized channel count and `K = min(num_off_diag_bands, C − 1)`. Each frequency band retains all `C` diagonal values plus the first `K` upper off-diagonal matrix bands, with each retained off-diagonal value represented by real and imaginary parts. With `C = 32`, `K = 2`, and `num_bands = 4`, this is **616** features instead of 4096 for the full upper triangle. The shipped config uses an 8-channel subset, `num_bands = 4`, and `K = 2` → **136** features.
 
-> Note: this vectorization keeps the full upper triangle of each Hermitian log
-> as `C` real diagonal entries plus `C(C−1)/2` complex off-diagonals stored as
-> `[real, imag]`, i.e. `C²` reals per band.
+> `num_off_diag_bands` is a matrix-offset count, not the number of frequency
+> bands: `1` retains `(i,i+1)` and `2` additionally retains `(i,i+2)`.
 
 ## Build
 
@@ -247,6 +248,7 @@ All parameters have safe defaults; window/stride are in milliseconds and are con
 | `stft_size` | STFT length (samples) | 256 |
 | `stft_hop` | STFT hop within window (samples) | 128 |
 | `num_bands` | frequency bands averaged into the CSD | 4 (config) / 8 (code default) |
+| `num_off_diag_bands` | upper matrix offsets retained in addition to the diagonal | 2 |
 | `channel_subset` | channel ids to featurize (empty ⇒ all) | 8-ch subset (config) |
 | `ring_capacity` | max feature windows stored per class | 2000 |
 | `mlp_hidden` | hidden units per layer | 64 |

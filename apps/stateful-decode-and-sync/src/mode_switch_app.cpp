@@ -14,6 +14,8 @@ namespace app {
 // Upstream broadband source node id (see config JSON).
 static constexpr uint32_t kBroadbandNodeId = 1;
 
+ModeSwitchApp::~ModeSwitchApp() { feature_worker_.stop(); }
+
 control::TransitionResult storage_failure(const CollectionStore::OperationResult& status) {
   using stateful_decode_and_sync::v1::ERROR_INTERNAL;
   using stateful_decode_and_sync::v1::ERROR_OUT_OF_RANGE;
@@ -147,6 +149,8 @@ bool ModeSwitchApp::parse_config(const synapse::ApplicationNodeConfig& configura
     cfg_.stft_size = static_cast<std::size_t>(num("stft_size", 256));
     cfg_.stft_hop = static_cast<std::size_t>(num("stft_hop", 128));
     cfg_.num_bands = static_cast<std::size_t>(num("num_bands", 8));
+    cfg_.num_off_diag_bands =
+        static_cast<std::size_t>(num("num_off_diag_bands", 2));
     cfg_.ring_capacity = static_cast<std::size_t>(num("ring_capacity", 2000));
     cfg_.mlp_hidden = static_cast<std::size_t>(num("mlp_hidden", 64));
     cfg_.mlp_dropout = static_cast<float>(num("mlp_dropout", 0.2));
@@ -168,10 +172,12 @@ bool ModeSwitchApp::parse_config(const synapse::ApplicationNodeConfig& configura
     application_config_ = configuration;
     spdlog::info(
         "Config: fs={} Hz classes={} window={} ms stride={} ms stft={}({}) bands={} "
+        "off_diag_bands={} "
         "ring={} hidden={} dropout={} lr={} epochs={} seed={:#x} subset={}",
         cfg_.sample_rate_hz, cfg_.num_classes, cfg_.window_ms, cfg_.stride_ms, cfg_.stft_size,
-        cfg_.stft_hop, cfg_.num_bands, cfg_.ring_capacity, cfg_.mlp_hidden, cfg_.mlp_dropout,
-        cfg_.mlp_lr, cfg_.mlp_epochs, cfg_.synthetic_seed, cfg_.channel_subset.size());
+        cfg_.stft_hop, cfg_.num_bands, cfg_.num_off_diag_bands, cfg_.ring_capacity,
+        cfg_.mlp_hidden, cfg_.mlp_dropout, cfg_.mlp_lr, cfg_.mlp_epochs, cfg_.synthetic_seed,
+        cfg_.channel_subset.size());
     return true;
   } catch (const std::exception& e) {
     spdlog::error("Failed to parse configuration: {}", e.what());
@@ -707,6 +713,11 @@ void ModeSwitchApp::main() {
   while (node_running_) {
     publish_periodic_state_if_due();
 
+    // Feature extraction runs off-thread.  Keep result routing bounded so a
+    // burst of completed windows cannot starve raw acquisition.
+    drain_feature_results();
+    maybe_log_feature_worker_diagnostics();
+
     // Apply every queued request before reading/routing the next source
     // sample. No feature window can see an intermediate target transition.
     drain_fit_events();
@@ -746,7 +757,8 @@ void ModeSwitchApp::main() {
                           static_cast<uint64_t>(synthetic_seq_ * ns_per_sample);
       synapse::BroadbandFrame out;
       out.set_timestamp_ns(ts);
-      out.set_sequence_number(synthetic_seq_);
+      const auto source_sequence_number = synthetic_seq_;
+      out.set_sequence_number(source_sequence_number);
       out.set_sample_rate_hz(cfg_.sample_rate_hz);
       out.set_unix_timestamp_ns(synapse::get_steady_clock_now().count());
       for (int32_t s : synth_data) out.add_frame_data(s);
@@ -754,7 +766,10 @@ void ModeSwitchApp::main() {
 
       publish_tap("broadband_out", out);
       initialize_pipeline(synth_data.size());
-      ingest_sample(synth_data, ts);
+      enqueue_feature_batch(
+          {FeatureWorker::Sample{std::move(synth_data), source_sequence_number, ts}},
+          feature_route());
+      synth_data.clear();
 
       // Pace roughly to the sample rate so we don't free-run the CPU. This is a
       // coarse throttle, not a hard real-time guarantee.
@@ -771,16 +786,21 @@ void ModeSwitchApp::main() {
       continue;
     }
 
+    std::vector<FeatureWorker::Sample> samples;
+    samples.reserve(batch.frames.size());
     for (const auto& in_frame : batch.frames) {
       publish_tap("broadband_out", in_frame);
 
-      // Feed the pipeline from the real frame.
       const int n = in_frame.frame_data_size();
-      std::vector<int32_t> data(n);
-      for (int i = 0; i < n; ++i) data[i] = in_frame.frame_data(i);
+      FeatureWorker::Sample sample;
+      sample.values.resize(n);
+      for (int i = 0; i < n; ++i) sample.values[i] = in_frame.frame_data(i);
+      sample.source_sequence_number = in_frame.sequence_number();
+      sample.timestamp_ns = in_frame.timestamp_ns();
+      samples.push_back(std::move(sample));
       initialize_pipeline(static_cast<std::size_t>(n));
-      ingest_sample(data, in_frame.timestamp_ns());
     }
+    enqueue_feature_batch(std::move(samples), feature_route());
   }
 }
 
@@ -856,7 +876,7 @@ void ModeSwitchApp::maybe_log_reader_diagnostics(const ReadBatch& batch) {
 }
 
 // ---------------------------------------------------------------------------
-// Pipeline: windowing -> featurize -> capture/classify
+// Pipeline: windowing -> FIFO compute (MPF + inference) -> capture/classify
 // ---------------------------------------------------------------------------
 void ModeSwitchApp::initialize_pipeline(std::size_t upstream_channels) {
   if (pipeline_ready_ || pipeline_error_ || upstream_channels == 0) {
@@ -899,17 +919,13 @@ void ModeSwitchApp::initialize_pipeline(std::size_t upstream_channels) {
     window_samples_ = cfg_.stft_size;
   }
 
-  window_ring_.assign(featurized_channels_, std::vector<float>(window_samples_, 0.0f));
-  ring_pos_ = 0;
-  samples_seen_ = 0;
-  samples_since_stride_ = 0;
-
   MpfFeaturizer::Config fcfg;
   fcfg.num_channels = featurized_channels_;
   fcfg.stft_size = cfg_.stft_size;
   fcfg.stft_hop = cfg_.stft_hop;
   fcfg.num_bands = cfg_.num_bands;
-  featurizer_ = std::make_unique<MpfFeaturizer>(fcfg);
+  fcfg.num_off_diag_bands = cfg_.num_off_diag_bands;
+  featurizer_ = std::make_shared<MpfFeaturizer>(fcfg);
 
   {
     std::lock_guard<std::mutex> lock(model_mutex_);
@@ -935,6 +951,24 @@ void ModeSwitchApp::initialize_pipeline(std::size_t upstream_channels) {
     mlp_.init(mcfg);
   }
 
+  FeatureWorker::Config worker_config;
+  worker_config.channel_map = channel_map_;
+  worker_config.window_samples = window_samples_;
+  worker_config.stride_samples = stride_samples_;
+  worker_config.featurizer = featurizer_;
+  worker_config.classifier = [this](const std::vector<float>& feature) {
+    std::lock_guard<std::mutex> lock(model_mutex_);
+    return mlp_.infer(feature);
+  };
+  if (!feature_worker_.start(std::move(worker_config))) {
+    spdlog::error("Failed to start feature worker");
+    pipeline_error_ = true;
+    pipeline_error_message_ = "failed to start feature worker";
+    set_last_error(control::failure(stateful_decode_and_sync::v1::ERROR_INTERNAL, "pipeline",
+                                    pipeline_error_message_));
+    return;
+  }
+
   pipeline_ready_ = true;
   pipeline_error_ = false;
   pipeline_error_message_.clear();
@@ -944,71 +978,67 @@ void ModeSwitchApp::initialize_pipeline(std::size_t upstream_channels) {
   publish_state_snapshot();
 }
 
-void ModeSwitchApp::ingest_sample(const std::vector<int32_t>& frame_data,
-                                  uint64_t timestamp_ns) {
-  if (!pipeline_ready_) {
-    return;
-  }
-  // Write this time-point into the ring at ring_pos_.
-  for (std::size_t fc = 0; fc < featurized_channels_; ++fc) {
-    const std::size_t up = channel_map_[fc];
-    const float v = (up < frame_data.size()) ? static_cast<float>(frame_data[up]) : 0.0f;
-    window_ring_[fc][ring_pos_] = v;
-  }
-  ring_pos_ = (ring_pos_ + 1) % window_samples_;
-  ++samples_seen_;
-  ++samples_since_stride_;
+FeatureWorker::Route ModeSwitchApp::feature_route() const {
+  FeatureWorker::Route route;
+  route.capture_enabled = active_target_.capture_enabled;
+  route.collection_id = active_target_.collection_id;
+  route.label = active_target_.label;
+  route.classify = model_ready_;
+  return route;
+}
 
-  // Once the window is full, emit a feature vector every stride_samples_.
-  if (samples_seen_ >= window_samples_ && samples_since_stride_ >= stride_samples_) {
-    samples_since_stride_ = 0;
-    process_window(timestamp_ns);
+void ModeSwitchApp::enqueue_feature_batch(std::vector<FeatureWorker::Sample> samples,
+                                          const FeatureWorker::Route& route) {
+  if (!pipeline_ready_ || samples.empty()) return;
+  FeatureWorker::SampleBatch batch;
+  batch.samples = std::move(samples);
+  batch.route = route;
+  feature_worker_.try_enqueue(std::move(batch));
+}
+
+void ModeSwitchApp::drain_feature_results() {
+  FeatureWorker::Result result;
+  std::size_t drained = 0;
+  constexpr std::size_t kMaxResultsPerTurn = 8;
+  while (drained < kMaxResultsPerTurn && feature_worker_.poll(result)) {
+    ++drained;
+    if (result.route.capture_enabled) {
+      std::lock_guard<std::mutex> lock(model_mutex_);
+      const auto status = buffers_.append(result.route.collection_id, result.route.label,
+                                          result.feature);
+      if (!status.success) {
+        spdlog::error("capture rejected: {} ({})", status.message,
+                      CollectionStore::error_code_name(status.error));
+      }
+    }
+
+    if (result.route.classify && !result.probabilities.empty()) {
+      publish_class(result.probabilities, result.timestamp_ns);
+    }
   }
 }
 
-void ModeSwitchApp::process_window(uint64_t window_end_timestamp_ns) {
-  // Unroll the ring into contiguous [C][N] order (oldest -> newest) so the STFT
-  // sees time-correct blocks.
-  std::vector<std::vector<float>> window(featurized_channels_);
-  for (std::size_t fc = 0; fc < featurized_channels_; ++fc) {
-    window[fc].resize(window_samples_);
-    for (std::size_t n = 0; n < window_samples_; ++n) {
-      const std::size_t idx = (ring_pos_ + n) % window_samples_;
-      window[fc][n] = window_ring_[fc][idx];
-    }
-  }
+void ModeSwitchApp::maybe_log_feature_worker_diagnostics() {
+  static auto last_log = std::chrono::steady_clock::now();
+  const auto now = std::chrono::steady_clock::now();
+  if (now - last_log < std::chrono::seconds(1)) return;
+  last_log = now;
 
-  std::vector<float> feature = featurizer_->compute(window);
-
-  // Route to capture and/or classification.
-  const bool capturing = active_target_.capture_enabled;
-  if (capturing) {
-    const std::size_t collection = active_target_.collection_id;
-    const std::size_t label = active_target_.label;
-    std::lock_guard<std::mutex> lock(model_mutex_);
-    const auto append_status = buffers_.append(collection, label, feature);
-    if (!append_status.success) {
-      spdlog::error("capture rejected: {} ({})", append_status.message,
-                    CollectionStore::error_code_name(append_status.error));
-      return;
-    }
-    // Log per-class counts occasionally.
-    static thread_local std::size_t log_ctr = 0;
-    if ((++log_ctr % 50) == 0) {
-      spdlog::info("capture collection={} label={} count={} total={}", collection, label,
-                   append_status.count, append_status.total);
-    }
-  }
-
-  if (model_ready_) {
-    std::vector<float> probs;
-    {
-      std::lock_guard<std::mutex> lock(model_mutex_);
-      probs = mlp_.infer(feature);
-    }
-    if (!probs.empty()) {
-      publish_class(probs, window_end_timestamp_ns);
-    }
+  const auto stats = feature_worker_.stats();
+  if (stats.input_batches_dropped != 0 || stats.compute_jobs_dropped != 0 ||
+      stats.results_dropped != 0 || stats.compute_errors != 0 ||
+      stats.pending_input_batches != 0 || stats.pending_compute_jobs != 0 ||
+      stats.pending_results != 0) {
+    spdlog::info(
+        "Feature worker diagnostics: input_batches={} input_samples={} "
+        "compute_enqueued={} compute_dropped={} windows={} results={} "
+        "pending_batches={} pending_compute={} pending_results={} "
+        "compute_errors={} dropped_batches={} dropped_samples={} dropped_results={}",
+        stats.input_batches, stats.input_samples, stats.compute_jobs_enqueued,
+        stats.compute_jobs_dropped, stats.windows_computed, stats.results_enqueued,
+        stats.pending_input_batches, stats.pending_compute_jobs, stats.pending_results,
+        stats.compute_errors, stats.input_batches_dropped, stats.input_samples_dropped,
+        stats.results_dropped);
   }
 }
 

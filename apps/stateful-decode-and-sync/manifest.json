@@ -18,6 +18,7 @@
             "stft_size": 256,
             "stft_hop": 128,
             "num_bands": 4,
+            "num_off_diag_bands": 2,
             "channel_subset": [0, 4, 8, 12, 16, 20, 24, 28],
             "ring_capacity": 2000,
             "mlp_hidden": 64,

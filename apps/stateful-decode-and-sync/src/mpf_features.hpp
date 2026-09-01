@@ -21,11 +21,11 @@ namespace app {
 //   3. Regularise S_b <- S_b + eps*I, then take the Hermitian matrix logarithm
 //        L_b = U diag(log lambda) U^H
 //      via a cyclic-Jacobi Hermitian eigensolver.
-//   4. Feature = concat over bands of the upper triangle (incl. diagonal) of
-//      L_b, flattened as [real, imag] for off-diagonal entries and [real] for
-//      diagonal entries (the diagonal of a Hermitian log is real). Length is
-//      num_bands * (C^2) real values: C diagonal reals + C(C-1)/2 complex
-//      off-diagonals * 2.
+//   4. Feature = concat over bands of the diagonal and the first
+//      `num_off_diag_bands` upper off-diagonal bands of L_b. Diagonal entries
+//      are real; off-diagonal entries are flattened as [real, imag].
+//      `num_off_diag_bands` is a matrix offset count: 1 retains (i,i+1), 2
+//      additionally retains (i,i+2), and values above C-1 are clamped.
 //
 // Output dimension is reported by feature_dim() so callers can size the MLP
 // input layer before any data arrives.
@@ -36,6 +36,7 @@ class MpfFeaturizer {
     std::size_t stft_size = 256;    // STFT length in samples (need not be pow2)
     std::size_t stft_hop = 128;     // STFT hop within the window
     std::size_t num_bands = 8;      // B: contiguous frequency bands
+    std::size_t num_off_diag_bands = 2;  // retained upper matrix offsets
     float eps = 1e-3f;              // diagonal regularisation before logm
   };
 

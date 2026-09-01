@@ -23,6 +23,7 @@
 #include "control_state.hpp"
 #include "synthetic_source.hpp"
 #include "multipart_drain.hpp"
+#include "feature_worker.hpp"
 
 namespace app {
 
@@ -44,12 +45,16 @@ namespace app {
 //   command_result   CommandResult              correlated command outcome
 //
 // Tap callbacks run on their own threads; they only validate and enqueue small
-// requests, then return fast. Control mutations, featurisation, capture,
-// classification, worker-event draining, and publication run serially in
-// main(); the FitWorker performs only private candidate training off-thread.
+// requests, then return fast. The main loop forwards raw frames and transfers
+// value-owned sample batches to FeatureWorker. FeatureWorker continuously
+// drains/window-aligns samples and sends completed windows to its FIFO compute
+// thread for MPF and optional inference; the main loop drains bounded results
+// for capture and SDK publication. FitWorker performs only private candidate
+// training off-thread.
 class ModeSwitchApp : public synapse::App {
  public:
   ModeSwitchApp() = default;
+  ~ModeSwitchApp() override;
   virtual bool setup() override;
 
  protected:
@@ -67,6 +72,7 @@ class ModeSwitchApp : public synapse::App {
     std::size_t stft_size = 256;
     std::size_t stft_hop = 128;
     std::size_t num_bands = 8;
+    std::size_t num_off_diag_bands = 2;
     std::vector<int> channel_subset;  // empty => all upstream channels
     std::size_t ring_capacity = 2000;
     std::size_t mlp_hidden = 64;
@@ -110,13 +116,13 @@ class ModeSwitchApp : public synapse::App {
   // returned in wire order; false means no valid frame was available.
   bool read_frames(ReadBatch& batch);
   void maybe_log_reader_diagnostics(const ReadBatch& batch);
+  FeatureWorker::Route feature_route() const;
+  void enqueue_feature_batch(std::vector<FeatureWorker::Sample> samples,
+                             const FeatureWorker::Route& route);
+  void drain_feature_results();
+  void maybe_log_feature_worker_diagnostics();
   // Lazily size window/stride/featurizer/MLP once we know the channel layout.
   void initialize_pipeline(std::size_t upstream_channels);
-  // Push one time-point (all channels) into the sliding window ring; when the
-  // window advances by one stride, featurise + capture/classify.
-  void ingest_sample(const std::vector<int32_t>& frame_data, uint64_t timestamp_ns);
-  // Featurise the current window, route to capture and/or classify.
-  void process_window(uint64_t window_end_timestamp_ns);
   // Start a queued training pass and drain_fit_events() handles worker output.
   void maybe_fit();
   void publish_class(const std::vector<float>& probs, uint64_t timestamp_ns);
@@ -164,14 +170,8 @@ class ModeSwitchApp : public synapse::App {
   std::size_t window_samples_ = 0;
   std::size_t stride_samples_ = 0;
 
-  // Sliding per-channel window buffers ([featurized_channels_][window_samples_]
-  // ring) plus bookkeeping for the stride trigger.
-  std::vector<std::vector<float>> window_ring_;
-  std::size_t ring_pos_ = 0;
-  std::size_t samples_seen_ = 0;
-  std::size_t samples_since_stride_ = 0;
-
-  std::unique_ptr<MpfFeaturizer> featurizer_;
+  std::shared_ptr<const MpfFeaturizer> featurizer_;
+  FeatureWorker feature_worker_;
 
   // Collection/model access is guarded by model_mutex_. Collection snapshots
   // are copied under this lock, while FitWorker trains an independent

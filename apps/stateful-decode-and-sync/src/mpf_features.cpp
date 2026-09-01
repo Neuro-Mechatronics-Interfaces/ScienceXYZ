@@ -32,10 +32,11 @@ MpfFeaturizer::MpfFeaturizer(const Config& cfg) : cfg_(cfg) {
     }
   }
 
-  // Per band the upper triangle (incl. diagonal) of a C*C Hermitian log:
-  //   C real diagonal values + C(C-1)/2 complex off-diagonals * 2 reals
-  //   = C + C*(C-1) = C*C real values.
-  feature_dim_ = B * (C * C);
+  // Keep the diagonal plus only the first K upper off-diagonal matrix bands.
+  // Offset d contains C-d entries, each represented by two real values.
+  const std::size_t K = std::min(cfg_.num_off_diag_bands, C > 0 ? C - 1 : 0);
+  const std::size_t per_band_dim = C + K * (2 * C - K - 1);
+  feature_dim_ = B * per_band_dim;
 }
 
 void MpfFeaturizer::hermitian_eig(std::vector<Complex>& A, std::size_t n,
@@ -240,15 +241,17 @@ std::vector<float> MpfFeaturizer::compute(
       }
     }
 
-    // Vectorise the upper triangle incl. diagonal: diagonal reals, then
-    // off-diagonal [real, imag]. Total C*C reals per band.
+    // Vectorise the diagonal plus the first configured upper off-diagonal
+    // bands. Offset d contains entries (i, i+d), each as [real, imag].
     for (std::size_t i = 0; i < C; ++i) {
       feature[out++] = static_cast<float>(L[at(i, i)].real());
     }
-    for (std::size_t i = 0; i < C; ++i) {
-      for (std::size_t j = i + 1; j < C; ++j) {
-        feature[out++] = static_cast<float>(L[at(i, j)].real());
-        feature[out++] = static_cast<float>(L[at(i, j)].imag());
+    const std::size_t K = std::min(cfg_.num_off_diag_bands, C > 0 ? C - 1 : 0);
+    for (std::size_t d = 1; d <= K; ++d) {
+      for (std::size_t i = 0; i + d < C; ++i) {
+        const auto value = L[at(i, i + d)];
+        feature[out++] = static_cast<float>(value.real());
+        feature[out++] = static_cast<float>(value.imag());
       }
     }
   }

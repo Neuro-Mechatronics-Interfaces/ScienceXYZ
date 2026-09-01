@@ -1,0 +1,19 @@
+digraph feature_worker_pipeline {
+  graph [rankdir=LR, bgcolor="transparent", labelloc=t,
+         label="stateful-decode-and-sync stride work pipeline"];
+  node [shape=box, style="rounded,filled", fontname=" sans", fontsize=10,
+        color="#40566f", fillcolor="#eef4ff"];
+  edge [color="#40566f", fontname=" sans", fontsize=9];
+
+  source [label="BroadbandSource\n20 kHz frames"];
+  acquisition [label="App acquisition loop\nforward raw frame first"];
+  ingest [label="FeatureWorker ingestion\nFIFO SampleBatch\nwindow/ring bookkeeping"];
+  compute [label="FeatureWorker compute\nFIFO WindowJob\nMPF + optional inference\none worker, in order"];
+  results [label="Feature results\nbounded FIFO\ncapture + class publication"];
+
+  source -> acquisition [label="receive_multipart()"];
+  acquisition -> ingest [label="value-owned samples"];
+  ingest -> compute [label="completed window"];
+  compute -> results [label="FeatureResult"];
+  results -> acquisition [label="bounded drain"];
+}
