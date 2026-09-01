@@ -434,3 +434,20 @@ Do not substitute ID 1000 for the missing physical reference. Reconnect or
 restore the adapter/probe path, then rerun `synapsectl -u 192.168.100.157 info`
 and use only the newly reported physical `kBroadbandSource` ID before any
 deployment or measured alignment trial.
+
+### 2026-09-01 - T-35 bounded two-wireless host support
+
+Generalized the SDK-independent aggregate adapter and deterministic simulator
+from exactly four to bounded one-to-four sources, retaining the old
+`FourSourceAdapter` and `FourSourceSimulator` names as compatibility aliases.
+The simulator now carries explicit topics, source time domains, and channel
+descriptors. Added a two-source EMG/IMU recorder-boundary test for native rates
+and channel counts, payload formats, channel ordering/units, raw source and
+gateway metadata, independent host receipt timestamps, and explicit loss
+diagnostics.
+
+The deployable two-source profile remains gated: the repository does not yet
+contain confirmed real source IDs, topics, endpoints, gateway/session/clock
+identities, wire formats, batch sizes, source tick domains, units, or
+quaternion order. Do not create it from simulator values. See
+[`docs/t35-two-wireless-profile-gate.md`](docs/t35-two-wireless-profile-gate.md).

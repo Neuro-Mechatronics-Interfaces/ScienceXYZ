@@ -265,18 +265,19 @@ std::vector<AdapterDiagnostic> WirelessSourceAdapter::drain_diagnostics() {
   return result;
 }
 
-FourSourceAdapter::FourSourceAdapter(std::vector<AdapterConfig> configs,
-                                     std::size_t aggregate_queue_capacity)
+MultiSourceAdapter::MultiSourceAdapter(std::vector<AdapterConfig> configs,
+                                       std::size_t aggregate_queue_capacity)
     : aggregate_queue_capacity_(aggregate_queue_capacity) {
-  if (configs.size() != kMaxSources || aggregate_queue_capacity == 0) {
-    construction_error_ = "four-source adapter requires exactly four bounded instances";
+  if (configs.empty() || configs.size() > kMaxSources ||
+      aggregate_queue_capacity == 0) {
+    construction_error_ = "multi-source adapter requires one to four bounded instances";
     return;
   }
   for (std::size_t i = 0; i < configs.size(); ++i) {
     for (std::size_t j = 0; j < i; ++j) {
       if (configs[i].source_id == configs[j].source_id ||
           (!configs[i].topic.empty() && configs[i].topic == configs[j].topic)) {
-        construction_error_ = "four-source adapter identities must be unique";
+        construction_error_ = "multi-source adapter identities must be unique";
       }
     }
     auto adapter = std::make_unique<WirelessSourceAdapter>(std::move(configs[i]));
@@ -285,13 +286,13 @@ FourSourceAdapter::FourSourceAdapter(std::vector<AdapterConfig> configs,
   }
 }
 
-void FourSourceAdapter::add_diagnostic(AdapterDiagnostic diagnostic) {
+void MultiSourceAdapter::add_diagnostic(AdapterDiagnostic diagnostic) {
   if (diagnostics_.size() == kDiagnosticHistoryCapacity) diagnostics_.pop_front();
   diagnostics_.push_back(std::move(diagnostic));
 }
 
-bool FourSourceAdapter::submit(AcceptedBatch batch,
-                               std::uint64_t host_receive_time_ns) {
+bool MultiSourceAdapter::submit(AcceptedBatch batch,
+                                std::uint64_t host_receive_time_ns) {
   if (!valid()) return false;
   for (std::size_t i = 0; i < adapters_.size(); ++i) {
     if (batch.batch.source_id() == adapters_[i]->source_id()) {
@@ -322,7 +323,7 @@ bool FourSourceAdapter::submit(AcceptedBatch batch,
   return false;
 }
 
-std::optional<NormalizedWirelessBatch> FourSourceAdapter::pop_next() {
+std::optional<NormalizedWirelessBatch> MultiSourceAdapter::pop_next() {
   if (!valid() || queued_batches_ == 0) return std::nullopt;
   for (std::size_t offset = 0; offset < adapters_.size(); ++offset) {
     const auto index = (pop_cursor_ + offset) % adapters_.size();
@@ -335,7 +336,7 @@ std::optional<NormalizedWirelessBatch> FourSourceAdapter::pop_next() {
   return std::nullopt;
 }
 
-std::optional<ClockObservationResult> FourSourceAdapter::observe_clock_sync(
+std::optional<ClockObservationResult> MultiSourceAdapter::observe_clock_sync(
     const std::string& source_id, const ClockSyncSample& sample) {
   for (const auto& adapter : adapters_) {
     if (adapter->source_id() == source_id) return adapter->observe_clock_sync(sample);
@@ -343,7 +344,7 @@ std::optional<ClockObservationResult> FourSourceAdapter::observe_clock_sync(
   return std::nullopt;
 }
 
-std::vector<AdapterDiagnostic> FourSourceAdapter::drain_diagnostics() {
+std::vector<AdapterDiagnostic> MultiSourceAdapter::drain_diagnostics() {
   std::vector<AdapterDiagnostic> result;
   while (!diagnostics_.empty()) {
     result.push_back(std::move(diagnostics_.front()));

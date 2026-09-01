@@ -71,14 +71,18 @@ after the configured model age, mapping is explicitly unbounded.
 accepts value-owned `AcceptedBatch` objects, performs a bounded contract check,
 detects duplicate/gap/reorder/session conditions, preserves the complete
 source/gateway protobuf metadata, adds the host receipt stamp, and derives
-per-sample source ticks and optional affine intervals. `FourSourceAdapter` owns
-four configured instances and adds aggregate queue scheduling without copying
-source-specific implementations.
+per-sample source ticks and optional affine intervals. `MultiSourceAdapter`
+owns one to four configured instances and adds aggregate queue scheduling
+without copying source-specific implementations. `FourSourceAdapter` remains a
+source-compatible alias for existing four-source callers.
 
-`src/wireless_simulator.{hpp,cpp}` emits the same `AcceptedBatch` shape for four
-independent rates. Its deterministic controls cover clock drift, gateway jitter,
-batch loss, adjacent reordering, and a boot-session reset. It never repairs a
-gap or replaces a source/gateway timestamp with the host timestamp.
+`src/wireless_simulator.{hpp,cpp}` emits the same `AcceptedBatch` shape for one
+to four independent rates. Its deterministic controls cover clock drift,
+gateway jitter, batch loss, adjacent reordering, and a boot-session reset. The
+fixture can also carry an explicit topic, source time domain, and channel
+descriptors so recorder-boundary tests exercise units and channel ordering. It
+never repairs a gap or replaces a source/gateway timestamp with the host
+timestamp. `FourSourceSimulator` remains a source-compatible alias.
 
 The application Docker build uses the app directory as its context. Therefore
 `proto/wireless/v1/wireless_batch.proto` is a context-local mirror of the
@@ -93,7 +97,7 @@ peripheral ID or live gateway endpoint. Replace only the source identities and
 gateway transport settings when connecting real external gateways, while
 retaining the explicit source/gateway/host timestamp fields and diagnostics.
 
-For the smallest mixed-source setup, use
+For the smallest currently checked-in mixed-source setup, use
 [`config/host/rhd2132_plus_one_wireless.json`](../config/host/rhd2132_plus_one_wireless.json).
 It combines the existing RHD2132 app-config reference with one `emg-left`
 WirelessBatch v1 source and the same affine-clock/diagnostic policy. The file
@@ -101,6 +105,14 @@ is an orchestration profile for host fusion; it is not a `synapsectl start`
 input because the external wireless source is not a Synapse graph node in the
 supported topology. Resolve the actual RHD2132 peripheral identity from live
 `synapsectl info` output before deployment.
+
+T-35 does not add a deployable two-wireless profile yet. The repository has no
+confirmed EMG/IMU logical IDs, exact topics/endpoints, gateway/session/clock
+identities, wire formats, batch sizes, source tick domains, units, or
+quaternion component order. Adding values from the simulator or the existing
+one-source example would create a misleading hardware profile. The required
+confirmation checklist and the intended host-only profile boundary are tracked
+in [`t35-two-wireless-profile-gate.md`](t35-two-wireless-profile-gate.md).
 
 For the measured cross-source acceptance gate, use the JSON report checker and
 bench procedure in [`alignment-acceptance.md`](alignment-acceptance.md). It

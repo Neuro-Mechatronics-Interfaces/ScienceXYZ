@@ -45,8 +45,8 @@ The editable source for the acquisition/compute flow is
 | `src/feature_decimator.hpp` | guarded integer-decimation plan + anti-alias FIR design |
 | `src/feature_worker.hpp` | staged ingestion/decimation, windowing, ordered compute, and diagnostics |
 | `src/clock_estimator.{hpp,cpp}` | bounded affine source-clock mapping, epochs, and uncertainty intervals |
-| `src/wireless_source_adapter.{hpp,cpp}` | reusable `AcceptedBatch` normalizer; `FourSourceAdapter` owns four instances |
-| `src/wireless_simulator.{hpp,cpp}` | deterministic four-rate simulator with drift, jitter, loss, reorder, and reset controls |
+| `src/wireless_source_adapter.{hpp,cpp}` | reusable `AcceptedBatch` normalizer; `MultiSourceAdapter` owns one to four instances (`FourSourceAdapter` is a compatibility alias) |
+| `src/wireless_simulator.{hpp,cpp}` | deterministic one-to-four-source simulator with drift, jitter, loss, reorder, reset, and channel-metadata controls |
 | `src/mlp.{hpp,cpp}` | hand-rolled 2-hidden-layer MLP + backprop + SGD |
 | `src/fit_worker.hpp` | managed background fit, immutable snapshot, and candidate events |
 | `src/collection_store.hpp` | bounded multi-collection store, flushes, and generations |

@@ -12,6 +12,8 @@ namespace app::wireless {
 
 struct SimulatedSourceConfig {
   std::string source_id;
+  // Empty means the contract's conventional wireless/v1/<source_id> topic.
+  std::string topic;
   RationalRate sample_rate{1000, 1};
   std::uint32_t channel_count = 2;
   sciencexyz::wireless::v1::SampleFormat sample_format =
@@ -29,6 +31,9 @@ struct SimulatedSourceConfig {
   std::string gateway_id = "sim-gateway";
   std::string gateway_session_id = "sim-session";
   std::string gateway_clock_id = "sim-clock";
+  sciencexyz::wireless::v1::SourceTimeDomain source_time_domain =
+      sciencexyz::wireless::v1::SOURCE_TIME_DOMAIN_MONOTONIC_NS;
+  std::vector<sciencexyz::wireless::v1::ChannelDescriptor> channels;
 };
 
 struct SimulatedAcceptedBatch {
@@ -36,16 +41,18 @@ struct SimulatedAcceptedBatch {
   std::uint64_t host_receive_time_ns = 0;
 };
 
-struct FourSourceSimulatorConfig {
+struct MultiSourceSimulatorConfig {
   std::vector<SimulatedSourceConfig> sources;
   std::size_t max_output_batches = 4096;
 };
 
+using FourSourceSimulatorConfig = MultiSourceSimulatorConfig;
+
 // Deterministic, hardware-free source publisher. Each source is configured
 // once and emits the same WirelessBatch v1 envelope used by the gateway.
-class FourSourceSimulator {
+class MultiSourceSimulator {
  public:
-  explicit FourSourceSimulator(FourSourceSimulatorConfig config);
+  explicit MultiSourceSimulator(MultiSourceSimulatorConfig config);
 
   bool valid() const { return construction_error_.empty(); }
   const std::string& construction_error() const { return construction_error_; }
@@ -54,8 +61,10 @@ class FourSourceSimulator {
  private:
   static constexpr std::size_t kSourceCount = 4;
 
-  FourSourceSimulatorConfig config_;
+  MultiSourceSimulatorConfig config_;
   std::string construction_error_;
 };
+
+using FourSourceSimulator = MultiSourceSimulator;
 
 }  // namespace app::wireless

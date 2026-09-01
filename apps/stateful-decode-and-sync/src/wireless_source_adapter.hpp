@@ -126,10 +126,13 @@ class WirelessSourceAdapter {
   std::deque<AdapterDiagnostic> diagnostics_;
 };
 
-class FourSourceAdapter {
+// Bounded aggregate adapter for one to four independent logical sources.
+// FourSourceAdapter remains an alias below for source compatibility with the
+// original T-25 API.
+class MultiSourceAdapter {
  public:
-  FourSourceAdapter(std::vector<AdapterConfig> configs,
-                    std::size_t aggregate_queue_capacity = 256);
+  MultiSourceAdapter(std::vector<AdapterConfig> configs,
+                     std::size_t aggregate_queue_capacity = 256);
 
   bool valid() const { return construction_error_.empty(); }
   const std::string& construction_error() const { return construction_error_; }
@@ -153,5 +156,7 @@ class FourSourceAdapter {
   std::string construction_error_;
   std::deque<AdapterDiagnostic> diagnostics_;
 };
+
+using FourSourceAdapter = MultiSourceAdapter;
 
 }  // namespace app::wireless

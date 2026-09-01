@@ -7,6 +7,8 @@
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <tuple>
+#include <unordered_map>
 #include <vector>
 
 namespace {
@@ -19,6 +21,9 @@ using app::wireless::ClockSyncSample;
 using app::wireless::FourSourceAdapter;
 using app::wireless::FourSourceSimulator;
 using app::wireless::FourSourceSimulatorConfig;
+using app::wireless::MultiSourceAdapter;
+using app::wireless::MultiSourceSimulator;
+using app::wireless::MultiSourceSimulatorConfig;
 using app::wireless::NormalizedWirelessBatch;
 using app::wireless::RationalRate;
 using app::wireless::SimulatedSourceConfig;
@@ -190,6 +195,181 @@ void test_deterministic_four_source_adapter() {
          "loss, reordering, and missing clock lock remain explicit diagnostics");
 }
 
+MultiSourceSimulatorConfig two_source_simulator_config() {
+  MultiSourceSimulatorConfig config;
+  config.max_output_batches = 64;
+
+  SimulatedSourceConfig emg;
+  emg.source_id = "sim-emg-8ch";
+  emg.topic = "wireless/v1/sim-emg-8ch";
+  emg.sample_rate = RationalRate{2048, 1};
+  emg.channel_count = 8;
+  emg.sample_format = sciencexyz::wireless::v1::SAMPLE_FORMAT_INT16_LE;
+  emg.source_tick_frequency_hz = 2'048'000;
+  emg.samples_per_batch = 32;  // Simulator fixture; hardware batch size is pending.
+  emg.batch_count = 4;
+  emg.start_source_tick = 10'000;
+  emg.start_reference_time_ns = 2'000'000'000;
+  emg.gateway_id = "sim-gateway-emg";
+  emg.gateway_session_id = "sim-session-emg";
+  emg.gateway_clock_id = "sim-clock-emg";
+  for (std::uint32_t i = 0; i < emg.channel_count; ++i) {
+    sciencexyz::wireless::v1::ChannelDescriptor descriptor;
+    descriptor.set_channel_id("emg-" + std::to_string(i));
+    descriptor.set_label("EMG " + std::to_string(i));
+    descriptor.set_unit("uV");
+    emg.channels.push_back(std::move(descriptor));
+  }
+  config.sources.push_back(std::move(emg));
+
+  SimulatedSourceConfig imu;
+  imu.source_id = "sim-imu-10ch";
+  imu.topic = "wireless/v1/sim-imu-10ch";
+  imu.sample_rate = RationalRate{128, 1};
+  imu.channel_count = 10;
+  imu.sample_format = sciencexyz::wireless::v1::SAMPLE_FORMAT_FLOAT32_LE;
+  imu.source_tick_frequency_hz = 1'000'000;
+  imu.samples_per_batch = 8;  // Simulator fixture; hardware batch size is pending.
+  imu.batch_count = 4;
+  imu.start_source_tick = 20'000;
+  imu.start_reference_time_ns = 2'000'000'000;
+  imu.clock_drift_ppm = 12.0;
+  imu.gateway_jitter_ns = 150;
+  imu.loss_every_n_batches = 3;
+  imu.gateway_id = "sim-gateway-imu";
+  imu.gateway_session_id = "sim-session-imu";
+  imu.gateway_clock_id = "sim-clock-imu";
+  // WXYZ is deliberately fixture-only; the hardware quaternion order is a
+  // profile-gating fact and must be confirmed before deployment.
+  const std::vector<std::pair<std::string, std::string>> imu_channels{
+      {"accel_x", "m/s^2"}, {"accel_y", "m/s^2"}, {"accel_z", "m/s^2"},
+      {"gyro_x", "rad/s"},   {"gyro_y", "rad/s"},   {"gyro_z", "rad/s"},
+      {"quat_w", "unitless"}, {"quat_x", "unitless"},
+      {"quat_y", "unitless"}, {"quat_z", "unitless"}};
+  for (const auto& [channel_id, unit] : imu_channels) {
+    sciencexyz::wireless::v1::ChannelDescriptor descriptor;
+    descriptor.set_channel_id(channel_id);
+    descriptor.set_label(channel_id);
+    descriptor.set_unit(unit);
+    imu.channels.push_back(std::move(descriptor));
+  }
+  config.sources.push_back(std::move(imu));
+  return config;
+}
+
+std::vector<AdapterConfig> two_source_adapter_configs() {
+  std::vector<AdapterConfig> configs;
+  for (const auto& [source_id, rate, channels, format, tick_frequency] :
+       std::vector<std::tuple<std::string, RationalRate, std::uint32_t,
+                              sciencexyz::wireless::v1::SampleFormat, std::uint64_t>>{
+           {"sim-emg-8ch", RationalRate{2048, 1}, 8,
+            sciencexyz::wireless::v1::SAMPLE_FORMAT_INT16_LE, 2'048'000},
+           {"sim-imu-10ch", RationalRate{128, 1}, 10,
+            sciencexyz::wireless::v1::SAMPLE_FORMAT_FLOAT32_LE, 1'000'000}}) {
+    AdapterConfig adapter;
+    adapter.source_id = source_id;
+    adapter.topic = "wireless/v1/" + source_id;
+    adapter.expected_sample_rate = rate;
+    adapter.expected_channel_count = channels;
+    adapter.expected_sample_format = format;
+    adapter.max_batch_samples = 32;
+    adapter.queue_capacity_batches = 16;
+    adapter.clock.nominal_source_tick_frequency_hz =
+        static_cast<double>(tick_frequency);
+    configs.push_back(std::move(adapter));
+  }
+  return configs;
+}
+
+void test_two_source_emg_imu_adapter_and_recorder_boundary() {
+  MultiSourceSimulator simulator(two_source_simulator_config());
+  expect(simulator.valid(), "two-source EMG/IMU simulator configuration is valid");
+  const auto generated = simulator.generate();
+  expect(generated.size() == 7,
+         "two-source simulator emits both native-rate streams and models loss");
+
+  MultiSourceAdapter adapter(two_source_adapter_configs(), 16);
+  expect(adapter.valid(), "bounded two-source adapter is valid");
+
+  std::unordered_map<std::string, std::string> expected_payloads;
+  for (const auto& item : generated) {
+    const auto& batch = item.accepted.batch;
+    const auto key = batch.source_id() + ":" + batch.boot_session_id() + ":" +
+                     std::to_string(batch.batch_sequence());
+    expected_payloads.emplace(key, batch.payload());
+    expect(adapter.submit(item.accepted, item.host_receive_time_ns),
+           "two-source simulator batches enter the aggregate adapter");
+  }
+
+  std::size_t emg_batches = 0;
+  std::size_t imu_batches = 0;
+  std::size_t recorder_records = 0;
+  bool saw_sender_or_receiver_loss = false;
+  while (auto normalized = adapter.pop_next()) {
+    ++recorder_records;
+    const auto& batch = normalized->accepted.batch;
+    const auto key = batch.source_id() + ":" + batch.boot_session_id() + ":" +
+                     std::to_string(batch.batch_sequence());
+    expect(expected_payloads.contains(key) &&
+               expected_payloads.at(key) == batch.payload(),
+           "recorder boundary retains the exact source payload bytes");
+    expect(normalized->host_receive_time_ns != 0,
+           "recorder boundary receives an independent host receipt timestamp");
+    expect(batch.source_acquisition_time_ns() != 0 &&
+               batch.gateway_receive_time_ns() != 0 && batch.gateway_send_time_ns() != 0 &&
+               !batch.gateway_id().empty() && !batch.gateway_session_id().empty() &&
+               !batch.gateway_clock_id().empty(),
+           "recorder boundary retains source, gateway, session, and clock metadata");
+    expect(normalized->sample_times.size() == batch.sample_count(),
+           "recorder boundary receives one source tick record per sample");
+    expect(normalized->accepted.topic == "wireless/v1/" + batch.source_id(),
+           "recorder boundary retains the exact logical-source topic");
+
+    if (batch.source_id() == "sim-emg-8ch") {
+      ++emg_batches;
+      expect(batch.sample_rate_numerator_hz() == 2048 && batch.channel_count() == 8 &&
+                 batch.sample_format() == sciencexyz::wireless::v1::SAMPLE_FORMAT_INT16_LE,
+             "EMG fixture preserves native rate, channel count, and wire format");
+      expect(batch.channels(0).channel_id() == "emg-0" &&
+                 batch.channels(0).unit() == "uV",
+             "EMG channel metadata reaches the recorder boundary");
+    } else {
+      ++imu_batches;
+      expect(batch.sample_rate_numerator_hz() == 128 && batch.channel_count() == 10 &&
+                 batch.sample_format() == sciencexyz::wireless::v1::SAMPLE_FORMAT_FLOAT32_LE,
+             "IMU fixture preserves native rate, channel count, and wire format");
+      expect(batch.channels(0).channel_id() == "accel_x" &&
+                 batch.channels(3).channel_id() == "gyro_x" &&
+                 batch.channels(6).channel_id() == "quat_w" &&
+                 batch.channels(9).channel_id() == "quat_z",
+             "IMU accel/gyro/quaternion ordering reaches the recorder boundary");
+    }
+    for (const auto& diagnostic : normalized->diagnostics) {
+      saw_sender_or_receiver_loss |=
+          diagnostic.kind == AdapterDiagnosticKind::kBatchGap ||
+          diagnostic.kind == AdapterDiagnosticKind::kSampleGap;
+    }
+  }
+  expect(emg_batches == 4 && imu_batches == 3 && recorder_records == generated.size(),
+         "recorder boundary drains all valid batches from both sources");
+  for (const auto& diagnostic : adapter.drain_diagnostics()) {
+    saw_sender_or_receiver_loss |=
+        diagnostic.kind == AdapterDiagnosticKind::kBatchGap ||
+        diagnostic.kind == AdapterDiagnosticKind::kSampleGap;
+  }
+  expect(saw_sender_or_receiver_loss,
+         "source loss remains explicit after normalization and recorder draining");
+}
+
+void test_multi_source_bounds_and_legacy_alias() {
+  MultiSourceAdapter empty({}, 1);
+  expect(!empty.valid(), "empty aggregate adapter is rejected");
+  MultiSourceAdapter too_many(std::vector<AdapterConfig>(5), 1);
+  expect(!too_many.valid(), "aggregate adapter rejects more than four sources");
+  FourSourceAdapter legacy(two_source_adapter_configs(), 16);
+  expect(legacy.valid(), "legacy FourSourceAdapter name accepts two sources");
+}
+
 }  // namespace
 
 int main() {
@@ -197,6 +377,8 @@ int main() {
     test_affine_fit_uncertainty_and_reordering();
     test_wrap_reset_and_epoch_history();
     test_deterministic_four_source_adapter();
+    test_two_source_emg_imu_adapter_and_recorder_boundary();
+    test_multi_source_bounds_and_legacy_alias();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;

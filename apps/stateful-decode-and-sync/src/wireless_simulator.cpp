@@ -14,7 +14,6 @@ using sciencexyz::wireless::v1::SAMPLE_FORMAT_FLOAT32_LE;
 using sciencexyz::wireless::v1::SAMPLE_FORMAT_INT16_LE;
 using sciencexyz::wireless::v1::SAMPLE_FORMAT_INT32_LE;
 using sciencexyz::wireless::v1::TIMESTAMP_QUALITY_SOURCE_TICK_AND_TIME;
-using sciencexyz::wireless::v1::SOURCE_TIME_DOMAIN_MONOTONIC_NS;
 
 std::size_t bytes_per_value(sciencexyz::wireless::v1::SampleFormat format) {
   switch (format) {
@@ -55,10 +54,11 @@ void put_little_endian(std::string& payload, std::size_t offset,
 
 }  // namespace
 
-FourSourceSimulator::FourSourceSimulator(FourSourceSimulatorConfig config)
+MultiSourceSimulator::MultiSourceSimulator(MultiSourceSimulatorConfig config)
     : config_(std::move(config)) {
-  if (config_.sources.size() != kSourceCount || config_.max_output_batches == 0) {
-    construction_error_ = "four-source simulator requires exactly four sources";
+  if (config_.sources.empty() || config_.sources.size() > kSourceCount ||
+      config_.max_output_batches == 0) {
+    construction_error_ = "multi-source simulator requires one to four sources";
     return;
   }
   for (std::size_t i = 0; i < config_.sources.size(); ++i) {
@@ -67,7 +67,11 @@ FourSourceSimulator::FourSourceSimulator(FourSourceSimulatorConfig config)
         source.sample_rate.denominator == 0 || source.channel_count == 0 ||
         source.source_tick_frequency_hz == 0 || source.samples_per_batch == 0 ||
         bytes_per_value(source.sample_format) == 0) {
-      construction_error_ = "invalid four-source simulator configuration";
+      construction_error_ = "invalid multi-source simulator configuration";
+      return;
+    }
+    if (!source.channels.empty() && source.channels.size() != source.channel_count) {
+      construction_error_ = "simulator channel descriptors must cover every channel";
       return;
     }
     for (std::size_t j = 0; j < i; ++j) {
@@ -79,7 +83,7 @@ FourSourceSimulator::FourSourceSimulator(FourSourceSimulatorConfig config)
   }
 }
 
-std::vector<SimulatedAcceptedBatch> FourSourceSimulator::generate() const {
+std::vector<SimulatedAcceptedBatch> MultiSourceSimulator::generate() const {
   std::vector<SimulatedAcceptedBatch> result;
   if (!valid()) return result;
 
@@ -132,10 +136,14 @@ std::vector<SimulatedAcceptedBatch> FourSourceSimulator::generate() const {
                           '\0');
       for (std::uint32_t sample = 0; sample < source.samples_per_batch; ++sample) {
         for (std::uint32_t channel = 0; channel < source.channel_count; ++channel) {
-          const auto value = static_cast<std::uint32_t>(
-              (logical_batch * source.samples_per_batch + sample) *
-                  (channel + 1) +
-              (static_cast<std::uint32_t>(source.source_id.size()) << 4));
+          const auto sample_number =
+              (logical_batch * source.samples_per_batch + sample) * (channel + 1) +
+              (static_cast<std::uint32_t>(source.source_id.size()) << 4);
+          std::uint32_t value = static_cast<std::uint32_t>(sample_number);
+          if (source.sample_format == SAMPLE_FORMAT_FLOAT32_LE) {
+            const float float_value = static_cast<float>(sample_number);
+            std::memcpy(&value, &float_value, sizeof(value));
+          }
           const auto offset = (static_cast<std::size_t>(sample) * source.channel_count +
                                channel) * element_size;
           put_little_endian(payload, offset, value, element_size);
@@ -160,17 +168,24 @@ std::vector<SimulatedAcceptedBatch> FourSourceSimulator::generate() const {
       batch.set_source_tick_frequency_numerator_hz(source.source_tick_frequency_hz);
       batch.set_source_tick_frequency_denominator(1);
       batch.set_source_acquisition_time_ns(reference_time);
-      batch.set_source_time_domain(SOURCE_TIME_DOMAIN_MONOTONIC_NS);
+      batch.set_source_time_domain(source.source_time_domain);
       batch.set_gateway_id(source.gateway_id);
       batch.set_gateway_session_id(source.gateway_session_id);
       batch.set_gateway_receive_time_ns(gateway_receive);
       batch.set_gateway_send_time_ns(gateway_send);
       batch.set_gateway_clock_id(source.gateway_clock_id);
       batch.set_timestamp_quality(TIMESTAMP_QUALITY_SOURCE_TICK_AND_TIME);
+      for (std::size_t channel = 0; channel < source.channels.size(); ++channel) {
+        auto* descriptor = batch.add_channels();
+        *descriptor = source.channels[channel];
+        descriptor->set_index(static_cast<std::uint32_t>(channel));
+      }
 
       SimulatedAcceptedBatch simulated;
       simulated.accepted.source_index = 0;
-      simulated.accepted.topic = "wireless/v1/" + source.source_id;
+      simulated.accepted.topic = source.topic.empty()
+                                     ? "wireless/v1/" + source.source_id
+                                     : source.topic;
       simulated.accepted.batch = std::move(batch);
       simulated.host_receive_time_ns = host_receive;
       source_batches.push_back(std::move(simulated));
