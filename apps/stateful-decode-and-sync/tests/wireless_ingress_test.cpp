@@ -160,7 +160,8 @@ void test_bounded_queue_and_reject_on_gap_policy() {
   std::vector<std::unique_ptr<NonblockingReader>> readers;
   readers.push_back(std::make_unique<FakeReader>(std::vector<MultipartMessage>{
       message(source, "boot-a", 0), message(source, "boot-a", 1),
-      message(source, "boot-a", 3), message(source, "boot-b", 0)}));
+      message(source, "boot-a", 2), message(source, "boot-a", 4),
+      message(source, "boot-b", 0)}));
   auto config = ingress_config({source});
   config.gap_policy = app::wireless::GapPolicy::kRejectSourceOnGap;
   IngressMux mux(std::move(config), std::move(readers));
