@@ -124,9 +124,9 @@ The current `m053m716/omnetics-32ch-adapter` scaffold is a renamed copy of the s
 
 Blocking before hardware bring-up: (1) adapter must electrically enumerate again; (2) SciFi-2 → RHD2132 SPI pinout from Science; (3) confirm a user peripheral may own the RHD SPI pins on the internal fabric (else Via/devkit path). Sim-only RTL + driver + cocotb work can proceed against an SPI-slave model in the meantime.
 
-### 2026-08-26 — broadband-mode-switch App implemented (offline; bench-verify pending)
+### 2026-08-26 — stateful_decode_and_sync App implemented (offline; bench-verify pending)
 
-New on-device App `apps/broadband-mode-switch/` implementing all five stages of `PLAN.md`: live real↔synthetic source toggle, labeled per-class ring buffer, Kaifosh-2025 multivariate MPF features (STFT → CSD → band-average → Hermitian matrix-log via a hand-rolled cyclic-Jacobi eigensolver, no `eigen3`), and a hand-rolled 2-hidden-layer MLP (backprop + SGD, feature z-scoring, dropout). Three `ListValue` consumer taps (`set_source_mode`, `set_capture`, `fit_mlp`), two producer taps (`broadband_out` `BroadbandFrame`, `class_out` `Tensor`), plus `config/rhd2132_mode_switch.json` (binds ID 200) and four client scripts.
+New on-device App `apps/stateful_decode_and_sync/` implementing all five stages of `PLAN.md`: live real↔synthetic source toggle, labeled per-class ring buffer, Kaifosh-2025 multivariate MPF features (STFT → CSD → band-average → Hermitian matrix-log via a hand-rolled cyclic-Jacobi eigensolver, no `eigen3`), and a hand-rolled 2-hidden-layer MLP (backprop + SGD, feature z-scoring, dropout). Three `ListValue` consumer taps (`set_source_mode`, `set_capture`, `fit_mlp`), two producer taps (`broadband_out` `BroadbandFrame`, `class_out` `Tensor`), plus `config/rhd2132_mode_switch.json` (binds ID 200) and four client scripts.
 
 Status: the four SDK-independent modules compile clean under 
 ```bash
@@ -135,7 +135,7 @@ g++ -std=c++20 -Wall -Wextra -Wshadow
 and pass an offline smoke test; `mode_switch_app.cpp` mirrors the proven example-app SDK usage but needs the Docker build to compile (SDK headers live in the builder image). See `PLAN.md` for the vs-plan deltas.
 
 Next (bench, staged per PLAN.md §7):
-- [ ] `synapsectl apps build apps/broadband-mode-switch` — confirm it compiles; resolves open-question #1 (`create_tap<synapse::BroadbandFrame>` allowed?). A `Tensor` fallback for `broadband_out` is documented at the call site.
+- [ ] `synapsectl apps build apps/stateful_decode_and_sync` — confirm it compiles; resolves open-question #1 (`create_tap<synapse::BroadbandFrame>` allowed?). A `Tensor` fallback for `broadband_out` is documented at the call site.
 - [ ] Deploy + start on the ID-200 chain; confirm `broadband_out` streams (Stage 0).
 - [ ] Toggle real↔synthetic via `client/set_source_mode.py` (Stage 1).
 - [ ] Capture labeled windows; confirm per-class counts (Stage 2).
@@ -143,7 +143,7 @@ Next (bench, staged per PLAN.md §7):
 - [ ] `fit_mlp` + `listen_class.py`; confirm separable synthetic classes learn (Stage 4).
 - [ ] Measure on-device `fit` cost; move training to a worker thread if it stalls the `main()` loop.
 
-### 2026-08-31 - broadband-mode-switch bounded producer validation
+### 2026-08-31 - stateful_decode_and_sync bounded producer validation
 
 The deployed app was verified read-only with `synapsectl -u 192.168.100.157
 info`: device `SFI2-0-260534` is running Synapse 2.4.1, firmware
@@ -181,7 +181,7 @@ rejection, timeout, immutable replacement, and transport-loss behavior.
 Verification from the repository CPython 3.13 environment:
 
 ```text
-PYTHONPATH=apps/broadband-mode-switch/client .venv/Scripts/python.exe -m unittest discover -s apps/broadband-mode-switch/client/tests -v
+PYTHONPATH=apps/stateful_decode_and_sync/client .venv/Scripts/python.exe -m unittest discover -s apps/stateful_decode_and_sync/client/tests -v
 Ran 11 tests ... OK
 ```
 
@@ -205,7 +205,7 @@ T-12 (dependency-light socket client and calibration-prompter example) is next.
 
 ### 2026-08-31 - T-12 socket client and calibration prompter complete
 
-Added `client/broadband_mode_switch/client.py`, a standard-library-only
+Added `client/stateful_decode_and_sync/client.py`, a standard-library-only
 blocking NDJSON client with request correlation, accepted-fit progress
 handling, queued state events, timeout/error reporting, and command helpers.
 Added `client/calibration_prompter.py`; its injectable calibration routine
@@ -304,7 +304,7 @@ checks.
 The adapter re-enumerated before the fresh run. `\.venv\\Scripts\\synapsectl.exe
 -u 192.168.100.157 info` reported device `SFI2-0-260534`, Synapse 2.4.1,
 firmware 3164583911, and `IntanRHD2132` as peripheral ID 200. A clean
-`stop`/`start apps/broadband-mode-switch/config/rhd2132_mode_switch.json`
+`stop`/`start apps/stateful_decode_and_sync/config/rhd2132_mode_switch.json`
 bound the broadband source to `IntanRHD2132 (id: 200)` and started the app with
 the typed control/state/result taps.
 

@@ -1,4 +1,4 @@
-# PLAN — `broadband-mode-switch` Synapse App
+# PLAN — `stateful_decode_and_sync` Synapse App
 
 A new on-device Synapse App that (1) toggles a broadband stream between the real
 RHD2132 probe and an in-app synthetic source, (2) collects labeled feature
@@ -7,14 +7,14 @@ power-frequency (MPF) features, and (4) trains and runs a small MLP classifier �
 all controlled live over consumer taps.
 
 Status: **implemented (offline); not yet bench-verified.** All five stages'
-source is written under `apps/broadband-mode-switch/` (App + synthetic source +
+source is written under `apps/stateful_decode_and_sync/` (App + synthetic source +
 MPF featurizer + MLP + ring buffer + config + clients + README). The four
 SDK-independent modules compile clean under `g++ -std=c++20 -Wall -Wextra
 -Wshadow` and pass an offline smoke test (deterministic synthetic source,
 `feature_dim = num_bands·C²`, MLP learns separable synthetic classes). Remaining
 work is the on-bench Docker build + deploy + staged verification (§7), plus the
 two build-time unknowns below. This is the root working plan; the narrative
-design also lives in `docs/broadband-mode-switch-app-plan.md`.
+design also lives in `docs/stateful_decode_and_sync-app-plan.md`.
 Implementation-derived math/state-machine detail should later graduate to
 `manuscript/` per repo convention.
 
@@ -82,7 +82,7 @@ Implementation notes vs. the original plan:
 
 | Question | Decision |
 | --- | --- |
-| App location | **New app** `apps/broadband-mode-switch/` (not a fork of the example) |
+| App location | **New app** `apps/stateful_decode_and_sync/` (not a fork of the example) |
 | Synthetic data | **Port the gateware model** (LFP + biphasic spikes + noise), deterministic |
 | MPF variant | **Faithful** STFT + CSD + band-avg + SPD matrix-log |
 | MLP fit | **Hand-rolled** 2-layer MLP + backprop + SGD, on-device |
@@ -98,7 +98,7 @@ Implementation notes vs. the original plan:
 kBroadbandSource(id=1, peripheral_id=200, 20 kHz, 16-bit, 32 ch)
         │  (connection src=1 -> dst=2)
         ▼
-kApplication(id=2, name="broadband-mode-switch")
+kApplication(id=2, name="stateful_decode_and_sync")
         ├─ consumer  "set_source_mode"  ListValue[int mode]              0=SAMPLING 1=SYNTHETIC
         ├─ consumer  "set_capture"       ListValue[int label, int enable]
         ├─ consumer  "fit_mlp"           ListValue[int epochs?]          (trigger)
@@ -198,7 +198,7 @@ Per-class fixed-capacity circular buffer of feature vectors capped at
 ## 6. File layout
 
 ```
-apps/broadband-mode-switch/
+apps/stateful_decode_and_sync/
 ├── CMakeLists.txt              # adapted from example (target name, sources)
 ├── cmake/protos.cmake          # copied verbatim
 ├── vcpkg.json                  # + eigen3 if used for logm
@@ -262,7 +262,7 @@ Each stage builds, deploys, and is verified on the bench before the next.
       the example app's `set_cursor_channels` pattern.
 - [x] Feature dimension: config-driven; shipped default is an 8-ch subset with
       `num_bands=4` → 256 features (full 32-ch/8-band is `8·1024 = 8192`).
-- [x] App `name` = `"broadband-mode-switch"` in both `manifest.json` and
+- [x] App `name` = `"stateful_decode_and_sync"` in both `manifest.json` and
       `config/rhd2132_mode_switch.json` `application.name`.
 - [ ] **(bench)** On-device training cost of a 256→64→64→K MLP over
       `ring_capacity` samples — measure; `fit` runs in `main()` off a request
@@ -272,7 +272,7 @@ Each stage builds, deploys, and is verified on the bench before the next.
 
 ## 9. Related documents
 
-- `docs/broadband-mode-switch-app-plan.md` — narrative design (same content).
+- `docs/stateful_decode_and_sync-app-plan.md` — narrative design (same content).
 - `docs/rhd2132-gateware-plan.md` — the separate (optional/long-term) custom
   RHD2132 SPI-master gateware track.
 - `config/axon-omnetics-32ch-broadband.json` — working ID-200 broadband config.

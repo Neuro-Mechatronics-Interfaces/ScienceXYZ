@@ -86,7 +86,7 @@ imports; compile/import the smallest consumer immediately.
 
 ### 2026-08-26 — On-device MLP would not learn separable MPF classes (feature scale)
 
-**Attempt:** Offline smoke test of the `broadband-mode-switch` MLP: two synthetic classes, one amplitude-scaled 4x (an obvious, large feature difference), trained with the config default `mlp_lr` (~0.01-0.02) on the raw MPF feature vectors.
+**Attempt:** Offline smoke test of the `stateful_decode_and_sync` MLP: two synthetic classes, one amplitude-scaled 4x (an obvious, large feature difference), trained with the config default `mlp_lr` (~0.01-0.02) on the raw MPF feature vectors.
 
 **Failure:** Training accuracy stuck at ~0.5 and loss pinned exactly at ln(2)=0.693 (uniform softmax); the network never moved. First read as an MLP/backprop bug.
 
@@ -136,7 +136,7 @@ lr>=~0.01 the first-layer gradients explode and the softmax collapses to uniform
 
 ### 2026-08-31 — Assumed a successful Tap send meant the device received the command
 
-**Attempt:** Used the legacy Python control scripts to switch source mode, capture labels, and start an MLP fit after deploying `broadband-mode-switch`.
+**Attempt:** Used the legacy Python control scripts to switch source mode, capture labels, and start an MLP fit after deploying `stateful_decode_and_sync`.
 
 **Failure:** The scripts printed successful sends, but the device emitted no corresponding app logs or `class_out` data. The `broadband_out` producer was healthy, so the apparent control-plane success was misleading.
 

@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "science-stateful-decode-and-sync-client"
+version = "0.1.0"
+description = "Headless controller, loopback service, calibration client, and PySide6 dashboard"
+requires-python = ">=3.13"
+dependencies = [
+  "numpy",
+  "protobuf",
+  "science-synapse>=2.2.7",
+  "PySide6>=6.7",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8,<9", "pytest-asyncio>=0.24,<2"]
+
+[project.scripts]
+stateful-decode-and-sync-service = "run_service:main"
+stateful-decode-and-sync-gui = "run_gui:main"
+stateful-decode-and-sync-calibration = "calibration_prompter:main"
+stateful-decode-and-sync-fake-demo = "run_fake_demo:main"
+
+[tool.setuptools]
+package-dir = {"" = "."}
+py-modules = ["run_service", "run_gui", "calibration_prompter", "run_fake_demo"]
+
+[tool.setuptools.packages.find]
+where = ["."]

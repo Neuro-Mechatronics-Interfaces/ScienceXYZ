@@ -1,0 +1,88 @@
+{
+  "name": "stateful_decode_and_sync",
+  "config_schema": {
+
+  },
+  "device_config": {
+    "nodes": [
+      {
+        "type": "kApplication",
+        "id": 2,
+        "application": {
+          "name": "stateful_decode_and_sync",
+          "parameters": {
+            "sample_rate_hz": 20000,
+            "num_classes": 5,
+            "window_ms": 200.0,
+            "stride_ms": 20.0,
+            "stft_size": 256,
+            "stft_hop": 128,
+            "num_bands": 4,
+            "channel_subset": [0, 4, 8, 12, 16, 20, 24, 28],
+            "ring_capacity": 2000,
+            "mlp_hidden": 64,
+            "mlp_dropout": 0.2,
+            "mlp_lr": 0.01,
+            "mlp_epochs": 100,
+            "synthetic_seed": 44257
+          }
+        }
+      },
+      {
+        "type": "kBroadbandSource",
+        "id": 1,
+        "broadbandSource": {
+          "peripheral_id": 200,
+          "sample_rate_hz": 20000,
+          "bit_width": 16,
+          "signal": {
+            "electrode": {
+              "channels": [
+                { "id": 0, "electrode_id": 0, "reference_id": 0 },
+                { "id": 1, "electrode_id": 1, "reference_id": 0 },
+                { "id": 2, "electrode_id": 2, "reference_id": 0 },
+                { "id": 3, "electrode_id": 3, "reference_id": 0 },
+                { "id": 4, "electrode_id": 4, "reference_id": 0 },
+                { "id": 5, "electrode_id": 5, "reference_id": 0 },
+                { "id": 6, "electrode_id": 6, "reference_id": 0 },
+                { "id": 7, "electrode_id": 7, "reference_id": 0 },
+                { "id": 8, "electrode_id": 8, "reference_id": 0 },
+                { "id": 9, "electrode_id": 9, "reference_id": 0 },
+                { "id": 10, "electrode_id": 10, "reference_id": 0 },
+                { "id": 11, "electrode_id": 11, "reference_id": 0 },
+                { "id": 12, "electrode_id": 12, "reference_id": 0 },
+                { "id": 13, "electrode_id": 13, "reference_id": 0 },
+                { "id": 14, "electrode_id": 14, "reference_id": 0 },
+                { "id": 15, "electrode_id": 15, "reference_id": 0 },
+                { "id": 16, "electrode_id": 16, "reference_id": 0 },
+                { "id": 17, "electrode_id": 17, "reference_id": 0 },
+                { "id": 18, "electrode_id": 18, "reference_id": 0 },
+                { "id": 19, "electrode_id": 19, "reference_id": 0 },
+                { "id": 20, "electrode_id": 20, "reference_id": 0 },
+                { "id": 21, "electrode_id": 21, "reference_id": 0 },
+                { "id": 22, "electrode_id": 22, "reference_id": 0 },
+                { "id": 23, "electrode_id": 23, "reference_id": 0 },
+                { "id": 24, "electrode_id": 24, "reference_id": 0 },
+                { "id": 25, "electrode_id": 25, "reference_id": 0 },
+                { "id": 26, "electrode_id": 26, "reference_id": 0 },
+                { "id": 27, "electrode_id": 27, "reference_id": 0 },
+                { "id": 28, "electrode_id": 28, "reference_id": 0 },
+                { "id": 29, "electrode_id": 29, "reference_id": 0 },
+                { "id": 30, "electrode_id": 30, "reference_id": 0 },
+                { "id": 31, "electrode_id": 31, "reference_id": 0 }
+              ],
+              "low_cutoff_hz": 200,
+              "high_cutoff_hz": 5000
+            }
+          }
+        }
+      }
+    ],
+    "connections": [
+      {
+        "src_node_id": 1,
+        "dst_node_id": 2
+      }
+    ]
+  }
+}
