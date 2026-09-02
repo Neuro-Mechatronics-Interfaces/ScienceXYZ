@@ -967,6 +967,10 @@ SourcePollResult TaskRuntime::poll_source_loss(std::uint64_t steady_time_ns) {
 
 void TaskRuntime::mark_source_healthy(bool healthy) { source_healthy_ = healthy; }
 
+void TaskRuntime::fault_for_publication_failure(std::string reason) {
+  enter_fault(std::move(reason));
+}
+
 bool TaskRuntime::next_event_counters(bool starts_run) {
   if (event_sequence_ == std::numeric_limits<std::uint64_t>::max()) return false;
   if (starts_run) {

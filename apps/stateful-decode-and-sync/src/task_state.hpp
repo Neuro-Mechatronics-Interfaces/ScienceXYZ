@@ -266,6 +266,9 @@ class TaskRuntime {
   std::vector<ProposalResolution> expire_staged(std::uint64_t steady_time_ns);
   SourcePollResult poll_source_loss(std::uint64_t steady_time_ns);
   void mark_source_healthy(bool healthy);
+  // An integration publication failure invalidates the externally observable
+  // authoritative timeline. It faults without fabricating another event.
+  void fault_for_publication_failure(std::string reason);
 
  private:
   struct StagedProposal;

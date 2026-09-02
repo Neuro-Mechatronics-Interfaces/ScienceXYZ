@@ -1,6 +1,7 @@
 *.pb.cc
 *.pb.h
 *_pb2.py
+!client/stateful_decode_and_sync/gui_control_pb2.py
 *.pyc
 
 .cache/

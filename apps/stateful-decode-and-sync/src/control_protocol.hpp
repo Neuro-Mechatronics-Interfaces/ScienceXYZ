@@ -27,6 +27,13 @@ using stateful_decode_and_sync::v1::PipelineState;
 using stateful_decode_and_sync::v1::PipelineStatus;
 using stateful_decode_and_sync::v1::ResultStatus;
 using stateful_decode_and_sync::v1::StateSnapshot;
+using stateful_decode_and_sync::v1::TaskEventKind;
+using stateful_decode_and_sync::v1::TaskFrameBoundary;
+using stateful_decode_and_sync::v1::TaskLifecycle;
+using stateful_decode_and_sync::v1::TaskPreconditions;
+using stateful_decode_and_sync::v1::TaskStatus;
+using stateful_decode_and_sync::v1::TaskTransitionEvent;
+using stateful_decode_and_sync::v1::TaskTriggerKind;
 
 constexpr std::uint32_t kProtocolVersion = 1;
 constexpr std::size_t kMaxSerializedPayloadBytes = 64 * 1024;
@@ -36,6 +43,9 @@ constexpr std::uint32_t kMaxLabels = 32;
 constexpr std::uint32_t kMaxCapacity = 10000;
 constexpr std::uint32_t kMaxFeatureDimensions = 8192;
 constexpr std::uint32_t kMaxFitEpochs = 10000;
+constexpr std::size_t kMaxTaskNameLength = 64;
+constexpr std::size_t kMaxTaskSessionIdLength = 128;
+constexpr std::uint32_t kMaxTaskId = 65535;
 
 enum class ValidationCode {
   kNone,
@@ -73,6 +83,11 @@ inline bool is_known_command(CommandKind command) {
     case stateful_decode_and_sync::v1::COMMAND_SET_CAPTURE:
     case stateful_decode_and_sync::v1::COMMAND_FIT:
     case stateful_decode_and_sync::v1::COMMAND_FLUSH:
+    case stateful_decode_and_sync::v1::COMMAND_START_TASK:
+    case stateful_decode_and_sync::v1::COMMAND_PROPOSE_TASK_EVENT:
+    case stateful_decode_and_sync::v1::COMMAND_PROPOSE_TASK_TRANSITION:
+    case stateful_decode_and_sync::v1::COMMAND_ABORT_TASK:
+    case stateful_decode_and_sync::v1::COMMAND_RESET_TASK:
       return true;
     default:
       return false;
@@ -109,6 +124,39 @@ inline bool is_known_model_phase(ModelPhase phase) {
          phase == stateful_decode_and_sync::v1::MODEL_SUCCEEDED ||
          phase == stateful_decode_and_sync::v1::MODEL_FAILED ||
          phase == stateful_decode_and_sync::v1::MODEL_CANCELLED;
+}
+
+inline bool is_known_task_lifecycle(TaskLifecycle lifecycle) {
+  using namespace stateful_decode_and_sync::v1;
+  return lifecycle == TASK_LIFECYCLE_IDLE || lifecycle == TASK_LIFECYCLE_RUNNING ||
+         lifecycle == TASK_LIFECYCLE_COMPLETED || lifecycle == TASK_LIFECYCLE_ABORTED ||
+         lifecycle == TASK_LIFECYCLE_FAULT;
+}
+
+inline bool is_known_task_event_kind(TaskEventKind kind) {
+  using namespace stateful_decode_and_sync::v1;
+  return kind == TASK_EVENT_START || kind == TASK_EVENT_TRANSITION ||
+         kind == TASK_EVENT_ABORT || kind == TASK_EVENT_RESET;
+}
+
+inline bool is_known_task_trigger_kind(TaskTriggerKind kind) {
+  using namespace stateful_decode_and_sync::v1;
+  return kind == TASK_TRIGGER_START_COMMAND || kind == TASK_TRIGGER_EXTERNAL_EVENT ||
+         kind == TASK_TRIGGER_SOURCE_TIMEOUT || kind == TASK_TRIGGER_DECODER_PREDICATE ||
+         kind == TASK_TRIGGER_ABORT_COMMAND || kind == TASK_TRIGGER_RESET_COMMAND;
+}
+
+inline bool is_task_name(std::string_view value) {
+  if (value.empty() || value.size() > kMaxTaskNameLength) return false;
+  const auto alpha = [](char c) { return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z'); };
+  const auto rest = [alpha](char c) {
+    return alpha(c) || (c >= '0' && c <= '9') || c == '_' || c == '.' || c == '-';
+  };
+  if (!alpha(value.front())) return false;
+  for (char c : value) {
+    if (!rest(c)) return false;
+  }
+  return true;
 }
 
 inline bool is_finite_nonnegative(float value) {
@@ -165,6 +213,21 @@ inline ValidationResult validate_flush(const stateful_decode_and_sync::v1::Flush
   }
 }
 
+inline ValidationResult validate_task_preconditions(const TaskPreconditions& preconditions) {
+  if (preconditions.expected_app_session_id().empty() ||
+      preconditions.expected_app_session_id().size() > kMaxTaskSessionIdLength) {
+    return invalid_result(ValidationCode::kInvalidArgument, "task.preconditions.app_session_id",
+                          "expected_app_session_id must be non-empty and bounded");
+  }
+  if (preconditions.has_expected_state_id() &&
+      (preconditions.expected_state_id() == 0 ||
+       preconditions.expected_state_id() > kMaxTaskId)) {
+    return invalid_result(ValidationCode::kOutOfRange, "task.preconditions.state_id",
+                          "expected_state_id must be in [1, 65535] when present");
+  }
+  return valid_result();
+}
+
 inline ValidationResult validate_command(const ControlCommand& command) {
   auto envelope = validate_envelope(command.protocol_version(), command.request_id());
   if (!envelope) return envelope;
@@ -218,6 +281,31 @@ inline ValidationResult validate_command(const ControlCommand& command) {
     case COMMAND_FLUSH:
       if (!command.has_flush()) break;
       return validate_flush(command.flush());
+    case COMMAND_START_TASK:
+      if (!command.has_start_task()) break;
+      return validate_task_preconditions(command.start_task().preconditions());
+    case COMMAND_PROPOSE_TASK_EVENT:
+      if (!command.has_propose_task_event()) break;
+      if (!is_task_name(command.propose_task_event().event_name())) {
+        return invalid_result(ValidationCode::kInvalidArgument, "propose_task_event.event_name",
+                              "event_name must match the bounded task-name syntax");
+      }
+      return validate_task_preconditions(command.propose_task_event().preconditions());
+    case COMMAND_PROPOSE_TASK_TRANSITION:
+      if (!command.has_propose_task_transition()) break;
+      if (command.propose_task_transition().transition_id() == 0 ||
+          command.propose_task_transition().transition_id() > kMaxTaskId) {
+        return invalid_result(ValidationCode::kOutOfRange,
+                              "propose_task_transition.transition_id",
+                              "transition_id must be in [1, 65535]");
+      }
+      return validate_task_preconditions(command.propose_task_transition().preconditions());
+    case COMMAND_ABORT_TASK:
+      if (!command.has_abort_task()) break;
+      return validate_task_preconditions(command.abort_task().preconditions());
+    case COMMAND_RESET_TASK:
+      if (!command.has_reset_task()) break;
+      return validate_task_preconditions(command.reset_task().preconditions());
     default:
       break;
   }
@@ -373,7 +461,52 @@ inline ValidationResult validate_state(const StateSnapshot& state) {
     return invalid_result(ValidationCode::kOutOfRange, "model.source_collection_id",
                           "source collection is outside the v1 bound");
   }
-  if (state.has_last_error()) return validate_error(state.last_error());
+  if (state.has_last_error()) {
+    auto error = validate_error(state.last_error());
+    if (!error) return error;
+  }
+  if (state.has_task()) {
+    const auto& task = state.task();
+    if (!task.configured()) {
+      return valid_result();
+    }
+    if (!is_task_name(task.definition_id()) || task.definition_revision() == 0 ||
+        task.definition_hash().size() != 71 ||
+        task.app_session_id().empty() || task.app_session_id().size() > kMaxTaskSessionIdLength ||
+        !is_known_task_lifecycle(task.lifecycle()) ||
+        task.staged_command_count() > 64) {
+      return invalid_result(ValidationCode::kInvalidArgument, "task",
+                            "configured task status is incomplete or invalid");
+    }
+    if (task.has_current_state_id() &&
+        (task.current_state_id() == 0 || task.current_state_id() > kMaxTaskId)) {
+      return invalid_result(ValidationCode::kOutOfRange, "task.current_state_id",
+                            "current state id must be in [1, 65535] when present");
+    }
+    if (task.has_effective_frame() && task.last_effective_frame().source_id().empty()) {
+      return invalid_result(ValidationCode::kInvalidArgument, "task.last_effective_frame",
+                            "effective frame must name its reference source");
+    }
+  }
+  return valid_result();
+}
+
+inline ValidationResult validate_task_transition_event(const TaskTransitionEvent& event) {
+  if (event.protocol_version() != kProtocolVersion || !is_task_name(event.definition_id()) ||
+      event.definition_revision() == 0 || event.definition_hash().size() != 71 ||
+      event.app_session_id().empty() || event.app_session_id().size() > kMaxTaskSessionIdLength ||
+      event.run_sequence() == 0 || event.event_sequence() == 0 ||
+      event.transition_sequence() == 0 || !is_known_task_event_kind(event.event_kind()) ||
+      !is_known_task_trigger_kind(event.trigger_kind()) || !event.has_effective_frame() ||
+      event.effective_frame().source_id().empty()) {
+    return invalid_result(ValidationCode::kInvalidArgument, "task_transition",
+                          "task transition event is incomplete or invalid");
+  }
+  if (event.previous_state_id() > kMaxTaskId || event.current_state_id() > kMaxTaskId ||
+      event.transition_id() > kMaxTaskId) {
+    return invalid_result(ValidationCode::kOutOfRange, "task_transition.state_or_transition_id",
+                          "task id is outside [0, 65535]");
+  }
   return valid_result();
 }
 
@@ -400,6 +533,11 @@ inline ValidationResult serialize_command_result(const CommandResult& result, st
 
 inline ValidationResult serialize_state(const StateSnapshot& state, std::string& output) {
   return serialize_validated(state, output, validate_state(state));
+}
+
+inline ValidationResult serialize_task_transition_event(const TaskTransitionEvent& event,
+                                                        std::string& output) {
+  return serialize_validated(event, output, validate_task_transition_event(event));
 }
 
 template <typename Message, typename Validator>

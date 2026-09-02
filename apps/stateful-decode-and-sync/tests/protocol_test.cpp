@@ -170,12 +170,59 @@ void test_state_and_result_validation() {
          "progress on non-fit result rejected");
 }
 
+void test_task_protocol_round_trip_and_validation() {
+  ControlCommand command;
+  command.set_protocol_version(app::protocol::kProtocolVersion);
+  command.set_request_id("task/start/1");
+  command.set_command(COMMAND_START_TASK);
+  auto* preconditions = command.mutable_start_task()->mutable_preconditions();
+  preconditions->set_expected_app_session_id("0123456789abcdef0123456789abcdef");
+  preconditions->set_expected_run_sequence(0);
+  preconditions->set_expected_transition_sequence(0);
+  expect(static_cast<bool>(app::protocol::validate_command(command)),
+         "valid task start command accepted");
+
+  std::string encoded;
+  expect(static_cast<bool>(app::protocol::serialize_command(command, encoded)),
+         "task command serialized");
+  ControlCommand decoded;
+  expect(static_cast<bool>(app::protocol::parse_command(encoded, decoded)),
+         "task command parsed");
+  expect(decoded.has_start_task() &&
+             decoded.start_task().preconditions().expected_app_session_id() ==
+                 preconditions->expected_app_session_id(),
+         "task preconditions survive round trip");
+
+  command = decoded;
+  command.mutable_start_task()->mutable_preconditions()->set_has_expected_state_id(true);
+  command.mutable_start_task()->mutable_preconditions()->set_expected_state_id(0);
+  expect(!app::protocol::validate_command(command), "zero expected task state rejected");
+
+  stateful_decode_and_sync::v1::TaskTransitionEvent event;
+  event.set_protocol_version(app::protocol::kProtocolVersion);
+  event.set_definition_id("reach_task");
+  event.set_definition_revision(1);
+  event.set_definition_hash("sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
+  event.set_app_session_id("0123456789abcdef0123456789abcdef");
+  event.set_run_sequence(1);
+  event.set_event_sequence(1);
+  event.set_transition_sequence(1);
+  event.set_event_kind(TASK_EVENT_START);
+  event.set_trigger_kind(TASK_TRIGGER_START_COMMAND);
+  event.mutable_effective_frame()->set_source_id("broadband.1");
+  event.mutable_effective_frame()->set_sequence_number(42);
+  event.mutable_effective_frame()->set_timestamp_ns(99);
+  expect(static_cast<bool>(app::protocol::validate_task_transition_event(event)),
+         "complete task transition event accepted");
+}
+
 }  // namespace
 
 int main() {
   test_command_round_trip_and_validation();
   test_command_rejects_version_range_and_shape_errors();
   test_state_and_result_validation();
+  test_task_protocol_round_trip_and_validation();
   std::cout << "PASS protocol serialization and validation\n";
   return 0;
 }

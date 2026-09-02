@@ -218,6 +218,28 @@ void test_direct_transition_proposal() {
          "direct proposal still commits only through the configured edge");
 }
 
+void test_each_frame_in_a_transport_batch_is_a_boundary() {
+  TaskRuntime runtime(make_definition(), "91919191919191919191919191919191");
+  start(runtime);
+  expect(runtime.stage_external_event("go-in-batch", "go", preconditions(runtime), 150).accepted,
+         "external event stages before a multi-frame receive");
+
+  // This models the application ReadBatch loop: a transport batch is not one
+  // task boundary. The first frame commits go; the next frame in the same
+  // batch independently reaches the timer deadline from that committed state.
+  const std::vector<FrameBoundary> receive_batch = {frame(11, 1100), frame(12, 1200)};
+  std::vector<TransitionEvent> events;
+  for (const auto& item : receive_batch) {
+    const auto result = runtime.on_frame(item);
+    if (result.event) events.push_back(*result.event);
+  }
+  expect(events.size() == 2 && events[0].transition_id == 10 &&
+             events[0].effective_frame.sequence_number == 11 &&
+             events[1].transition_id == 11 &&
+             events[1].effective_frame.sequence_number == 12,
+         "each valid frame in wire order gets its own unsuppressed boundary evaluation");
+}
+
 void test_decoder_dwell_and_priority() {
   TaskRuntime runtime(make_definition(), "cccccccccccccccccccccccccccccccc");
   start(runtime);
@@ -353,6 +375,7 @@ int main() {
     test_lifecycle_preconditions_duplicates_and_conflicts();
     test_source_timer_boundary();
     test_direct_transition_proposal();
+    test_each_frame_in_a_transport_batch_is_a_boundary();
     test_decoder_dwell_and_priority();
     test_abort_reset_and_new_run();
     test_expiry_source_fault_and_session_rollover();

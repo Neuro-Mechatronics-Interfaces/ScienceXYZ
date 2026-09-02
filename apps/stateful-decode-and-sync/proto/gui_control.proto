@@ -16,6 +16,11 @@ enum CommandKind {
   COMMAND_SET_CAPTURE = 6;
   COMMAND_FIT = 7;
   COMMAND_FLUSH = 8;
+  COMMAND_START_TASK = 9;
+  COMMAND_PROPOSE_TASK_EVENT = 10;
+  COMMAND_PROPOSE_TASK_TRANSITION = 11;
+  COMMAND_ABORT_TASK = 12;
+  COMMAND_RESET_TASK = 13;
 }
 
 message GetState {}
@@ -64,6 +69,31 @@ message Flush {
   uint32 label = 5;
 }
 
+// Preconditions make task proposals optimistic and reconnect-safe.  A client
+// obtains a fresh StateSnapshot rather than replaying a stale proposal.
+message TaskPreconditions {
+  string expected_app_session_id = 1;
+  uint64 expected_run_sequence = 2;
+  uint64 expected_transition_sequence = 3;
+  bool has_expected_state_id = 4;
+  uint32 expected_state_id = 5;
+}
+
+message StartTask { TaskPreconditions preconditions = 1; }
+
+message ProposeTaskEvent {
+  TaskPreconditions preconditions = 1;
+  string event_name = 2;
+}
+
+message ProposeTaskTransition {
+  TaskPreconditions preconditions = 1;
+  uint32 transition_id = 2;
+}
+
+message AbortTask { TaskPreconditions preconditions = 1; }
+message ResetTask { TaskPreconditions preconditions = 1; }
+
 message ControlCommand {
   uint32 protocol_version = 1;
   string request_id = 2;
@@ -78,6 +108,11 @@ message ControlCommand {
     SetCapture set_capture = 15;
     Fit fit = 16;
     Flush flush = 17;
+    StartTask start_task = 18;
+    ProposeTaskEvent propose_task_event = 19;
+    ProposeTaskTransition propose_task_transition = 20;
+    AbortTask abort_task = 21;
+    ResetTask reset_task = 22;
   }
 }
 
@@ -191,6 +226,84 @@ message ModelStatus {
   uint64 duration_ms = 11;
 }
 
+enum TaskLifecycle {
+  TASK_LIFECYCLE_UNSPECIFIED = 0;
+  TASK_LIFECYCLE_IDLE = 1;
+  TASK_LIFECYCLE_RUNNING = 2;
+  TASK_LIFECYCLE_COMPLETED = 3;
+  TASK_LIFECYCLE_ABORTED = 4;
+  TASK_LIFECYCLE_FAULT = 5;
+}
+
+enum TaskEventKind {
+  TASK_EVENT_UNSPECIFIED = 0;
+  TASK_EVENT_START = 1;
+  TASK_EVENT_TRANSITION = 2;
+  TASK_EVENT_ABORT = 3;
+  TASK_EVENT_RESET = 4;
+}
+
+enum TaskTriggerKind {
+  TASK_TRIGGER_UNSPECIFIED = 0;
+  TASK_TRIGGER_START_COMMAND = 1;
+  TASK_TRIGGER_EXTERNAL_EVENT = 2;
+  TASK_TRIGGER_SOURCE_TIMEOUT = 3;
+  TASK_TRIGGER_DECODER_PREDICATE = 4;
+  TASK_TRIGGER_ABORT_COMMAND = 5;
+  TASK_TRIGGER_RESET_COMMAND = 6;
+}
+
+// The exact reference BroadbandFrame which first falls under a commit.
+message TaskFrameBoundary {
+  string source_id = 1;
+  uint64 sequence_number = 2;
+  uint64 timestamp_ns = 3;
+}
+
+// Complete replacement status for task authority.  The transition stream,
+// not snapshots, is the loss-detectable event history.
+message TaskStatus {
+  bool configured = 1;
+  string definition_id = 2;
+  uint64 definition_revision = 3;
+  string definition_hash = 4;
+  string app_session_id = 5;
+  TaskLifecycle lifecycle = 6;
+  uint64 run_sequence = 7;
+  uint64 event_sequence = 8;
+  uint64 transition_sequence = 9;
+  bool has_current_state_id = 10;
+  uint32 current_state_id = 11;
+  uint32 staged_command_count = 12;
+  bool source_healthy = 13;
+  string fault_reason = 14;
+  bool has_effective_frame = 15;
+  TaskFrameBoundary last_effective_frame = 16;
+}
+
+// Immutable authoritative event history.  event_sequence is session-wide;
+// transition_sequence is scoped to run_sequence.
+message TaskTransitionEvent {
+  uint32 protocol_version = 1;
+  string definition_id = 2;
+  uint64 definition_revision = 3;
+  string definition_hash = 4;
+  string app_session_id = 5;
+  uint64 run_sequence = 6;
+  uint64 event_sequence = 7;
+  uint64 transition_sequence = 8;
+  TaskEventKind event_kind = 9;
+  uint32 transition_id = 10;
+  uint32 previous_state_id = 11;
+  uint32 current_state_id = 12;
+  TaskTriggerKind trigger_kind = 13;
+  string trigger_source = 14;
+  string request_id = 15;
+  uint64 proposal_receipt_sequence = 16;
+  uint64 proposal_receipt_time_ns = 17;
+  TaskFrameBoundary effective_frame = 18;
+}
+
 message StateSnapshot {
   uint32 protocol_version = 1;
   uint64 state_version = 2;
@@ -200,4 +313,5 @@ message StateSnapshot {
   repeated CollectionStatus collections = 6;
   ModelStatus model = 7;
   Error last_error = 8;
+  TaskStatus task = 9;
 }

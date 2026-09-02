@@ -5,6 +5,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include <synapse-app-sdk/app/app.hpp>
@@ -24,6 +25,7 @@
 #include "synthetic_source.hpp"
 #include "multipart_drain.hpp"
 #include "feature_worker.hpp"
+#include "task_state.hpp"
 
 namespace app {
 
@@ -43,6 +45,7 @@ namespace app {
 //   class_out        Tensor[num_classes]       softmax distribution, on classify
 //   state            StateSnapshot              complete replacement snapshot
 //   command_result   CommandResult              correlated command outcome
+//   task_transition  TaskTransitionEvent        authoritative task history
 //
 // Tap callbacks run on their own threads; they only validate and enqueue small
 // requests, then return fast. The main loop forwards raw frames and transfers
@@ -80,6 +83,7 @@ class ModeSwitchApp : public synapse::App {
     float mlp_lr = 0.01f;
     std::size_t mlp_epochs = 100;
     uint32_t synthetic_seed = 0xACE1;
+    std::string task_reference_source_id = "broadband.1";
   };
 
   bool validate_config(const synapse::ApplicationNodeConfig& configuration);
@@ -103,6 +107,10 @@ class ModeSwitchApp : public synapse::App {
                                const protocol::FitProgress* progress = nullptr);
   void publish_state_snapshot();
   void publish_periodic_state_if_due();
+  void process_task_frame(const synapse::BroadbandFrame& frame);
+  void poll_task_source_loss();
+  bool publish_task_transition(const task::TransitionEvent& event);
+  void publish_task_failures(const std::vector<task::ProposalResolution>& failures);
   void set_last_error(const control::TransitionResult& failure);
 
   struct ReadBatch {
@@ -152,6 +160,13 @@ class ModeSwitchApp : public synapse::App {
   std::uint64_t state_version_ = 0;
   bool has_last_error_ = false;
   protocol::Error last_error_;
+
+  // Task authority is optional and never changes the legacy acquisition,
+  // capture, fitting, or raw-recording paths when task_definition is absent.
+  std::optional<task::TaskRuntime> task_runtime_;
+  std::string task_app_session_id_;
+  std::unordered_map<std::string, stateful_decode_and_sync::v1::CommandKind>
+      pending_task_commands_;
 
   // ---- pipeline state (main-thread owned unless noted) ----
   bool pipeline_ready_ = false;

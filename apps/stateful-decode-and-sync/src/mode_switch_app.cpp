@@ -5,9 +5,13 @@
 #include <spdlog/spdlog.h>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
+#include <iomanip>
 #include <limits>
+#include <random>
+#include <sstream>
 #include <thread>
 #include <utility>
 
@@ -15,6 +19,104 @@ namespace app {
 
 // Upstream broadband source node id (see config JSON).
 static constexpr uint32_t kBroadbandNodeId = 1;
+
+std::string make_task_app_session_id() {
+  std::random_device entropy;
+  std::array<std::uint32_t, 4> words{};
+  for (auto& word : words) word = entropy();
+  std::ostringstream out;
+  out << std::hex << std::setfill('0');
+  for (const auto word : words) out << std::setw(8) << word;
+  return out.str();
+}
+
+stateful_decode_and_sync::v1::CommandKind command_kind_for_task_proposal(
+    task::ProposalKind kind) {
+  using namespace stateful_decode_and_sync::v1;
+  switch (kind) {
+    case task::ProposalKind::kStart: return COMMAND_START_TASK;
+    case task::ProposalKind::kExternalEvent: return COMMAND_PROPOSE_TASK_EVENT;
+    case task::ProposalKind::kTransition: return COMMAND_PROPOSE_TASK_TRANSITION;
+    case task::ProposalKind::kAbort: return COMMAND_ABORT_TASK;
+    case task::ProposalKind::kReset: return COMMAND_RESET_TASK;
+  }
+  return COMMAND_UNSPECIFIED;
+}
+
+stateful_decode_and_sync::v1::TaskLifecycle wire_task_lifecycle(task::Lifecycle lifecycle) {
+  using namespace stateful_decode_and_sync::v1;
+  switch (lifecycle) {
+    case task::Lifecycle::kIdle: return TASK_LIFECYCLE_IDLE;
+    case task::Lifecycle::kRunning: return TASK_LIFECYCLE_RUNNING;
+    case task::Lifecycle::kCompleted: return TASK_LIFECYCLE_COMPLETED;
+    case task::Lifecycle::kAborted: return TASK_LIFECYCLE_ABORTED;
+    case task::Lifecycle::kFault: return TASK_LIFECYCLE_FAULT;
+  }
+  return TASK_LIFECYCLE_UNSPECIFIED;
+}
+
+stateful_decode_and_sync::v1::TaskEventKind wire_task_event_kind(task::EventKind kind) {
+  using namespace stateful_decode_and_sync::v1;
+  switch (kind) {
+    case task::EventKind::kStart: return TASK_EVENT_START;
+    case task::EventKind::kTransition: return TASK_EVENT_TRANSITION;
+    case task::EventKind::kAbort: return TASK_EVENT_ABORT;
+    case task::EventKind::kReset: return TASK_EVENT_RESET;
+  }
+  return TASK_EVENT_UNSPECIFIED;
+}
+
+stateful_decode_and_sync::v1::TaskTriggerKind wire_task_trigger_kind(task::TriggerKind kind) {
+  using namespace stateful_decode_and_sync::v1;
+  switch (kind) {
+    case task::TriggerKind::kStartCommand: return TASK_TRIGGER_START_COMMAND;
+    case task::TriggerKind::kExternalEvent: return TASK_TRIGGER_EXTERNAL_EVENT;
+    case task::TriggerKind::kSourceTimeout: return TASK_TRIGGER_SOURCE_TIMEOUT;
+    case task::TriggerKind::kDecoderPredicate: return TASK_TRIGGER_DECODER_PREDICATE;
+    case task::TriggerKind::kAbortCommand: return TASK_TRIGGER_ABORT_COMMAND;
+    case task::TriggerKind::kResetCommand: return TASK_TRIGGER_RESET_COMMAND;
+  }
+  return TASK_TRIGGER_UNSPECIFIED;
+}
+
+protocol::ControlCommand task_result_command(std::string request_id,
+                                              task::ProposalKind kind) {
+  protocol::ControlCommand command;
+  command.set_protocol_version(protocol::kProtocolVersion);
+  command.set_request_id(std::move(request_id));
+  command.set_command(command_kind_for_task_proposal(kind));
+  return command;
+}
+
+control::TransitionResult task_failure(task::RuntimeError error, std::string message) {
+  using namespace stateful_decode_and_sync::v1;
+  switch (error) {
+    case task::RuntimeError::kStalePrecondition:
+    case task::RuntimeError::kInvalidLifecycle:
+    case task::RuntimeError::kInvalidProposal:
+    case task::RuntimeError::kNoMatchingTransition:
+      return control::failure(ERROR_INVALID_ARGUMENT, "task", std::move(message));
+    case task::RuntimeError::kQueueFull:
+      return control::failure(ERROR_BUSY, "task", std::move(message));
+    case task::RuntimeError::kExpired:
+      return control::failure(ERROR_TIMEOUT, "task", std::move(message));
+    case task::RuntimeError::kSourceFault:
+      return control::failure(ERROR_TRANSPORT_DISCONNECTED, "task", std::move(message));
+    default:
+      return control::failure(ERROR_INTERNAL, "task", std::move(message));
+  }
+}
+
+task::Preconditions runtime_preconditions(const protocol::TaskPreconditions& wire) {
+  task::Preconditions result;
+  result.expected_app_session_id = wire.expected_app_session_id();
+  result.expected_run_sequence = wire.expected_run_sequence();
+  result.expected_transition_sequence = wire.expected_transition_sequence();
+  if (wire.has_expected_state_id()) {
+    result.expected_state_id = static_cast<task::StateId>(wire.expected_state_id());
+  }
+  return result;
+}
 
 ModeSwitchApp::~ModeSwitchApp() { feature_worker_.stop(); }
 
@@ -123,6 +225,10 @@ bool ModeSwitchApp::setup() {
     spdlog::error("Failed to create tap command_result");
     return false;
   }
+  if (!create_tap<protocol::TaskTransitionEvent>("task_transition")) {
+    spdlog::error("Failed to create tap task_transition");
+    return false;
+  }
 
   spdlog::info("stateful_decode_and_sync setup complete (mode=SAMPLING)");
   return true;
@@ -158,6 +264,16 @@ bool ModeSwitchApp::parse_config(const synapse::ApplicationNodeConfig& configura
     cfg_.mlp_lr = static_cast<float>(num("mlp_lr", 0.01));
     cfg_.mlp_epochs = static_cast<std::size_t>(num("mlp_epochs", 100));
     cfg_.synthetic_seed = static_cast<uint32_t>(num("synthetic_seed", 0xACE1));
+
+    if (p.contains("task_reference_source_id")) {
+      const auto& source_id = p.at("task_reference_source_id");
+      if (source_id.kind_case() != google::protobuf::Value::kStringValue ||
+          !protocol::is_task_name(source_id.string_value())) {
+        spdlog::error("task_reference_source_id must use bounded task-name syntax");
+        return false;
+      }
+      cfg_.task_reference_source_id = source_id.string_value();
+    }
 
     cfg_.channel_subset.clear();
     if (p.contains("channel_subset")) {
@@ -206,6 +322,24 @@ bool ModeSwitchApp::parse_config(const synapse::ApplicationNodeConfig& configura
         return false;
       }
       previous_high_hz = band.high_hz;
+    }
+
+    task_runtime_.reset();
+    task_app_session_id_.clear();
+    pending_task_commands_.clear();
+    if (p.contains("task_definition")) {
+      const auto parsed = task::parse_task_definition(p.at("task_definition"),
+                                                       static_cast<std::uint32_t>(cfg_.num_classes));
+      if (!parsed) {
+        spdlog::error("Invalid task_definition at {}: {}", parsed.result.field,
+                      parsed.result.message);
+        return false;
+      }
+      task_app_session_id_ = make_task_app_session_id();
+      task_runtime_.emplace(parsed.definition, task_app_session_id_);
+      spdlog::info("Configured task definition {} revision {} hash={}",
+                   parsed.definition.definition_id, parsed.definition.revision,
+                   parsed.definition.definition_hash);
     }
     application_config_ = configuration;
     spdlog::info(
@@ -505,6 +639,36 @@ void ModeSwitchApp::publish_state_snapshot() {
     *snapshot.mutable_last_error() = last_error_;
   }
 
+  auto* task_status = snapshot.mutable_task();
+  task_status->set_configured(task_runtime_.has_value());
+  if (task_runtime_) {
+    const auto runtime = task_runtime_->snapshot();
+    const auto& definition = task_runtime_->definition();
+    task_status->set_definition_id(definition.definition_id);
+    task_status->set_definition_revision(definition.revision);
+    task_status->set_definition_hash(definition.definition_hash);
+    task_status->set_app_session_id(runtime.app_session_id);
+    task_status->set_lifecycle(wire_task_lifecycle(runtime.lifecycle));
+    task_status->set_run_sequence(runtime.run_sequence);
+    task_status->set_event_sequence(runtime.event_sequence);
+    task_status->set_transition_sequence(runtime.transition_sequence);
+    task_status->set_staged_command_count(
+        static_cast<std::uint32_t>(runtime.staged_commands));
+    task_status->set_source_healthy(runtime.source_healthy);
+    task_status->set_fault_reason(runtime.fault_reason);
+    if (runtime.current_state_id) {
+      task_status->set_has_current_state_id(true);
+      task_status->set_current_state_id(*runtime.current_state_id);
+    }
+    if (runtime.last_effective_frame) {
+      task_status->set_has_effective_frame(true);
+      auto* frame = task_status->mutable_last_effective_frame();
+      frame->set_source_id(runtime.last_effective_frame->source_id);
+      frame->set_sequence_number(runtime.last_effective_frame->sequence_number);
+      frame->set_timestamp_ns(runtime.last_effective_frame->timestamp_ns);
+    }
+  }
+
   if (!protocol::validate_state(snapshot)) {
     spdlog::error("state: refusing to publish invalid snapshot at version {}", state_version_);
     return;
@@ -524,6 +688,114 @@ void ModeSwitchApp::publish_periodic_state_if_due() {
   if (!have_last_state_publication_ || now - last_state_publication_ >= state_publication_period_) {
     publish_state_snapshot();
   }
+}
+
+bool ModeSwitchApp::publish_task_transition(const task::TransitionEvent& event) {
+  protocol::TaskTransitionEvent wire;
+  wire.set_protocol_version(protocol::kProtocolVersion);
+  wire.set_definition_id(event.definition_id);
+  wire.set_definition_revision(event.definition_revision);
+  wire.set_definition_hash(event.definition_hash);
+  wire.set_app_session_id(event.app_session_id);
+  wire.set_run_sequence(event.run_sequence);
+  wire.set_event_sequence(event.event_sequence);
+  wire.set_transition_sequence(event.transition_sequence);
+  wire.set_event_kind(wire_task_event_kind(event.event_kind));
+  wire.set_transition_id(event.transition_id);
+  wire.set_previous_state_id(event.previous_state_id);
+  wire.set_current_state_id(event.current_state_id);
+  wire.set_trigger_kind(wire_task_trigger_kind(event.trigger_kind));
+  wire.set_trigger_source(event.trigger_source);
+  wire.set_request_id(event.request_id);
+  wire.set_proposal_receipt_sequence(event.proposal_receipt_sequence);
+  wire.set_proposal_receipt_time_ns(event.proposal_receipt_time_ns);
+  auto* boundary = wire.mutable_effective_frame();
+  boundary->set_source_id(event.effective_frame.source_id);
+  boundary->set_sequence_number(event.effective_frame.sequence_number);
+  boundary->set_timestamp_ns(event.effective_frame.timestamp_ns);
+  if (!protocol::validate_task_transition_event(wire)) {
+    spdlog::error("task: refusing to publish invalid transition event {}", event.event_sequence);
+    return false;
+  }
+  if (!publish_tap("task_transition", wire)) {
+    spdlog::error("task: failed to publish transition event {}", event.event_sequence);
+    return false;
+  }
+  return true;
+}
+
+void ModeSwitchApp::publish_task_failures(
+    const std::vector<task::ProposalResolution>& failures) {
+  for (const auto& failure : failures) {
+    const auto pending = pending_task_commands_.find(failure.request_id);
+    const auto command_kind = pending == pending_task_commands_.end()
+                                  ? command_kind_for_task_proposal(failure.kind)
+                                  : pending->second;
+    if (pending != pending_task_commands_.end()) pending_task_commands_.erase(pending);
+    auto command = task_result_command(failure.request_id, failure.kind);
+    command.set_command(command_kind);
+    publish_command_outcome(command,
+                            stateful_decode_and_sync::v1::RESULT_FAILED,
+                            task_failure(failure.error, failure.message));
+  }
+}
+
+void ModeSwitchApp::process_task_frame(const synapse::BroadbandFrame& frame) {
+  if (!task_runtime_) return;
+  const auto result = task_runtime_->on_frame(
+      {cfg_.task_reference_source_id, frame.sequence_number(), frame.timestamp_ns(),
+       static_cast<std::uint64_t>(synapse::get_steady_clock_now().count())});
+  if (result.entered_fault) {
+    spdlog::error("task authority faulted at source frame {}: {}", frame.sequence_number(),
+                  result.fault_message);
+  }
+  if (result.event) {
+    // A successful external request is terminal only after this immutable
+    // boundary event and its replacement snapshot have been published.
+    const bool event_published = publish_task_transition(*result.event);
+    if (!event_published) {
+      task_runtime_->fault_for_publication_failure("task transition event publication failed");
+    }
+    publish_state_snapshot();
+    if (!result.event->request_id.empty()) {
+      const auto pending = pending_task_commands_.find(result.event->request_id);
+      const auto proposal_kind = result.event->event_kind == task::EventKind::kStart
+                                     ? task::ProposalKind::kStart
+                                     : result.event->event_kind == task::EventKind::kAbort
+                                           ? task::ProposalKind::kAbort
+                                           : result.event->event_kind == task::EventKind::kReset
+                                                 ? task::ProposalKind::kReset
+                                                 : task::ProposalKind::kExternalEvent;
+      auto command = task_result_command(result.event->request_id, proposal_kind);
+      if (pending != pending_task_commands_.end()) {
+        command.set_command(pending->second);
+        pending_task_commands_.erase(pending);
+      }
+      publish_command_outcome(
+          command,
+          event_published ? stateful_decode_and_sync::v1::RESULT_SUCCEEDED
+                          : stateful_decode_and_sync::v1::RESULT_FAILED,
+          event_published ? control::success()
+                          : task_failure(task::RuntimeError::kCounterOverflow,
+                                         "task transition event publication failed"));
+    }
+  } else if (result.entered_fault) {
+    // Source and ordering faults deliberately have no fabricated frame event.
+    publish_state_snapshot();
+  }
+  publish_task_failures(result.failed_proposals);
+}
+
+void ModeSwitchApp::poll_task_source_loss() {
+  if (!task_runtime_) return;
+  const auto now = static_cast<std::uint64_t>(synapse::get_steady_clock_now().count());
+  publish_task_failures(task_runtime_->expire_staged(now));
+  const auto loss = task_runtime_->poll_source_loss(now);
+  if (loss.entered_fault) {
+    spdlog::error("task authority faulted without a reference boundary: {}", loss.fault_message);
+    publish_state_snapshot();
+  }
+  publish_task_failures(loss.failed_proposals);
 }
 
 void ModeSwitchApp::apply_protocol_command(const protocol::ControlCommand& command) {
@@ -728,6 +1000,59 @@ void ModeSwitchApp::apply_protocol_command(const protocol::ControlCommand& comma
       finish(status.success ? control::success() : storage_failure(status));
       return;
     }
+    case COMMAND_START_TASK:
+    case COMMAND_PROPOSE_TASK_EVENT:
+    case COMMAND_PROPOSE_TASK_TRANSITION:
+    case COMMAND_ABORT_TASK:
+    case COMMAND_RESET_TASK: {
+      if (!task_runtime_) {
+        finish(control::failure(ERROR_PIPELINE_NOT_READY, "task_definition",
+                                "task authority is not configured"));
+        return;
+      }
+      const auto receipt_time_ns =
+          static_cast<std::uint64_t>(synapse::get_steady_clock_now().count());
+      task::StageResult staged;
+      switch (command.command()) {
+        case COMMAND_START_TASK:
+          staged = task_runtime_->stage_start(
+              command.request_id(), runtime_preconditions(command.start_task().preconditions()),
+              receipt_time_ns);
+          break;
+        case COMMAND_PROPOSE_TASK_EVENT:
+          staged = task_runtime_->stage_external_event(
+              command.request_id(), command.propose_task_event().event_name(),
+              runtime_preconditions(command.propose_task_event().preconditions()), receipt_time_ns);
+          break;
+        case COMMAND_PROPOSE_TASK_TRANSITION:
+          staged = task_runtime_->stage_transition(
+              command.request_id(),
+              static_cast<task::TransitionId>(command.propose_task_transition().transition_id()),
+              runtime_preconditions(command.propose_task_transition().preconditions()), receipt_time_ns);
+          break;
+        case COMMAND_ABORT_TASK:
+          staged = task_runtime_->stage_abort(
+              command.request_id(), runtime_preconditions(command.abort_task().preconditions()),
+              receipt_time_ns);
+          break;
+        case COMMAND_RESET_TASK:
+          staged = task_runtime_->stage_reset(
+              command.request_id(), runtime_preconditions(command.reset_task().preconditions()),
+              receipt_time_ns);
+          break;
+        default:
+          break;
+      }
+      if (!staged.accepted) {
+        finish(task_failure(staged.error, staged.message));
+        return;
+      }
+      // This says only that the request is staged. The terminal success is
+      // emitted from process_task_frame() after the real-frame boundary.
+      pending_task_commands_.emplace(command.request_id(), command.command());
+      finish(control::success(), RESULT_ACCEPTED);
+      return;
+    }
     default:
       // The tap callback validates command shape and kind. Keep this guard so
       // a future command cannot silently mutate state before its application
@@ -751,6 +1076,7 @@ void ModeSwitchApp::main() {
 
   while (node_running_) {
     publish_periodic_state_if_due();
+    poll_task_source_loss();
 
     // Feature extraction runs off-thread.  Keep result routing bounded so a
     // burst of completed windows cannot starve raw acquisition.
@@ -803,6 +1129,7 @@ void ModeSwitchApp::main() {
       for (int32_t s : synth_data) out.add_frame_data(s);
       ++synthetic_seq_;
 
+      process_task_frame(out);
       publish_tap("broadband_out", out);
       initialize_pipeline(synth_data.size());
       enqueue_feature_batch(
@@ -828,6 +1155,10 @@ void ModeSwitchApp::main() {
     std::vector<FeatureWorker::Sample> samples;
     samples.reserve(batch.frames.size());
     for (const auto& in_frame : batch.frames) {
+      // Every individual frame is an independent authoritative task boundary.
+      // Keep this before forwarding so the named frame is the first one routed
+      // under a newly committed state even within one multipart receive.
+      process_task_frame(in_frame);
       publish_tap("broadband_out", in_frame);
 
       const int n = in_frame.frame_data_size();
