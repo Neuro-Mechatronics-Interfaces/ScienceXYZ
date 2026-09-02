@@ -14,6 +14,11 @@ add_executable(stateful-decode-and-sync-control-state-tests
     control_state_test.cpp
 )
 
+add_executable(stateful-decode-and-sync-task-state-tests
+    task_state_test.cpp
+    ../src/task_state.cpp
+)
+
 add_executable(stateful-decode-and-sync-mlp-tests
     mlp_test.cpp
     ../src/mlp.cpp
@@ -77,6 +82,7 @@ target_compile_features(stateful-decode-and-sync-control-tests PRIVATE cxx_std_2
 target_compile_features(stateful-decode-and-sync-multipart-drain-tests PRIVATE cxx_std_20)
 target_compile_features(stateful-decode-and-sync-protocol-tests PRIVATE cxx_std_20)
 target_compile_features(stateful-decode-and-sync-control-state-tests PRIVATE cxx_std_20)
+target_compile_features(stateful-decode-and-sync-task-state-tests PRIVATE cxx_std_20)
 target_compile_features(stateful-decode-and-sync-mlp-tests PRIVATE cxx_std_20)
 target_compile_features(stateful-decode-and-sync-fit-worker-tests PRIVATE cxx_std_20)
 target_compile_features(stateful-decode-and-sync-feature-worker-tests PRIVATE cxx_std_20)
@@ -95,6 +101,9 @@ target_include_directories(stateful-decode-and-sync-protocol-tests PRIVATE
 target_include_directories(stateful-decode-and-sync-control-state-tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../src
     ${PROTO_OUT_DIR}
+)
+target_include_directories(stateful-decode-and-sync-task-state-tests PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src
 )
 target_include_directories(stateful-decode-and-sync-mlp-tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../src
@@ -119,6 +128,7 @@ target_sources(stateful-decode-and-sync-control-state-tests PRIVATE
 
 target_link_libraries(stateful-decode-and-sync-protocol-tests PRIVATE protobuf::libprotobuf)
 target_link_libraries(stateful-decode-and-sync-control-state-tests PRIVATE protobuf::libprotobuf)
+target_link_libraries(stateful-decode-and-sync-task-state-tests PRIVATE protobuf::libprotobuf)
 target_link_libraries(stateful-decode-and-sync-fit-worker-tests PRIVATE Threads::Threads)
 target_link_libraries(stateful-decode-and-sync-feature-worker-tests PRIVATE Threads::Threads)
 target_link_libraries(stateful-decode-and-sync-wireless-ingress-tests PRIVATE protobuf::libprotobuf)
@@ -142,6 +152,7 @@ if(MSVC)
     target_compile_options(stateful-decode-and-sync-control-tests PRIVATE /W4 /WX)
     target_compile_options(stateful-decode-and-sync-protocol-tests PRIVATE /W4 /WX)
     target_compile_options(stateful-decode-and-sync-control-state-tests PRIVATE /W4 /WX)
+    target_compile_options(stateful-decode-and-sync-task-state-tests PRIVATE /W4 /WX)
     target_compile_options(stateful-decode-and-sync-mlp-tests PRIVATE /W4 /WX)
     target_compile_options(stateful-decode-and-sync-fit-worker-tests PRIVATE /W4 /WX)
     target_compile_options(stateful-decode-and-sync-feature-worker-tests PRIVATE /W4 /WX)
@@ -158,6 +169,9 @@ else()
         -Wall -Wextra -Wpedantic -Werror
     )
     target_compile_options(stateful-decode-and-sync-control-state-tests PRIVATE
+        -Wall -Wextra -Wpedantic -Werror
+    )
+    target_compile_options(stateful-decode-and-sync-task-state-tests PRIVATE
         -Wall -Wextra -Wpedantic -Werror
     )
     target_compile_options(stateful-decode-and-sync-mlp-tests PRIVATE
@@ -192,6 +206,10 @@ add_test(
 add_test(
     NAME stateful-decode-and-sync-control-state
     COMMAND stateful-decode-and-sync-control-state-tests
+)
+add_test(
+    NAME stateful-decode-and-sync-task-state
+    COMMAND stateful-decode-and-sync-task-state-tests
 )
 add_test(
     NAME stateful-decode-and-sync-mlp

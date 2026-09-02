@@ -55,6 +55,7 @@ add_executable(stateful-decode-and-sync
     ${CMAKE_CURRENT_SOURCE_DIR}/src/wireless_source_adapter.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/wireless_simulator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/wireless_zmq_reader.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/task_state.cpp
 )
 
 generate_protobufs(

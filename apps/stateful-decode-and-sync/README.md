@@ -72,6 +72,8 @@ The editable source for the acquisition/compute flow is
 | `src/control_protocol.hpp` | v1 payload validation and protobuf serialization helpers |
 | `src/control_command_queue.hpp` | bounded FIFO for off-thread tap callbacks and main-loop control |
 | `src/control_state.hpp` | atomic target transition and selection rules |
+| `src/task_state.{hpp,cpp}` | SDK-independent authoritative task definition parser, validator, digest, and runtime core |
+| `docs/task-state-contract.md` | normative configurable task definition, lifecycle, boundary, and event contract |
 | `src/ring_buffer.hpp` | per-class feature store |
 | `config/rhd2132_mode_switch.json` | kBroadbandSource(200) → kApplication graph |
 | `client/*.py` | control/monitor clients |
@@ -157,6 +159,16 @@ is reported as a terminal `malformed` error. It trains from a value-owned
 collection snapshot, keeps the existing live model available during fitting, and
 swaps a complete candidate into inference only after success; a malformed or
 failed fit does not replace a prior model.
+
+Behavioral task state is a separate authority. Its normative v1
+configuration, validation, proposal, frame-boundary, event, lifecycle, and
+host-recording rules are in
+[`docs/task-state-contract.md`](docs/task-state-contract.md). In particular,
+clients propose configured events/transitions and react only to committed
+`TaskTransitionEvent` messages; there is no direct state setter. This contract
+drives T-29 through T-34. The SDK-independent definition/runtime core and its
+hardware-free tests are implemented, but the protocol and App integration are
+not yet deployed.
 
 ## Feature dimension
 

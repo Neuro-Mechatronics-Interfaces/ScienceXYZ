@@ -1,0 +1,22 @@
+digraph TaskRuntimeLifecycle {
+  graph [rankdir=LR, bgcolor="transparent", pad=0.2, nodesep=0.45, ranksep=0.7,
+         label="Authoritative task runtime lifecycle", labelloc=t, fontsize=18];
+  node [shape=box, style="rounded,filled", fillcolor="#F7F9FC", color="#385170",
+        fontname="Arial", fontsize=10];
+  edge [color="#526D82", fontname="Arial", fontsize=9];
+
+  idle [label="IDLE\nno governed state"];
+  running [label="RUNNING\nconfigured state governs frames"];
+  completed [label="COMPLETED\nterminal state retained"];
+  aborted [label="ABORTED\ninterval closed at real frame"];
+  fault [label="FAULT\nlast good boundary retained"];
+
+  idle -> running [label="StartTask\nnext valid frame"];
+  running -> completed [label="terminal transition\ncurrent frame"];
+  running -> aborted [label="AbortTask\nnext valid frame"];
+  running -> fault [label="source loss/discontinuity\nno fabricated boundary"];
+  completed -> fault [label="source loss/discontinuity\nno fabricated boundary"];
+  completed -> idle [label="ResetTask\nnext valid frame"];
+  aborted -> idle [label="ResetTask\nnext valid frame"];
+  fault -> idle [label="source healthy + ResetTask\nnext valid frame"];
+}
