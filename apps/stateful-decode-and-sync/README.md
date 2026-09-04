@@ -73,7 +73,9 @@ The editable source for the acquisition/compute flow is
 | `src/control_command_queue.hpp` | bounded FIFO for off-thread tap callbacks and main-loop control |
 | `src/control_state.hpp` | atomic target transition and selection rules |
 | `src/task_state.{hpp,cpp}` | SDK-independent authoritative task definition parser, validator, digest, and runtime core |
+| `src/task_timeline.{hpp,cpp}` | host-recorder boundary for immutable task events, loss-aware intervals, and ambiguity labels |
 | `docs/task-state-contract.md` | normative configurable task definition, lifecycle, boundary, and event contract |
+| `docs/task-recorder-timeline.md` | recorder-side transition retention and interval-labeling contract |
 | `src/ring_buffer.hpp` | per-class feature store |
 | `config/rhd2132_mode_switch.json` | kBroadbandSource(200) → kApplication graph |
 | `client/*.py` | control/monitor clients |
@@ -166,9 +168,12 @@ host-recording rules are in
 [`docs/task-state-contract.md`](docs/task-state-contract.md). In particular,
 clients propose configured events/transitions and react only to committed
 `TaskTransitionEvent` messages; there is no direct state setter. This contract
-drives T-29 through T-34. The SDK-independent definition/runtime core and its
-hardware-free tests are implemented, but the protocol and App integration are
-not yet deployed.
+drives T-29 through T-34. The host controller owns the `task_transition` tap,
+the NDJSON bridge exposes a task-transition subscription, and the dashboard
+uses transition callbacks—not accepted commands or optimistic local state—for
+task behavior. The SDK-independent definition/runtime core and hardware-free
+task/multisource simulations are implemented; hardware deployment remains
+separately gated.
 
 ## Feature dimension
 

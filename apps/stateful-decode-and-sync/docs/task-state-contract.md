@@ -389,6 +389,14 @@ its task label is ambiguous; the recorder must not force it into either state.
 An event-sequence gap or source discontinuity makes the affected task timeline
 incomplete rather than inferred.
 
+The initial host-side implementation is
+[`task_timeline.{hpp,cpp}`](../src/task_timeline.hpp). It value-copies the
+authoritative event fields before persistence and only emits a task label when
+the entire bounded auxiliary-sample interval is contained by a complete
+half-open state interval. See
+[`task-recorder-timeline.md`](task-recorder-timeline.md) for the recorder
+boundary and its loss/ambiguity behavior.
+
 Raw recording control and ML feature capture remain distinct from task state.
 A host recording policy may explicitly react to committed task events, but the
 App does not implicitly start/stop recording or capture when a task state
@@ -409,3 +417,7 @@ are not failures.
 
 Runtime rejection or fault is never rewritten into a setup failure, and setup
 validation never mutates acquisition, capture, model, or recording state.
+
+<!-- graphviz:apps/stateful-decode-and-sync/docs/task-state-authority-plan.dot -->
+![GraphViz diagram](task-state-authority-plan.svg)
+<!-- /graphviz:apps/stateful-decode-and-sync/docs/task-state-authority-plan.dot -->

@@ -10,7 +10,9 @@ from typing import Callable
 from google.protobuf.message import DecodeError
 
 from . import proto
-from .model import AppState, CommandResult, ErrorState, ProtocolMessageError, result_from_proto, state_from_proto
+from .model import (AppState, CommandResult, ErrorState, ProtocolMessageError,
+                    TaskState, TaskTransition, result_from_proto, state_from_proto,
+                    task_transition_from_proto)
 from .transport import SynapseTapTransport, TapTransport, TransportError
 
 
@@ -23,6 +25,18 @@ class DeviceCommandError(ControllerError):
         self.result = result
         detail = result.error.message if result.error else result.status
         super().__init__(f"{result.command} failed: {detail}")
+
+
+class StaleTaskProposalError(ControllerError):
+    """A caller tried to use task preconditions older than the current snapshot."""
+
+
+@dataclass(frozen=True)
+class TaskPreconditions:
+    app_session_id: str
+    run_sequence: int
+    transition_sequence: int
+    state_id: int | None
 
 
 @dataclass
@@ -39,6 +53,7 @@ class BroadbandController:
     CONTROL = "control"
     STATE = "state"
     RESULTS = "command_result"
+    TASK_TRANSITIONS = "task_transition"
 
     def __init__(self, device_ip: str, transport: TapTransport | None = None, *, timeout: float = 5.0):
         self.device_ip = device_ip
@@ -55,9 +70,13 @@ class BroadbandController:
         self._state_lock = threading.Lock()
         self._state_callbacks: list[Callable[[AppState], None]] = []
         self._result_callbacks: list[Callable[[CommandResult], None]] = []
+        self._task_transition_callbacks: list[Callable[[TaskTransition], None]] = []
         self._threads: list[threading.Thread] = []
         self._lifecycle_lock = threading.Lock()
         self._snapshot_version: int | None = None
+        self._task_snapshot_ready = threading.Event()
+        self._task_event_session_id: str | None = None
+        self._task_event_sequence: int | None = None
 
     @property
     def connected(self) -> bool:
@@ -77,13 +96,17 @@ class BroadbandController:
         with self._state_lock:
             self._result_callbacks.append(callback)
 
+    def on_task_transition(self, callback: Callable[[TaskTransition], None]) -> None:
+        with self._state_lock:
+            self._task_transition_callbacks.append(callback)
+
     def connect(self) -> None:
         with self._lifecycle_lock:
             if self._connected:
                 return
             opened = []
             try:
-                for name in (self.CONTROL, self.STATE, self.RESULTS):
+                for name in (self.CONTROL, self.STATE, self.RESULTS, self.TASK_TRANSITIONS):
                     if not self.transport.connect(name):
                         raise ControllerError(f"could not connect to tap '{name}'")
                     opened.append(name)
@@ -91,7 +114,11 @@ class BroadbandController:
                 self._stop.clear()
                 self._connected = True
                 self._snapshot_version = None
-                for name, target in ((self.STATE, self._read_state), (self.RESULTS, self._read_result)):
+                self._task_snapshot_ready.clear()
+                self._task_event_session_id = None
+                self._task_event_sequence = None
+                for name, target in ((self.STATE, self._read_state), (self.RESULTS, self._read_result),
+                                     (self.TASK_TRANSITIONS, self._read_task_transition)):
                     thread = threading.Thread(target=target, name=f"synapse-{name}", daemon=True)
                     thread.start()
                     self._threads.append(thread)
@@ -141,7 +168,8 @@ class BroadbandController:
             was_connected = self._connected
             self._connected = False
             self._stop.set()
-        for name in (self.CONTROL, self.STATE, self.RESULTS):
+        self._task_snapshot_ready.clear()
+        for name in (self.CONTROL, self.STATE, self.RESULTS, self.TASK_TRANSITIONS):
             try:
                 self.transport.disconnect(name)
             except Exception:
@@ -212,6 +240,7 @@ class BroadbandController:
                         continue
                     self._snapshot_version = value.state_version
                     self._state = value
+                    self._task_snapshot_ready.set()
                     callbacks = tuple(self._state_callbacks)
                 self._notify_state(callbacks, value)
             except (DecodeError, ProtocolMessageError, ValueError, TypeError) as exc:
@@ -223,6 +252,44 @@ class BroadbandController:
             except Exception as exc:
                 if not self._stop.is_set():
                     self._mark_disconnected(f"state tap failed: {exc}")
+                    return
+
+    def _read_task_transition(self) -> None:
+        while not self._stop.is_set():
+            try:
+                raw = self.transport.receive(self.TASK_TRANSITIONS, timeout=0.5)
+                if raw is None:
+                    continue
+                message = proto.TaskTransitionEvent()
+                message.ParseFromString(raw)
+                value = task_transition_from_proto(message)
+                gap_message = None
+                with self._state_lock:
+                    if value.app_session_id != self._task_event_session_id:
+                        self._task_event_session_id = value.app_session_id
+                        self._task_event_sequence = None
+                    if (self._task_event_sequence is not None
+                            and value.event_sequence != self._task_event_sequence + 1):
+                        gap_message = (
+                            f"task transition sequence gap: expected {self._task_event_sequence + 1}, got {value.event_sequence}")
+                    self._task_event_sequence = value.event_sequence
+                    callbacks = tuple(self._task_transition_callbacks)
+                if gap_message is not None:
+                    self._record_protocol_error(gap_message)
+                for callback in callbacks:
+                    try:
+                        callback(value)
+                    except Exception:
+                        pass
+            except (DecodeError, ProtocolMessageError, ValueError, TypeError) as exc:
+                self._record_protocol_error(str(exc))
+            except (TransportError, ConnectionError, OSError) as exc:
+                if not self._stop.is_set():
+                    self._mark_disconnected(str(exc))
+                    return
+            except Exception as exc:
+                if not self._stop.is_set():
+                    self._mark_disconnected(f"task-transition tap failed: {exc}")
                     return
 
     def _read_result(self) -> None:
@@ -365,4 +432,59 @@ class BroadbandController:
         if label is not None:
             command.flush.has_label = True
             command.flush.label = label
+        return self.execute(command)
+
+    def task_preconditions(self, supplied: TaskPreconditions | None = None) -> TaskPreconditions:
+        """Return the current post-connect task snapshot, rejecting stale caller state."""
+        if not self._task_snapshot_ready.wait(self.timeout):
+            raise ControllerError("task command requires a replacement state snapshot")
+        task: TaskState = self.state.task
+        current = TaskPreconditions(task.app_session_id, task.run_sequence,
+                                   task.transition_sequence, task.current_state_id)
+        if not current.app_session_id:
+            raise ControllerError("task command requires a configured app session")
+        if supplied is not None and supplied != current:
+            raise StaleTaskProposalError("task proposal preconditions are stale; obtain a replacement snapshot")
+        return current
+
+    @staticmethod
+    def _set_task_preconditions(target, values: TaskPreconditions) -> None:
+        target.expected_app_session_id = values.app_session_id
+        target.expected_run_sequence = values.run_sequence
+        target.expected_transition_sequence = values.transition_sequence
+        if values.state_id is not None:
+            target.has_expected_state_id = True
+            target.expected_state_id = values.state_id
+
+    def start_task(self, *, preconditions: TaskPreconditions | None = None, request_id: str | None = None):
+        command = self._new_command("start_task", request_id)
+        self._set_task_preconditions(command.start_task.preconditions, self.task_preconditions(preconditions))
+        return self.execute(command)
+
+    def propose_task_event(self, event_name: str, *, preconditions: TaskPreconditions | None = None,
+                           request_id: str | None = None):
+        if not isinstance(event_name, str) or not event_name:
+            raise ValueError("event_name must be a non-empty string")
+        command = self._new_command("propose_task_event", request_id)
+        self._set_task_preconditions(command.propose_task_event.preconditions, self.task_preconditions(preconditions))
+        command.propose_task_event.event_name = event_name
+        return self.execute(command)
+
+    def propose_task_transition(self, transition_id: int, *, preconditions: TaskPreconditions | None = None,
+                                request_id: str | None = None):
+        if not isinstance(transition_id, int) or isinstance(transition_id, bool) or transition_id <= 0:
+            raise ValueError("transition_id must be a positive integer")
+        command = self._new_command("propose_task_transition", request_id)
+        self._set_task_preconditions(command.propose_task_transition.preconditions, self.task_preconditions(preconditions))
+        command.propose_task_transition.transition_id = transition_id
+        return self.execute(command)
+
+    def abort_task(self, *, preconditions: TaskPreconditions | None = None, request_id: str | None = None):
+        command = self._new_command("abort_task", request_id)
+        self._set_task_preconditions(command.abort_task.preconditions, self.task_preconditions(preconditions))
+        return self.execute(command)
+
+    def reset_task(self, *, preconditions: TaskPreconditions | None = None, request_id: str | None = None):
+        command = self._new_command("reset_task", request_id)
+        self._set_task_preconditions(command.reset_task.preconditions, self.task_preconditions(preconditions))
         return self.execute(command)

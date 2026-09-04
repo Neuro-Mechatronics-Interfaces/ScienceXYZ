@@ -61,6 +61,53 @@ class ModelState:
 
 
 @dataclass(frozen=True)
+class TaskFrameBoundary:
+    source_id: str
+    sequence_number: int
+    timestamp_ns: int
+
+
+@dataclass(frozen=True)
+class TaskState:
+    configured: bool = False
+    definition_id: str = ""
+    definition_revision: int = 0
+    definition_hash: str = ""
+    app_session_id: str = ""
+    lifecycle: str = "unspecified"
+    run_sequence: int = 0
+    event_sequence: int = 0
+    transition_sequence: int = 0
+    current_state_id: int | None = None
+    pending_command_count: int = 0
+    source_healthy: bool = False
+    fault_reason: str = ""
+    last_effective_frame: TaskFrameBoundary | None = None
+
+
+@dataclass(frozen=True)
+class TaskTransition:
+    protocol_version: int
+    definition_id: str
+    definition_revision: int
+    definition_hash: str
+    app_session_id: str
+    run_sequence: int
+    event_sequence: int
+    transition_sequence: int
+    event_kind: str
+    transition_id: int
+    previous_state_id: int
+    current_state_id: int
+    trigger_kind: str
+    trigger_source: str
+    request_id: str
+    proposal_receipt_sequence: int
+    proposal_receipt_time_ns: int
+    effective_frame: TaskFrameBoundary
+
+
+@dataclass(frozen=True)
 class AppState:
     protocol_version: int = 1
     state_version: int = 0
@@ -70,6 +117,7 @@ class AppState:
     active: ActiveTarget = ActiveTarget()
     collections: tuple[CollectionState, ...] = ()
     model: ModelState = ModelState()
+    task: TaskState = TaskState()
     last_error: ErrorState | None = None
 
     @property
@@ -121,6 +169,68 @@ def _command_name(message) -> str:
     return proto.enum_name(message, "command")
 
 
+def _frame_from_proto(message) -> TaskFrameBoundary:
+    if not message.source_id:
+        raise ProtocolMessageError("task frame boundary has no source id")
+    return TaskFrameBoundary(message.source_id, message.sequence_number, message.timestamp_ns)
+
+
+def _task_from_proto(message) -> TaskState:
+    lifecycle = proto.enum_name(message, "lifecycle")
+    if lifecycle == "unspecified":
+        raise ProtocolMessageError("task status has an unknown lifecycle")
+    if message.configured and (not message.definition_id or not message.definition_hash or not message.app_session_id):
+        raise ProtocolMessageError("configured task status is missing identity")
+    return TaskState(
+        configured=message.configured,
+        definition_id=message.definition_id,
+        definition_revision=message.definition_revision,
+        definition_hash=message.definition_hash,
+        app_session_id=message.app_session_id,
+        lifecycle=lifecycle,
+        run_sequence=message.run_sequence,
+        event_sequence=message.event_sequence,
+        transition_sequence=message.transition_sequence,
+        current_state_id=message.current_state_id if message.has_current_state_id else None,
+        pending_command_count=message.staged_command_count,
+        source_healthy=message.source_healthy,
+        fault_reason=message.fault_reason,
+        last_effective_frame=_frame_from_proto(message.last_effective_frame) if message.has_effective_frame else None,
+    )
+
+
+def task_transition_from_proto(message) -> TaskTransition:
+    if message.protocol_version != 1:
+        raise ProtocolMessageError("unsupported task-transition protocol version")
+    event_kind = proto.enum_name(message, "event_kind")
+    trigger_kind = proto.enum_name(message, "trigger_kind")
+    if (not message.definition_id or not message.definition_hash or not message.app_session_id
+            or message.run_sequence == 0 or message.event_sequence == 0
+            or message.transition_sequence == 0 or event_kind == "unspecified"
+            or trigger_kind == "unspecified" or not message.HasField("effective_frame")):
+        raise ProtocolMessageError("task transition is missing required authority fields")
+    return TaskTransition(
+        protocol_version=message.protocol_version,
+        definition_id=message.definition_id,
+        definition_revision=message.definition_revision,
+        definition_hash=message.definition_hash,
+        app_session_id=message.app_session_id,
+        run_sequence=message.run_sequence,
+        event_sequence=message.event_sequence,
+        transition_sequence=message.transition_sequence,
+        event_kind=event_kind,
+        transition_id=message.transition_id,
+        previous_state_id=message.previous_state_id,
+        current_state_id=message.current_state_id,
+        trigger_kind=trigger_kind,
+        trigger_source=message.trigger_source,
+        request_id=message.request_id,
+        proposal_receipt_sequence=message.proposal_receipt_sequence,
+        proposal_receipt_time_ns=message.proposal_receipt_time_ns,
+        effective_frame=_frame_from_proto(message.effective_frame),
+    )
+
+
 def state_from_proto(message) -> AppState:
     if message.protocol_version != 1:
         raise ProtocolMessageError("unsupported state protocol version")
@@ -156,6 +266,7 @@ def state_from_proto(message) -> AppState:
         accuracy=message.model.accuracy,
         duration_ms=message.model.duration_ms,
     )
+    task = _task_from_proto(message.task) if message.HasField("task") else TaskState()
     return AppState(
         protocol_version=message.protocol_version,
         state_version=message.state_version,
@@ -165,6 +276,7 @@ def state_from_proto(message) -> AppState:
         active=active,
         collections=collections,
         model=model,
+        task=task,
         last_error=_error(message.last_error) if message.HasField("last_error") else None,
     )
 
@@ -242,7 +354,55 @@ def state_to_json(state: AppState) -> dict[str, Any]:
             "accuracy": state.model.accuracy,
             "duration_ms": str(state.model.duration_ms),
         },
+        "task": {
+            "configured": state.task.configured,
+            "definition_id": state.task.definition_id,
+            "definition_revision": str(state.task.definition_revision),
+            "definition_hash": state.task.definition_hash,
+            "app_session_id": state.task.app_session_id,
+            "lifecycle": state.task.lifecycle,
+            "run_sequence": str(state.task.run_sequence),
+            "event_sequence": str(state.task.event_sequence),
+            "transition_sequence": str(state.task.transition_sequence),
+            "current_state_id": state.task.current_state_id,
+            "pending_command_count": state.task.pending_command_count,
+            "source_healthy": state.task.source_healthy,
+            "fault_reason": state.task.fault_reason,
+            "last_effective_frame": None if state.task.last_effective_frame is None else {
+                "source_id": state.task.last_effective_frame.source_id,
+                "sequence_number": str(state.task.last_effective_frame.sequence_number),
+                "timestamp_ns": str(state.task.last_effective_frame.timestamp_ns),
+            },
+        },
         "last_error": err(state.last_error),
+    }
+
+
+def task_transition_to_json(event: TaskTransition) -> dict[str, Any]:
+    return {
+        "type": "task_transition",
+        "protocol_version": event.protocol_version,
+        "definition_id": event.definition_id,
+        "definition_revision": str(event.definition_revision),
+        "definition_hash": event.definition_hash,
+        "app_session_id": event.app_session_id,
+        "run_sequence": str(event.run_sequence),
+        "event_sequence": str(event.event_sequence),
+        "transition_sequence": str(event.transition_sequence),
+        "event_kind": event.event_kind,
+        "transition_id": event.transition_id,
+        "previous_state_id": event.previous_state_id,
+        "current_state_id": event.current_state_id,
+        "trigger_kind": event.trigger_kind,
+        "trigger_source": event.trigger_source,
+        "request_id": event.request_id,
+        "proposal_receipt_sequence": str(event.proposal_receipt_sequence),
+        "proposal_receipt_time_ns": str(event.proposal_receipt_time_ns),
+        "effective_frame": {
+            "source_id": event.effective_frame.source_id,
+            "sequence_number": str(event.effective_frame.sequence_number),
+            "timestamp_ns": str(event.effective_frame.timestamp_ns),
+        },
     }
 
 

@@ -19,7 +19,7 @@ def create_dashboard_window(
     from PySide6.QtCore import QTimer
     from PySide6.QtWidgets import (
         QCheckBox, QComboBox, QFormLayout, QGridLayout, QGroupBox, QHBoxLayout,
-        QLabel, QMainWindow, QMessageBox, QPushButton, QProgressBar, QSpinBox,
+        QLabel, QLineEdit, QMainWindow, QMessageBox, QPushButton, QProgressBar, QSpinBox,
         QVBoxLayout, QWidget,
     )
 
@@ -32,6 +32,7 @@ def create_dashboard_window(
             self.executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="gui-command")
             self.events: queue.Queue[tuple[str, object]] = queue.Queue()
             self._command_pending = False
+            self._task_command_pending = False
             self.flush_buttons = {}
             self._build_ui(device_ip)
             self.timer = QTimer(self)
@@ -78,6 +79,24 @@ def create_dashboard_window(
             fitrow.addWidget(self.fit_button)
             layout.addWidget(fitbox)
 
+            task_box = QGroupBox("Task authority")
+            task_grid = QGridLayout(task_box)
+            self.task_status = QLabel("Task: unavailable")
+            self.task_boundary = QLabel("Last committed boundary: none")
+            self.start_task_button = QPushButton("Start task"); self.start_task_button.clicked.connect(self._start_task)
+            self.abort_task_button = QPushButton("Abort task"); self.abort_task_button.clicked.connect(self._abort_task)
+            self.reset_task_button = QPushButton("Reset task"); self.reset_task_button.clicked.connect(self._reset_task)
+            self.task_event_name = QLineEdit(); self.task_event_name.setPlaceholderText("External event")
+            self.propose_event_button = QPushButton("Propose event"); self.propose_event_button.clicked.connect(self._propose_event)
+            self.task_transition_id = QSpinBox(); self.task_transition_id.setRange(1, 2**31 - 1)
+            self.propose_transition_button = QPushButton("Propose transition"); self.propose_transition_button.clicked.connect(self._propose_transition)
+            task_grid.addWidget(self.task_status, 0, 0, 1, 4)
+            task_grid.addWidget(self.task_boundary, 1, 0, 1, 4)
+            task_grid.addWidget(self.start_task_button, 2, 0); task_grid.addWidget(self.abort_task_button, 2, 1); task_grid.addWidget(self.reset_task_button, 2, 2)
+            task_grid.addWidget(self.task_event_name, 3, 0, 1, 2); task_grid.addWidget(self.propose_event_button, 3, 2)
+            task_grid.addWidget(self.task_transition_id, 4, 0, 1, 2); task_grid.addWidget(self.propose_transition_button, 4, 2)
+            layout.addWidget(task_box)
+
             self.progress_group = QGroupBox("Collections")
             self.progress_layout = QVBoxLayout(self.progress_group)
             layout.addWidget(self.progress_group)
@@ -94,6 +113,7 @@ def create_dashboard_window(
             controller = controller_factory(self.ip.text())
             controller.on_state(lambda value: self.events.put(("state", value)))
             controller.on_result(lambda value: self.events.put(("result", value)))
+            controller.on_task_transition(lambda value: self.events.put(("task_transition", value)))
             self.controller = controller
             self.connect_button.setEnabled(False)
             self.executor.submit(self._do_connect, controller)
@@ -106,13 +126,17 @@ def create_dashboard_window(
                 self.events.put(("error", str(exc)))
 
         def _set_command_controls_enabled(self, enabled: bool):
-            for widget in (self.collection, self.label, self.capture, self.apply, self.fit_button, *self.flush_buttons.values()):
+            for widget in (self.collection, self.label, self.capture, self.apply, self.fit_button,
+                           self.start_task_button, self.abort_task_button, self.reset_task_button,
+                           self.task_event_name, self.propose_event_button, self.task_transition_id,
+                           self.propose_transition_button, *self.flush_buttons.values()):
                 widget.setEnabled(enabled)
 
-        def _submit(self, work):
+        def _submit(self, work, *, task_command=False):
             if self.controller is None or self._command_pending:
                 return
             self._command_pending = True
+            self._task_command_pending = task_command
             self._set_command_controls_enabled(False)
             self.executor.submit(self._run_command, work)
 
@@ -128,6 +152,21 @@ def create_dashboard_window(
 
         def _fit(self):
             self._submit(lambda: self.controller.fit(self.epochs.value()))
+
+        def _start_task(self):
+            self._submit(lambda: self.controller.start_task(), task_command=True)
+
+        def _abort_task(self):
+            self._submit(lambda: self.controller.abort_task(), task_command=True)
+
+        def _reset_task(self):
+            self._submit(lambda: self.controller.reset_task(), task_command=True)
+
+        def _propose_event(self):
+            self._submit(lambda: self.controller.propose_task_event(self.task_event_name.text()), task_command=True)
+
+        def _propose_transition(self):
+            self._submit(lambda: self.controller.propose_task_transition(self.task_transition_id.value()), task_command=True)
 
         def _flush(self, scope):
             if self.controller is None:
@@ -153,7 +192,8 @@ def create_dashboard_window(
                     if value.terminal:
                         self._command_pending = False
                         self._set_command_controls_enabled(True)
-                        self.message.setText("Command completed")
+                        self.message.setText("Task request completed; awaiting committed transition" if self._task_command_pending else "Command completed")
+                        self._task_command_pending = False
                     else:
                         self.message.setText("Fit in progress")
                 elif kind == "error":
@@ -161,6 +201,13 @@ def create_dashboard_window(
                     self.connect_button.setEnabled(True)
                     self._set_command_controls_enabled(True)
                     self.message.setText(str(value))
+                elif kind == "task_transition":
+                    # This is the only task event that can drive behavioral UI.
+                    # Command acceptance and snapshots are displayed, never used
+                    # as an optimistic stimulus/action signal.
+                    self.message.setText(
+                        f"Committed {value.event_kind}: {value.previous_state_id} → {value.current_state_id} "
+                        f"at {value.effective_frame.source_id}/{value.effective_frame.sequence_number}")
 
         def show_state(self, state: AppState):
             """Apply one immutable replacement snapshot on the Qt thread."""
@@ -172,6 +219,17 @@ def create_dashboard_window(
                 source = f"collection {model.source_collection_id}, generation {model.source_generation}"
             progress = f"{model.phase}, {source}, epoch {model.epoch}/{model.total_epochs}, loss {model.loss:.4g}, accuracy {model.accuracy:.3f}, {model.duration_ms} ms"
             self.model.setText("Model: " + progress + (" (stale)" if model.stale else ""))
+            task = state.task
+            current = "none" if task.current_state_id is None else str(task.current_state_id)
+            self.task_status.setText(
+                f"Task: {task.lifecycle}; current {current}; pending {task.pending_command_count}; "
+                f"run/transition {task.run_sequence}/{task.transition_sequence}; hash {task.definition_hash[:12] or 'none'}")
+            if task.last_effective_frame is None:
+                self.task_boundary.setText("Last committed boundary: none")
+            else:
+                frame = task.last_effective_frame
+                self.task_boundary.setText(
+                    f"Last committed boundary: {frame.source_id} sequence {frame.sequence_number}, {frame.timestamp_ns} ns")
             self.capture.setChecked(state.active.capture_enabled)
             self.collection.clear()
             for item in state.collections:

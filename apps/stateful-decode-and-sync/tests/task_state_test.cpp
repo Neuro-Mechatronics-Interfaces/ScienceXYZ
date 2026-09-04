@@ -263,6 +263,62 @@ void test_decoder_dwell_and_priority() {
          "terminal transition atomically enters COMPLETED");
 }
 
+void test_cyclic_external_timer_and_decoder_simulation() {
+  // One deterministic, hardware-free run exercises all three task trigger
+  // authorities while preserving one exact reference boundary per commit.
+  TaskRuntime runtime(make_definition(), "c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1");
+  std::vector<TransitionEvent> events;
+  std::uint64_t sequence = 1;
+  std::uint64_t timestamp = 1'000;
+
+  expect(runtime.stage_start("sim-start", preconditions(runtime), 1).accepted,
+         "cyclic simulation start stages");
+  auto result = runtime.on_frame(frame(sequence++, timestamp));
+  expect(result.event.has_value(), "cyclic simulation start commits");
+  events.push_back(*result.event);
+
+  for (std::uint32_t cycle = 0; cycle < 3; ++cycle) {
+    timestamp += 50;
+    expect(runtime.stage_external_event("sim-go-" + std::to_string(cycle), "go",
+                                        preconditions(runtime), timestamp - 1).accepted,
+           "external event stages for each cyclic pass");
+    result = runtime.on_frame(frame(sequence++, timestamp));
+    expect(result.event.has_value() && result.event->transition_id == 10 &&
+               result.event->effective_frame.sequence_number == sequence - 1,
+           "external event commits on its first subsequent reference frame");
+    events.push_back(*result.event);
+
+    if (cycle < 2) {
+      expect(!runtime.on_frame(frame(sequence++, timestamp + 99)).event.has_value(),
+             "timer remains uncommitted before its source-time deadline");
+      timestamp += 100;
+      result = runtime.on_frame(frame(sequence++, timestamp));
+      expect(result.event.has_value() && result.event->transition_id == 11 &&
+                 result.event->trigger_kind == TriggerKind::kSourceTimeout,
+             "timer returns cyclic task to waiting at the deadline frame");
+      events.push_back(*result.event);
+    }
+  }
+
+  runtime.observe_decoder(1, 800'000, timestamp + 1);
+  runtime.observe_decoder(1, 800'000, timestamp + 2);
+  timestamp += 1;
+  result = runtime.on_frame(frame(sequence++, timestamp));
+  expect(result.event.has_value() && result.event->transition_id == 12 &&
+             result.event->trigger_kind == TriggerKind::kDecoderPredicate &&
+             runtime.snapshot().lifecycle == Lifecycle::kCompleted,
+         "decoder dwell closes the final active cyclic pass on a frame boundary");
+  events.push_back(*result.event);
+
+  expect(events.size() == 7, "cyclic simulation has one start plus six committed boundaries");
+  for (std::size_t index = 0; index < events.size(); ++index) {
+    expect(events[index].event_sequence == index + 1 &&
+               (index == 0 || events[index - 1].effective_frame.sequence_number <
+                                  events[index].effective_frame.sequence_number),
+           "simulation preserves contiguous event sequences and increasing frame attribution");
+  }
+}
+
 void test_abort_reset_and_new_run() {
   TaskRuntime runtime(make_definition(), "dddddddddddddddddddddddddddddddd");
   start(runtime);
@@ -377,6 +433,7 @@ int main() {
     test_direct_transition_proposal();
     test_each_frame_in_a_transport_batch_is_a_boundary();
     test_decoder_dwell_and_priority();
+    test_cyclic_external_timer_and_decoder_simulation();
     test_abort_reset_and_new_run();
     test_expiry_source_fault_and_session_rollover();
     test_non_monotonic_reference_faults();

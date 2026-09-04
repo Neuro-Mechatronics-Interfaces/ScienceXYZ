@@ -2,7 +2,7 @@ import asyncio
 import json
 import unittest
 
-from stateful_decode_and_sync.model import AppState, CommandResult
+from stateful_decode_and_sync.model import AppState, CommandResult, TaskFrameBoundary, TaskTransition
 from stateful_decode_and_sync.service import ControlService, _Client
 
 
@@ -16,6 +16,9 @@ class DummyController:
 
     def on_result(self, callback):
         self.result_callback = callback
+
+    def on_task_transition(self, callback):
+        self.task_callback = callback
 
     def connect(self):
         pass
@@ -107,6 +110,21 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(delivered, ["1", "19"])
         self.assertIsNone(client.state_task)
         self.service._clients.discard(client)
+
+    async def test_task_transition_subscription_forwards_committed_event(self):
+        reader, writer = await asyncio.open_connection("127.0.0.1", self.port)
+        writer.write(b'{"protocol_version":1,"request_id":"sub","command":"subscribe_task_transitions","enabled":true}\n')
+        await writer.drain()
+        result = json.loads((await reader.readline()).decode())
+        self.assertEqual(result["status"], "succeeded")
+        self.controller.task_callback(TaskTransition(
+            1, "task", 1, "a" * 64, "0" * 32, 1, 1, 1, "start", 0, 0, 1,
+            "start_command", "StartTask", "device/request", 1, 1,
+            TaskFrameBoundary("reference", 7, 99)))
+        event = json.loads((await reader.readline()).decode())
+        self.assertEqual(event["type"], "task_transition")
+        self.assertEqual(event["effective_frame"]["sequence_number"], "7")
+        writer.close(); await writer.wait_closed()
 
 
 if __name__ == "__main__":

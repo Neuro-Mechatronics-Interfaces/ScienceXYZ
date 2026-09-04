@@ -11,13 +11,16 @@ digraph TaskStateAuthorityPlan {
   engine [label="On-device task engine\nvalidate + stage"];
   boundary [label="Reference-frame boundary\ncommit exactly once"];
   event [label="TaskTransitionEvent\nseq + old/new + ref time"];
-  consumers [label="State snapshot + GUI\nbehavior controller"];
+  status [label="TaskStatus snapshot\nreconnect + preconditions only"];
+  behavior [label="Host controller / NDJSON / GUI\nbehavior only from event tap"];
   fusion [label="H-22 host fusion/recorder\nraw clocks + aligned intervals"];
 
   definition -> validator -> engine;
   proposals -> engine;
   engine -> boundary [label="accepted proposal"];
   boundary -> event [label="authoritative commit"];
-  event -> consumers;
+  boundary -> status [label="replacement snapshot"];
+  event -> behavior [label="committed action only"];
+  status -> behavior [style=dashed, label="display / stale rejection\nnot an action trigger"];
   event -> fusion;
 }

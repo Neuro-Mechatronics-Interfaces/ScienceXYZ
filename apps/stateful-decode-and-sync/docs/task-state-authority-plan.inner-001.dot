@@ -2,9 +2,9 @@ digraph "inner_001" {
   graph [layout=neato, overlap=false, splines=true, labelloc=t, label="task-state-authority-plan: inner view 1"];
   "definition" [color="#385170", fillcolor="#F7F9FC", fontname="Arial", fontsize="10", height="0.5", label="Versioned task definition\nstates, edges, guards, timers", pin="true", pos="0,0!", shape="box", style="rounded,filled", width="1.9931"];
   "validator" [color="#385170", fillcolor="#F7F9FC", fontname="Arial", fontsize="10", height="0.5", label="Startup validator\nimmutable runtime graph", pin="true", pos="180,0!", shape="box", style="rounded,filled", width="1.7118"];
-  "engine" [color="#385170", fillcolor="#F7F9FC", fontname="Arial", fontsize="10", height="0.5", label="On-device task engine\nvalidate + stage", pin="true", pos="360,0!", shape="box", style="rounded,filled", width="1.5556"];
-  "boundary" [color="#385170", fillcolor="#F7F9FC", fontname="Arial", fontsize="10", height="0.5", label="Reference-frame boundary\ncommit exactly once", pin="true", pos="540,0!", shape="box", style="rounded,filled", width="1.7951"];
-  "event" [color="#385170", fillcolor="#F7F9FC", fontname="Arial", fontsize="10", height="0.5", label="TaskTransitionEvent\nseq + old/new + ref time", pin="true", pos="720,0!", shape="box", style="rounded,filled", width="1.6806"];
+  "event" [color="#385170", fillcolor="#F7F9FC", fontname="Arial", fontsize="10", height="0.5", label="TaskTransitionEvent\nseq + old/new + ref time", pin="true", pos="360,0!", shape="box", style="rounded,filled", width="1.6806"];
+  "engine" [color="#385170", fillcolor="#F7F9FC", fontname="Arial", fontsize="10", height="0.5", label="On-device task engine\nvalidate + stage", pin="true", pos="540,0!", shape="box", style="rounded,filled", width="1.5556"];
+  "boundary" [color="#385170", fillcolor="#F7F9FC", fontname="Arial", fontsize="10", height="0.5", label="Reference-frame boundary\ncommit exactly once", pin="true", pos="720,0!", shape="box", style="rounded,filled", width="1.7951"];
   "proposals" [color="#385170", fillcolor="#F7F9FC", fontname="Arial", fontsize="10", height="0.5", label="Transition proposals\noperator / timer / decoder", pin="true", pos="0,-100!", shape="box", style="rounded,filled", width="1.7431"];
   "definition" -> "validator" [color="#526D82", fontname="Arial", fontsize="9"];
   "validator" -> "engine" [color="#526D82", fontname="Arial", fontsize="9"];

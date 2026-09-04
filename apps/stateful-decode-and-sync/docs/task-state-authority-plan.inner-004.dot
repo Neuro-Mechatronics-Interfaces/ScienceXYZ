@@ -1,0 +1,4 @@
+digraph "inner_004" {
+  graph [layout=neato, overlap=false, splines=true, labelloc=t, label="task-state-authority-plan: inner view 4"];
+  "behavior" [color="#385170", fillcolor="#F7F9FC", fontname="Arial", fontsize="10", height="0.5", label="Host controller / NDJSON / GUI\nbehavior only from event tap", pin="true", pos="0,0!", shape="box", style="rounded,filled", width="2.1181"];
+}

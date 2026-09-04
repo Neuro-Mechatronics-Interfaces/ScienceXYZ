@@ -73,7 +73,7 @@ class NdjsonClient:
             self._send(request)
             while True:
                 event = self._read_event()
-                if event.get("type") == "state":
+                if event.get("type") in {"state", "task_transition"}:
                     self._events.append(event)
                     continue
                 if event.get("type") != "result":
@@ -106,20 +106,79 @@ class NdjsonClient:
     def wait_for_state(self, timeout: float | None = None) -> dict[str, Any]:
         """Return the next state event, retaining unrelated result events."""
         deadline = None if timeout is None else time.monotonic() + timeout
-        while True:
-            remaining = None if deadline is None else max(0.0, deadline - time.monotonic())
-            event = self.receive(remaining)
-            if event.get("type") == "state":
-                return event
-            self._events.append(event)
+        retained: list[dict[str, Any]] = []
+        try:
+            while True:
+                remaining = None if deadline is None else max(0.0, deadline - time.monotonic())
+                event = self.receive(remaining)
+                if event.get("type") == "state":
+                    return event
+                retained.append(event)
+        finally:
+            self._events.extendleft(reversed(retained))
 
     def get_state_snapshot(self, *, timeout: float | None = None) -> dict[str, Any]:
-        """Subscribe and return the service's current complete state snapshot."""
+        """Return a fresh complete replacement snapshot, discarding stale replacements."""
         self.subscribe_state(True)
+        # State events are replacements, unlike task transitions/results. A
+        # caller asking for a reconnect-safe precondition must not consume an
+        # older queued snapshot from before the explicit GetState request.
+        self._events = deque(event for event in self._events if event.get("type") != "state")
+        self.request("get_state")
         return self.wait_for_state(timeout)
 
     def subscribe_state(self, enabled: bool = True) -> dict[str, Any]:
         return self.request("subscribe_state", enabled=enabled)
+
+    def subscribe_task_transitions(self, enabled: bool = True) -> dict[str, Any]:
+        return self.request("subscribe_task_transitions", enabled=enabled)
+
+    @staticmethod
+    def task_preconditions(snapshot: dict[str, Any]) -> dict[str, Any]:
+        """Copy task preconditions from one replacement state snapshot.
+
+        Callers must obtain a fresh snapshot after reconnect; this helper does
+        not cache or replay commands.
+        """
+        task = snapshot.get("task")
+        if not isinstance(task, dict) or not task.get("app_session_id"):
+            raise SocketClientError("state snapshot does not contain a configured task session")
+        values = {
+            "expected_app_session_id": task["app_session_id"],
+            "expected_run_sequence": int(task["run_sequence"]),
+            "expected_transition_sequence": int(task["transition_sequence"]),
+        }
+        if task.get("current_state_id") is not None:
+            values["expected_state_id"] = int(task["current_state_id"])
+        return values
+
+    def start_task(self, *, preconditions: dict[str, Any] | None = None) -> dict[str, Any]:
+        return self.request("start_task", **(preconditions or {}))
+
+    def propose_task_event(self, event_name: str, *, preconditions: dict[str, Any] | None = None) -> dict[str, Any]:
+        return self.request("propose_task_event", event_name=event_name, **(preconditions or {}))
+
+    def propose_task_transition(self, transition_id: int, *, preconditions: dict[str, Any] | None = None) -> dict[str, Any]:
+        return self.request("propose_task_transition", transition_id=transition_id, **(preconditions or {}))
+
+    def abort_task(self, *, preconditions: dict[str, Any] | None = None) -> dict[str, Any]:
+        return self.request("abort_task", **(preconditions or {}))
+
+    def reset_task(self, *, preconditions: dict[str, Any] | None = None) -> dict[str, Any]:
+        return self.request("reset_task", **(preconditions or {}))
+
+    def wait_for_task_transition(self, timeout: float | None = None) -> dict[str, Any]:
+        deadline = None if timeout is None else time.monotonic() + timeout
+        retained: list[dict[str, Any]] = []
+        try:
+            while True:
+                remaining = None if deadline is None else max(0.0, deadline - time.monotonic())
+                event = self.receive(remaining)
+                if event.get("type") == "task_transition":
+                    return event
+                retained.append(event)
+        finally:
+            self._events.extendleft(reversed(retained))
 
     def prepare_capture(self, collection_id: int, label: int, enabled: bool) -> dict[str, Any]:
         return self.request("prepare_capture", collection_id=collection_id, label=label, enabled=enabled)

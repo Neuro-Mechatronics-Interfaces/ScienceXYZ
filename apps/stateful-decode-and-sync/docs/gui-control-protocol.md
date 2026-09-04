@@ -104,6 +104,10 @@ All canonical commands carry `protocol_version: 1`, a non-empty unique `request_
 | `set_capture` | `enabled` | Toggle capture for the already selected target. |
 | `fit` | optional `epochs` | Snapshot and fit the active collection. |
 | `flush` | `scope`, optional target | Clear `label`, `collection`, or `all`; target defaults to active for `label`/`collection`. |
+| `start_task` | task preconditions | Stage a configured task run for the next valid reference frame. |
+| `propose_task_event` | task preconditions, `event_name` | Propose a configured external-event edge; it is not a state assignment. |
+| `propose_task_transition` | task preconditions, `transition_id` | Propose one configured external-event edge by id. |
+| `abort_task` / `reset_task` | task preconditions | Stage the applicable lifecycle action for the next valid reference frame. |
 
 `prepare_capture` is the safe targeting primitive. A successful command changes the three active fields as one transition, so no feature window can be routed to a partially updated target. Individual selection commands reject with `capture_enabled` while capture is enabled; clients should disable first or use `prepare_capture`. A `set_capture` command does not implicitly select a label or collection.
 
@@ -139,6 +143,33 @@ Invalid commands and rejected commands do not mutate active state, buffers, gene
 
 Request IDs are unique across the controller's live session. A duplicate ID for an in-flight request returns `duplicate_request_id`; a duplicate ID for a completed request returns the cached terminal result without reapplying the command. The cache is bounded and may expire only after the session is reset.
 
+## Task authority and behavior clients
+
+`StateSnapshot.task` is a complete operational replacement: it exposes the
+configured definition/hash, app session id, lifecycle, current state (if any),
+run/event/transition sequences, staged-command count, source health/fault, and
+last effective reference frame. It is suitable for display and for deriving
+the preconditions attached to every task mutation. A controller clears its
+task-snapshot readiness on reconnect and will not construct a task command
+until a replacement snapshot has arrived. A caller-provided precondition that
+does not match that replacement is rejected locally; the App independently
+rejects stale preconditions without staging or replaying the mutation.
+
+The controller also owns a separate `task_transition` producer-tap connection.
+It decodes immutable `TaskTransitionEvent` messages, detects session-scoped
+event-sequence gaps, and invokes task-transition callbacks. The loopback
+service fans those callbacks out as NDJSON `{"type":"task_transition", ...}`
+events after `subscribe_task_transitions: true`; the blocking client retains
+them while awaiting ordinary command results and exposes
+`wait_for_task_transition()`.
+
+Behavioral software may render status from snapshots, but it must change a
+stimulus or action only from a received `task_transition` event. `accepted`
+means only that a request staged; a terminal success follows the event and
+replacement snapshot. The dashboard follows the same rule: it displays task
+status/pending count from `TaskStatus` and reports the actual state change only
+from the transition callback.
+
 ## Tap mapping and compatibility
 
 The device taps are:
@@ -148,6 +179,7 @@ The device taps are:
 | `control` | consumer | Versioned command envelope; validated and queued for serial main-loop application. |
 | `state` | producer | Complete versioned state snapshots. |
 | `command_result` | producer | Correlated result/progress envelopes. |
+| `task_transition` | producer | Immutable committed `TaskTransitionEvent` history. |
 | `broadband_out` | producer | Existing `BroadbandFrame`; unchanged source timestamps in sampling mode. |
 | `class_out` | producer | Existing little-endian float `Tensor[num_classes]`. |
 
@@ -176,7 +208,12 @@ The Python controller exposes an optional asyncio TCP service for the GUI and ex
 - Every request includes `protocol_version`, `request_id`, and `command`.
  `request_id` is unique per client session and is echoed in results.
 - Supported socket commands are `get_state`, `subscribe_state`,
- `prepare_capture`, `select_collection`, `select_label`, `set_capture`, `fit`, and `flush`. The socket service maps them to the canonical device commands; it never bypasses the controller with direct Tap calls.
+ `subscribe_task_transitions`, `prepare_capture`, `select_collection`,
+ `select_label`, `set_capture`, `fit`, `flush`, `start_task`,
+ `propose_task_event`, `propose_task_transition`, `abort_task`, and
+ `reset_task`. The socket service maps device commands to the canonical
+ controller path; `subscribe_task_transitions` is a host-side subscription and
+ never bypasses the controller with a direct Tap call.
 - Bad JSON, missing fields, wrong types, unsupported versions, and invalid
  arguments return a `failed` result with a stable error code. The server continues reading after a recoverable bad request.
 - State events are complete replacement snapshots. A slow subscriber may have
@@ -187,7 +224,9 @@ The Python controller exposes an optional asyncio TCP service for the GUI and ex
 - Mutating requests from multiple clients share the controller's FIFO command
  serialization and therefore have observable result/state order. Disconnect cancels delivery to that client but does not cancel an already applied device command.
 
-The socket response/event shapes are the same `result` and `state` envelopes shown above. This keeps the GUI, loopback clients, and fake-device tests on one contract.
+The socket response/event shapes are the `result`, `state`, and
+`task_transition` envelopes described above. This keeps the GUI, loopback
+clients, and fake-device tests on one contract.
 
 ## Architecture/data flow
 

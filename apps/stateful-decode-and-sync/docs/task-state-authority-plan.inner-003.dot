@@ -1,0 +1,4 @@
+digraph "inner_003" {
+  graph [layout=neato, overlap=false, splines=true, labelloc=t, label="task-state-authority-plan: inner view 3"];
+  "status" [color="#385170", fillcolor="#F7F9FC", fontname="Arial", fontsize="10", height="0.5", label="TaskStatus snapshot\nreconnect + preconditions only", pin="true", pos="0,0!", shape="box", style="rounded,filled", width="2.0764"];
+}

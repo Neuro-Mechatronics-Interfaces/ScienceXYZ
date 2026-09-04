@@ -1,6 +1,11 @@
 digraph "task-state-authority-plan_parent" {
   graph [layout=neato, overlap=false, splines=true, labelloc=t, label="task-state-authority-plan: parent overview"];
   "inner_001" [URL="task-state-authority-plan.inner-001.svg", fillcolor="#eef4ff", label="Inner view 1\n6 nodes", pin="true", pos="0,0!", shape="folder", style="filled", target="_top", tooltip="Open Inner view 1\n6 nodes"];
-  "inner_002" [URL="task-state-authority-plan.inner-002.svg", fillcolor="#eef4ff", label="Inner view 2\n2 nodes", pin="true", pos="180,0!", shape="folder", style="filled", target="_top", tooltip="Open Inner view 2\n2 nodes"];
-  "inner_001" -> "inner_002" [label="2 connections"];
+  "inner_002" [URL="task-state-authority-plan.inner-002.svg", fillcolor="#eef4ff", label="Inner view 2\n1 node", pin="true", pos="180,0!", shape="folder", style="filled", target="_top", tooltip="Open Inner view 2\n1 node"];
+  "inner_003" [URL="task-state-authority-plan.inner-003.svg", fillcolor="#eef4ff", label="Inner view 3\n1 node", pin="true", pos="360,0!", shape="folder", style="filled", target="_top", tooltip="Open Inner view 3\n1 node"];
+  "inner_004" [URL="task-state-authority-plan.inner-004.svg", fillcolor="#eef4ff", label="Inner view 4\n1 node", pin="true", pos="540,0!", shape="folder", style="filled", target="_top", tooltip="Open Inner view 4\n1 node"];
+  "inner_001" -> "inner_002" [label="1 connection"];
+  "inner_001" -> "inner_003" [label="1 connection"];
+  "inner_001" -> "inner_004" [label="1 connection"];
+  "inner_003" -> "inner_004" [label="1 connection"];
 }

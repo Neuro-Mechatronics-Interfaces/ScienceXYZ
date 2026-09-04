@@ -99,6 +99,52 @@ class FakeDeviceEndToEndTests(unittest.IsolatedAsyncioTestCase):
             replacement.close()
         self.assertEqual(len([command for command in self.device.commands if command.command == 7]), len(fit_commands))
 
+    async def test_task_actions_wait_for_committed_transition_and_stale_preconditions_fail(self):
+        snapshot = await asyncio.to_thread(self.client.get_state_snapshot)
+        preconditions = self.client.task_preconditions(snapshot)
+        await asyncio.to_thread(self.client.subscribe_task_transitions)
+        start = asyncio.create_task(asyncio.to_thread(self.client.start_task, preconditions=preconditions))
+        deadline = time.monotonic() + 1
+        while not self.device._staged_task_commands and time.monotonic() < deadline:
+            await asyncio.sleep(0.005)
+        self.assertFalse(start.done(), "acceptance must not be treated as a committed task action")
+        self.assertTrue(self.device.advance_task_frame())
+        self.assertEqual((await start)["status"], "succeeded")
+        event = await asyncio.to_thread(self.client.wait_for_task_transition, 1)
+        self.assertEqual((event["event_kind"], event["current_state_id"]), ("start", 1))
+        self.assertEqual(event["effective_frame"]["sequence_number"], "1")
+        with self.assertRaises(RemoteCommandError) as stale:
+            await asyncio.to_thread(self.client.propose_task_event, "advance", preconditions=preconditions)
+        self.assertIn("stale", stale.exception.result["error"]["message"])
+
+    async def test_cyclic_task_simulates_external_timer_and_decoder_boundaries(self):
+        await asyncio.to_thread(self.client.subscribe_task_transitions)
+
+        async def commit(call, *args, automatic=None):
+            snapshot = await asyncio.to_thread(self.client.get_state_snapshot)
+            request = asyncio.create_task(asyncio.to_thread(call, *args,
+                                                            preconditions=self.client.task_preconditions(snapshot)))
+            deadline = time.monotonic() + 1
+            while not self.device._staged_task_commands and time.monotonic() < deadline:
+                await asyncio.sleep(0.005)
+            self.assertTrue(self.device.advance_task_frame())
+            await request
+            return await asyncio.to_thread(self.client.wait_for_task_transition, 1)
+
+        start = await commit(self.client.start_task)
+        active = await commit(self.client.propose_task_event, "go")
+        self.assertTrue(self.device.advance_task_timer())
+        timeout = await asyncio.to_thread(self.client.wait_for_task_transition, 1)
+        active_again = await commit(self.client.propose_task_transition, 10)
+        self.assertTrue(self.device.advance_task_decoder())
+        decoded = await asyncio.to_thread(self.client.wait_for_task_transition, 1)
+        events = [start, active, timeout, active_again, decoded]
+        self.assertEqual([event["event_sequence"] for event in events], ["1", "2", "3", "4", "5"])
+        self.assertEqual([event["trigger_kind"] for event in events],
+                         ["start_command", "external_event", "source_timeout",
+                          "external_event", "decoder_predicate"])
+        self.assertEqual(decoded["current_state_id"], 3)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,5 +1,4 @@
 digraph "inner_002" {
   graph [layout=neato, overlap=false, splines=true, labelloc=t, label="task-state-authority-plan: inner view 2"];
-  "consumers" [color="#385170", fillcolor="#F7F9FC", fontname="Arial", fontsize="10", height="0.5", label="State snapshot + GUI\nbehavior controller", pin="true", pos="0,0!", shape="box", style="rounded,filled", width="1.5347"];
-  "fusion" [color="#385170", fillcolor="#F7F9FC", fontname="Arial", fontsize="10", height="0.5", label="H-22 host fusion/recorder\nraw clocks + aligned intervals", pin="true", pos="180,0!", shape="box", style="rounded,filled", width="1.9931"];
+  "fusion" [color="#385170", fillcolor="#F7F9FC", fontname="Arial", fontsize="10", height="0.5", label="H-22 host fusion/recorder\nraw clocks + aligned intervals", pin="true", pos="0,0!", shape="box", style="rounded,filled", width="1.9931"];
 }

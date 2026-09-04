@@ -8,8 +8,9 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
-from .controller import BroadbandController, ControllerError, DeviceCommandError
-from .model import AppState, CommandResult, result_to_json, state_to_json
+from .controller import BroadbandController, ControllerError, DeviceCommandError, TaskPreconditions
+from .model import (AppState, CommandResult, TaskTransition, result_to_json,
+                    state_to_json, task_transition_to_json)
 
 
 MAX_LINE = 64 * 1024
@@ -19,6 +20,7 @@ MAX_LINE = 64 * 1024
 class _Client:
     writer: asyncio.StreamWriter
     subscribed: bool = False
+    task_transitions_subscribed: bool = False
     write_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     session_id: str = field(default_factory=lambda: uuid.uuid4().hex)
     pending_state: dict[str, Any] | None = None
@@ -39,6 +41,8 @@ class ControlService:
         self._active_requests: dict[str, tuple[_Client, str]] = {}
         self._loop: asyncio.AbstractEventLoop | None = None
         controller.on_state(self._state_from_thread)
+        if hasattr(controller, "on_task_transition"):
+            controller.on_task_transition(self._task_transition_from_thread)
         if hasattr(controller, "on_result"):
             controller.on_result(self._result_from_thread)
 
@@ -73,6 +77,10 @@ class ControlService:
         if self._loop is not None and result.status == "accepted" and result.progress is not None:
             self._loop.call_soon_threadsafe(self._forward_progress, result)
 
+    def _task_transition_from_thread(self, event: TaskTransition) -> None:
+        if self._loop is not None:
+            self._loop.call_soon_threadsafe(self._broadcast_task_transition, event)
+
     def _forward_progress(self, result: CommandResult) -> None:
         target = self._active_requests.get(result.request_id)
         if target is None:
@@ -92,6 +100,14 @@ class ControlService:
                 client.pending_state = state_to_json(state)
                 if client.state_task is None or client.state_task.done():
                     client.state_task = asyncio.create_task(self._drain_states(client))
+
+    def _broadcast_task_transition(self, event: TaskTransition) -> None:
+        value = task_transition_to_json(event)
+        for client in tuple(self._clients):
+            if client.task_transitions_subscribed:
+                task = asyncio.create_task(self._write(client, value))
+                client.progress_tasks.add(task)
+                task.add_done_callback(client.progress_tasks.discard)
 
     async def _drain_states(self, client: _Client) -> None:
         try:
@@ -168,6 +184,16 @@ class ControlService:
             enabled = request.get("enabled")
             if not isinstance(enabled, bool):
                 return self._error(request_id, "invalid_argument", "enabled must be boolean")
+        if command == "subscribe_task_transitions":
+            enabled = request.get("enabled")
+            if not isinstance(enabled, bool):
+                return self._error(request_id, "invalid_argument", "enabled must be boolean")
+            client.task_transitions_subscribed = enabled
+            return {
+                "type": "result", "protocol_version": 1, "request_id": request_id,
+                "command": command, "status": "succeeded",
+                "state_version": str(getattr(getattr(self.controller, "state", None), "state_version", 0)), "error": None,
+            }
 
         completed = False
         try:
@@ -228,7 +254,38 @@ class ControlService:
             return c.fit(self._uint(request, "epochs", 0), request_id)
         if name == "flush":
             return c.flush(request["scope"], self._optional_uint(request, "collection_id"), self._optional_uint(request, "label"), request_id)
+        preconditions = self._task_preconditions(request)
+        if name == "start_task":
+            return c.start_task(preconditions=preconditions, request_id=request_id)
+        if name == "propose_task_event":
+            event_name = request.get("event_name")
+            if not isinstance(event_name, str) or not event_name:
+                raise ValueError("event_name must be a non-empty string")
+            return c.propose_task_event(event_name, preconditions=preconditions, request_id=request_id)
+        if name == "propose_task_transition":
+            return c.propose_task_transition(self._positive_uint(request, "transition_id"), preconditions=preconditions, request_id=request_id)
+        if name == "abort_task":
+            return c.abort_task(preconditions=preconditions, request_id=request_id)
+        if name == "reset_task":
+            return c.reset_task(preconditions=preconditions, request_id=request_id)
         raise ValueError(f"unknown command: {name}")
+
+    @classmethod
+    def _task_preconditions(cls, request: dict[str, Any]) -> TaskPreconditions | None:
+        names = ("expected_app_session_id", "expected_run_sequence", "expected_transition_sequence")
+        present = [name in request for name in names]
+        if any(present) and not all(present):
+            raise ValueError("task preconditions must include app session, run sequence, and transition sequence")
+        if not any(present):
+            if "expected_state_id" in request:
+                raise ValueError("expected_state_id requires complete task preconditions")
+            return None
+        session = request["expected_app_session_id"]
+        if not isinstance(session, str) or not session:
+            raise ValueError("expected_app_session_id must be a non-empty string")
+        state_id = cls._optional_uint(request, "expected_state_id")
+        return TaskPreconditions(session, cls._uint(request, "expected_run_sequence"),
+                                 cls._uint(request, "expected_transition_sequence"), state_id)
 
     @staticmethod
     def _bool(request: dict[str, Any], key: str) -> bool:
@@ -242,6 +299,13 @@ class ControlService:
         value = request[key] if key in request else default
         if not isinstance(value, int) or isinstance(value, bool) or value < 0:
             raise ValueError(f"{key} must be a non-negative integer")
+        return value
+
+    @classmethod
+    def _positive_uint(cls, request: dict[str, Any], key: str) -> int:
+        value = cls._uint(request, key)
+        if value == 0:
+            raise ValueError(f"{key} must be a positive integer")
         return value
 
     @classmethod
