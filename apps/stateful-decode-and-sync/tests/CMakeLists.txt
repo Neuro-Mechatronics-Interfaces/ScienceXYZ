@@ -30,6 +30,16 @@ add_executable(stateful-decode-and-sync-task-timeline-adapter-tests
     ../src/task_timeline_adapter.cpp
 )
 
+# Host task-recorder writer. SDK- and HDF5-free: it drives the persistence seam
+# (RecordSink) from the value types, and the test exercises it with an in-memory
+# fake sink. clock_estimator.cpp supplies AffineClockEstimator::epochs().
+add_executable(stateful-decode-and-sync-task-recorder-writer-tests
+    task_recorder_writer_test.cpp
+    ../src/task_timeline.cpp
+    ../src/task_recorder_writer.cpp
+    ../src/clock_estimator.cpp
+)
+
 add_executable(stateful-decode-and-sync-mlp-tests
     mlp_test.cpp
     ../src/mlp.cpp
@@ -96,6 +106,7 @@ target_compile_features(stateful-decode-and-sync-control-state-tests PRIVATE cxx
 target_compile_features(stateful-decode-and-sync-task-state-tests PRIVATE cxx_std_20)
 target_compile_features(stateful-decode-and-sync-task-timeline-tests PRIVATE cxx_std_20)
 target_compile_features(stateful-decode-and-sync-task-timeline-adapter-tests PRIVATE cxx_std_20)
+target_compile_features(stateful-decode-and-sync-task-recorder-writer-tests PRIVATE cxx_std_20)
 target_compile_features(stateful-decode-and-sync-mlp-tests PRIVATE cxx_std_20)
 target_compile_features(stateful-decode-and-sync-fit-worker-tests PRIVATE cxx_std_20)
 target_compile_features(stateful-decode-and-sync-feature-worker-tests PRIVATE cxx_std_20)
@@ -124,6 +135,9 @@ target_include_directories(stateful-decode-and-sync-task-timeline-tests PRIVATE
 target_include_directories(stateful-decode-and-sync-task-timeline-adapter-tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../src
     ${PROTO_OUT_DIR}
+)
+target_include_directories(stateful-decode-and-sync-task-recorder-writer-tests PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src
 )
 target_include_directories(stateful-decode-and-sync-mlp-tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../src
@@ -182,6 +196,7 @@ if(MSVC)
     target_compile_options(stateful-decode-and-sync-task-state-tests PRIVATE /W4 /WX)
     target_compile_options(stateful-decode-and-sync-task-timeline-tests PRIVATE /W4 /WX)
     target_compile_options(stateful-decode-and-sync-task-timeline-adapter-tests PRIVATE /W4 /WX)
+    target_compile_options(stateful-decode-and-sync-task-recorder-writer-tests PRIVATE /W4 /WX)
     target_compile_options(stateful-decode-and-sync-mlp-tests PRIVATE /W4 /WX)
     target_compile_options(stateful-decode-and-sync-fit-worker-tests PRIVATE /W4 /WX)
     target_compile_options(stateful-decode-and-sync-feature-worker-tests PRIVATE /W4 /WX)
@@ -207,6 +222,9 @@ else()
         -Wall -Wextra -Wpedantic -Werror
     )
     target_compile_options(stateful-decode-and-sync-task-timeline-adapter-tests PRIVATE
+        -Wall -Wextra -Wpedantic -Werror
+    )
+    target_compile_options(stateful-decode-and-sync-task-recorder-writer-tests PRIVATE
         -Wall -Wextra -Wpedantic -Werror
     )
     target_compile_options(stateful-decode-and-sync-mlp-tests PRIVATE
@@ -253,6 +271,10 @@ add_test(
 add_test(
     NAME stateful-decode-and-sync-task-timeline-adapter
     COMMAND stateful-decode-and-sync-task-timeline-adapter-tests
+)
+add_test(
+    NAME stateful-decode-and-sync-task-recorder-writer
+    COMMAND stateful-decode-and-sync-task-recorder-writer-tests
 )
 add_test(
     NAME stateful-decode-and-sync-mlp

@@ -1,5 +1,5 @@
 digraph task_recorder_timeline {
-  graph [rankdir=LR, bgcolor="transparent", pad="0.15", nodesep="0.45", ranksep="0.6"];
+  graph [rankdir=LR, bgcolor="transparent", pad="0.15", nodesep="0.4", ranksep="0.55"];
   node [shape=box, style="rounded,filled", fontname="Arial", fontsize=10,
         color="#385170", fillcolor="#F7F9FC", margin="0.12,0.07"];
   edge [fontname="Arial", fontsize=9, color="#476B8A"];
@@ -7,15 +7,15 @@ digraph task_recorder_timeline {
   events [label="task_transition tap\nTaskTransitionEvent"];
   reference [label="reference tap\nBroadbandFrame"];
   adapter [label="TaskTimelineAdapter\nwire decode + host stamp", fillcolor="#EDE7F6", color="#5E4B8B"];
-  integrity [label="sequence + reference\nintegrity checks", fillcolor="#FFF5E6", color="#C9791C"];
-  intervals [label="half-open intervals\n[effective_i, effective_i+1)"];
-  clocks [label="auxiliary affine clock\ninterval ± epsilon"];
-  labels [label="HDF5 task labels\nlabeled | ambiguous | incomplete", fillcolor="#EAF6EC", color="#3D7A52"];
+  timeline [label="TaskTimeline\nintervals + diagnostics", fillcolor="#FFF5E6", color="#C9791C"];
+  clocks [label="AffineClockEstimator\nclock-model history"];
+  writer [label="TaskRecorderHdf5Writer\nepoch + loss accounting", fillcolor="#EAF6EC", color="#3D7A52"];
+  sink [label="RecordSink\nHDF5 | fake (test)", fillcolor="#EAF6EC", color="#3D7A52"];
 
   events -> adapter [label="validated wire"];
   reference -> adapter [label="frame identity"];
-  adapter -> integrity [label="value records"];
-  integrity -> intervals [label="only observed commits"];
-  clocks -> labels;
-  intervals -> labels [label="boundary containment"];
+  adapter -> timeline [label="only observed commits"];
+  timeline -> writer [label="records / intervals / diagnostics"];
+  clocks -> writer [label="epochs + active model"];
+  writer -> sink [label="serialize snapshot"];
 }

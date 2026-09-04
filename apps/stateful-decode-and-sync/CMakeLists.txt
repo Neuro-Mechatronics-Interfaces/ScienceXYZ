@@ -109,3 +109,8 @@ if(BUILD_TESTING)
     find_package(Protobuf CONFIG REQUIRED)
     add_subdirectory(tests)
 endif()
+
+# Host-side consumer tools (task-timeline recorder). Gated OFF by default; the
+# subdirectory early-returns unless BUILD_TASK_RECORDER is ON, so this is inert
+# for both the device App build and the SDK-free host-tests build.
+add_subdirectory(tools)
