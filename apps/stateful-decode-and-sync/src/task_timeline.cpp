@@ -1,5 +1,6 @@
 #include "task_timeline.hpp"
 
+#include <limits>
 #include <utility>
 
 namespace app::recording {
@@ -143,18 +144,19 @@ SampleTaskLabel TaskTimeline::label(const wireless::MappedTime& mapped_time) con
   for (std::size_t index = 0; index < intervals_.size(); ++index) {
     const auto& interval = intervals_[index];
     const auto start = static_cast<std::int64_t>(interval.start.timestamp_ns);
+    // An absent end means the interval is still live; model it as +inf so the
+    // comparisons below need no conditional dereference (which GCC's
+    // -Wmaybe-uninitialized mis-analyzes for std::optional under -O).
     const auto end = interval.end.has_value()
-                         ? std::optional<std::int64_t>(
-                               static_cast<std::int64_t>(interval.end->timestamp_ns))
-                         : std::nullopt;
-    if (sample.upper_bound_ns < start || (end.has_value() && sample.lower_bound_ns >= *end)) {
+                         ? static_cast<std::int64_t>(interval.end->timestamp_ns)
+                         : std::numeric_limits<std::int64_t>::max();
+    if (sample.upper_bound_ns < start || sample.lower_bound_ns >= end) {
       continue;
     }
     if (!interval.complete || !complete_) {
       return {SampleTaskLabelKind::kIncompleteTimeline, std::nullopt, index};
     }
-    if (sample.lower_bound_ns < start ||
-        (end.has_value() && sample.upper_bound_ns >= *end)) {
+    if (sample.lower_bound_ns < start || sample.upper_bound_ns >= end) {
       return {SampleTaskLabelKind::kAmbiguousBoundary, std::nullopt, index};
     }
     return {SampleTaskLabelKind::kLabeled, interval.state_id, index};

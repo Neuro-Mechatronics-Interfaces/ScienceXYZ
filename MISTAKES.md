@@ -351,3 +351,115 @@ rate/batch coverage checks.
 
 **Candidate rule:** Acceptance tests must exercise the measurement values they
 claim to test and should report independent evidence even when one gate fails.
+
+### 2026-09-04 — Building the task-recorder deps on WSL's default GCC 15
+
+**Attempt:** To build the gated `task-recorder` consumer (T-32) end-to-end,
+bootstrapped vcpkg in WSL (Ubuntu 26.04) and drove `vendor/synapse-cpp`'s
+manifest build to produce the `synapse` CMake package plus `hdf5`, using the
+distro-default compiler (GCC 15.2.0).
+
+**Failure:** Two dead ends. (1) Running the synapse-cpp configure and the `hdf5`
+install as two concurrent background vcpkg processes against one vcpkg root: both
+died at "Detecting compiler hash … failed" because they race on the shared
+`buildtrees/detect_compiler` tree. (2) After serializing, the real blocker
+surfaced: the science overlay port set pins **abseil 20240116.2**, which does not
+compile on GCC 15 — `absl/container/internal/container_memory.h:66: 'uintptr_t'
+does not name a type` (older Abseil relied on a transitive `<cstdint>` include
+that GCC 15 no longer provides). grpc/protobuf of the same vintage hit the same
+wall.
+
+**Cause:** Two independent issues. vcpkg does not support concurrent installs
+against one root (shared `detect_compiler` buildtree). And the pinned overlay
+ports were fixed for an older compiler era than the WSL default (GCC 15).
+
+**Correction:** (1) Serialize all vcpkg operations against one root. (2) Install
+`g++-13` and pin the build to it via a vcpkg custom triplet
+(`VCPKG_CHAINLOAD_TOOLCHAIN_FILE` setting `CMAKE_C/CXX_COMPILER=gcc-13/g++-13`)
+so the entire pinned overlay set compiles as intended, without editing any
+upstream-pinned port. Host unit-test build (13/13) is unaffected — it is SDK/
+HDF5-free and uses the distro g++ directly.
+
+**Candidate rule:** Never run two vcpkg installs concurrently against the same
+vcpkg root. When building a vendored dependency's pinned overlay-port set, match
+the compiler to the ports' era with a custom triplet rather than patching
+upstream-pinned ports one by one; the distro-default GCC on a new Ubuntu is
+often newer than the ports were fixed for.
+
+**Follow-up (same day):** The custom triplet is necessary but not sufficient in
+two further ways. (a) The custom triplet governs only the *target* triplet;
+grpc/protobuf codegen pull a **host-tool** `abseil:x64-linux` that still built
+under the default GCC 15 and failed identically — fix by passing
+`--host-triplet x64-linux-gcc13` as well as `--triplet`. (b) After that, the
+build reached a deeper, non-compiler blocker: **protobuf 6.33.4 does not compile
+against abseil 20240116.2** (`arena.cc`: `'WithStaticSizes' ... does not name a
+template type`, `layout_type does not name a type`). The synapse-cpp manifest's
+vcpkg **builtin-baseline** resolves protobuf/grpc/re2 to *current* versions
+(protobuf 6.33.4, grpc 1.81.1, re2 2025-11-05) while the science **overlay** pins
+abseil to the old 20240116.2 — an internally inconsistent graph (recent protobuf,
+ancient abseil). This is a version-skew in the dependency set itself, not a
+toolchain gap, and is unresolved: it needs a coherent version set (pin the whole
+baseline to abseil's era via an overlay/version constraint, OR override abseil to
+a protobuf-6.33-compatible release, OR build a tagged synapse-cpp release whose
+lockfile is self-consistent) rather than a compiler change. Left for the next
+session; the gcc-13-built deps that DID succeed (abseil, cppzmq, zeromq, c-ares,
+openssl, re2, utf8-range, zlib) are cached in the vcpkg binary cache.
+
+**Candidate rule (2):** A vendored dependency's vcpkg manifest that mixes a fresh
+`builtin-baseline` with old overlay-port pins can resolve an internally
+inconsistent graph (recent protobuf vs. ancient abseil). Prefer building a tagged
+release with a self-consistent version set, or pin the transitive versions
+explicitly, before assuming a build failure is a local toolchain problem.
+
+**Correction to the WSL-host approach:** The right build path for this consumer
+is the app's OWN `apps/stateful-decode-and-sync/Dockerfile` (arm64 cross-compile,
+`ubuntu:20.04` + gcc-10-aarch64, CMake 3.28, vcpkg pinned `0f88ecb8`), driven from
+the app's own `vcpkg.json` — that manifest resolves a SELF-CONSISTENT set
+(protobuf 4.25.1 with abseil 20240116.2, plus hdf5 1.14.4.3, iir1, spdlog, fmt),
+so the protobuf/abseil skew above never arises. The skew was an artifact of
+building `vendor/synapse-cpp`'s standalone manifest (fresh baseline → protobuf
+6.33.4) in isolation. Build the consumer through the app manifest/Docker path, not
+a hand-driven synapse-cpp build.
+
+### 2026-09-04 — szip 2.1.1 cross-compile configure needs try_run seeds (guessed the wrong fix first)
+
+**Attempt:** Ran the app's Docker build (`arm64-linux-dynamic-release`, x86 host
+cross-compiling to arm64). vcpkg resolved the consistent dependency set; hdf5
+pulls szip 2.1.1 transitively, which failed at the CMake *configure* step
+(`/usr/bin/ninja -v ... Error code: 1`).
+
+**Failure (and a wrong first fix):** The in-container config log was not captured
+by the failed Docker layer, so the cause was initially GUESSED as the well-known
+"CMake 3.28 removed pre-3.5 `cmake_minimum_required` compatibility" error, and
+`-DCMAKE_POLICY_VERSION_MINIMUM=3.5` was added to the triplets. The rebuild failed
+identically. Reproducing szip's configure inside a container built to the COPY
+layer (`docker build` truncated Dockerfile → `docker run` the manifest install →
+`cat buildtrees/szip/config-arm64-linux-dynamic-release-out.log`) showed the flag
+HAD worked (the pre-3.5 error became a mere deprecation warning) but the real,
+distinct blocker was:
+
+    CMake Error: try_run() invoked in cross-compiling mode, please set the
+    following cache variables appropriately:
+       HAVE_DEFAULT_SOURCE_RUN (+ __TRYRUN_OUTPUT)
+       TEST_LFS_WORKS_RUN      (+ __TRYRUN_OUTPUT)
+
+**Cause:** szip 2.1.1's `config/cmake/ConfigureChecks.cmake` uses `try_run()` to
+probe runtime behavior (`_DEFAULT_SOURCE`, large-file support). Under
+cross-compilation CMake cannot execute the arm64 test binary and hard-errors
+unless those result variables are pre-seeded. Nothing to do with CMake policy
+version. (The `io.h`/`winsock2.h`/`off64_t` lines in the log are unrelated failed
+probes, not the fatal error.)
+
+**Correction:** Replaced the policy flag with the correct cross-compile seeds in
+both `external/sciencecorp/vcpkg/triplets/{arm64,x64}-linux-dynamic-release.cmake`:
+`HAVE_DEFAULT_SOURCE_RUN=0` and `TEST_LFS_WORKS_RUN=0` (both succeed on
+arm64/glibc), plus their `__TRYRUN_OUTPUT` companions. Verified by reproducing the
+szip configure in the truncated-Dockerfile container. Rebuild pending (USER drives
+the Docker build).
+
+**Candidate rule:** Do not apply a fix from a *guessed* cause when the real log
+can be captured. For a failed Docker layer, build a Dockerfile truncated to the
+last good layer and run the failing command in a `docker run` to read the actual
+error. When a legacy port fails to configure while cross-compiling with a
+`try_run()` error, pre-seed the named `*_RUN` (and `*_RUN__TRYRUN_OUTPUT`) cache
+variables via the triplet's `VCPKG_CMAKE_CONFIGURE_OPTIONS`, not a policy flag.

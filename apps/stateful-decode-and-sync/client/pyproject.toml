@@ -16,16 +16,18 @@ dependencies = [
 
 [project.optional-dependencies]
 test = ["pytest>=8,<9", "pytest-asyncio>=0.24,<2"]
+waveform = ["pyqtgraph>=0.13"]
 
 [project.scripts]
 stateful-decode-and-sync-service = "run_service:main"
 stateful-decode-and-sync-gui = "run_gui:main"
+stateful-decode-and-sync-waveform = "run_waveform:main"
 stateful-decode-and-sync-calibration = "calibration_prompter:main"
 stateful-decode-and-sync-fake-demo = "run_fake_demo:main"
 
 [tool.setuptools]
 package-dir = {"" = "."}
-py-modules = ["run_service", "run_gui", "calibration_prompter", "run_fake_demo"]
+py-modules = ["run_service", "run_gui", "run_waveform", "calibration_prompter", "run_fake_demo"]
 
 [tool.setuptools.packages.find]
 where = ["."]

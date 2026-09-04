@@ -82,6 +82,10 @@ The editable source for the acquisition/compute flow is
 
 ## Installable host client
 
+A task-oriented quick start for opening the dashboard, viewing live waveforms,
+and running the CLI tools is in [`client/README.md`](client/README.md). The
+summary below covers install and the client surface.
+
 The GUI/socket client supports CPython 3.13. From the repository root, create
 or activate a virtual environment and install the client package:
 
@@ -91,10 +95,12 @@ py -3.13 -m venv .venv
 ```
 
 This installs the `stateful-decode-and-sync-service`,
-`stateful-decode-and-sync-gui`, `stateful-decode-and-sync-calibration`, and
-`stateful-decode-and-sync-fake-demo` commands. The package depends on
-`science-synapse` for real device Taps and PySide6 for the GUI; the fake demo
-and hardware-free tests use no SciFi-2.
+`stateful-decode-and-sync-gui`, `stateful-decode-and-sync-waveform`,
+`stateful-decode-and-sync-calibration`, and `stateful-decode-and-sync-fake-demo`
+commands. The package depends on `science-synapse` for real device Taps and
+PySide6 for the GUI; the fake demo and hardware-free tests use no SciFi-2. The
+live waveform viewer additionally needs `pyqtgraph`, installed with the
+`waveform` extra (`pip install -e "apps/stateful-decode-and-sync/client[waveform]"`).
 
 To verify the install without hardware:
 
@@ -241,6 +247,21 @@ python client/fit_mlp.py --device-ip $DEV --epochs 200
 python client/listen_class.py --device-ip $DEV
 ```
 
+To watch the broadband stream itself as live per-channel traces, run the
+read-only waveform viewer (needs the client `waveform` extra for `pyqtgraph`).
+It subscribes to `broadband_out`, plots one trace per channel in a grid whose
+column count and channel selection/order are adjustable live (e.g. a 4x8 grid
+of 32 channels), and sends no device command, so it can run alongside the
+dashboard and CLI tools:
+
+```bash
+python client/run_waveform.py --device-ip $DEV                     # all channels, one column
+python client/run_waveform.py --device-ip $DEV --channels 0-31 --columns 8   # 4x8 grid
+```
+
+Layout and channel arrangement are documented in
+[`client/README.md`](client/README.md).
+
 For a bounded, read-only producer check, run the broadband probe in each
 source mode and compare its sequence/timestamp and channel metadata:
 
@@ -276,6 +297,11 @@ launch the dashboard with:
 ```bash
 python client/run_gui.py --device-ip "$DEV"
 ```
+
+The dashboard is a control and state view; it does not plot waveforms. For live
+per-channel traces of the `broadband_out` stream, run the read-only waveform
+viewer (`python client/run_waveform.py --device-ip "$DEV"`), which needs the
+client `waveform` extra. See [`client/README.md`](client/README.md).
 
 For external tools, the same controller can expose the versioned loopback
 NDJSON service. It binds only to localhost by default:

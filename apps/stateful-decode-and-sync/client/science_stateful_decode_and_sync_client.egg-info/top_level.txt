@@ -1,0 +1,7 @@
+calibration_prompter
+run_fake_demo
+run_gui
+run_service
+run_waveform
+stateful_decode_and_sync
+tests

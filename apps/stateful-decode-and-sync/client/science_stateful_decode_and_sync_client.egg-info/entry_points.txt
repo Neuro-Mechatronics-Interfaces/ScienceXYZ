@@ -1,0 +1,6 @@
+[console_scripts]
+stateful-decode-and-sync-calibration = calibration_prompter:main
+stateful-decode-and-sync-fake-demo = run_fake_demo:main
+stateful-decode-and-sync-gui = run_gui:main
+stateful-decode-and-sync-service = run_service:main
+stateful-decode-and-sync-waveform = run_waveform:main
