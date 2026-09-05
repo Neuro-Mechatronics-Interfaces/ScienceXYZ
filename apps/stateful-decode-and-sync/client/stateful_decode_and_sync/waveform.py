@@ -111,6 +111,42 @@ def parse_channel_spec(spec: str, available: int) -> list[int]:
     return ordered
 
 
+def parse_gain_spec(spec: str) -> dict[int, float]:
+    """Parse per-channel vertical-gain overrides into ``{channel_id: gain}``.
+
+    Accepts comma- and/or whitespace-separated ``channel:gain`` tokens, e.g.
+    ``"0:2, 4:0.5 8:10"``. ``channel`` is a non-negative integer id; ``gain`` is
+    a positive float multiplier applied to that channel's displayed amplitude
+    (a larger gain magnifies the trace). An empty spec is no overrides. The
+    last value wins if a channel is listed twice.
+
+    Raises ``ValueError`` with a human-readable message on a malformed token or
+    a non-positive gain, so the GUI can report it without changing the layout.
+    """
+    text = spec.strip()
+    if not text:
+        return {}
+    gains: dict[int, float] = {}
+    for token in text.replace(",", " ").split():
+        if ":" not in token:
+            raise ValueError(f"expected 'channel:gain', got {token!r}")
+        ch_text, _, gain_text = token.partition(":")
+        try:
+            channel = int(ch_text)
+        except ValueError:
+            raise ValueError(f"invalid channel in {token!r}")
+        try:
+            gain = float(gain_text)
+        except ValueError:
+            raise ValueError(f"invalid gain in {token!r}")
+        if channel < 0:
+            raise ValueError(f"channel {channel} is negative")
+        if not gain > 0 or not np.isfinite(gain):
+            raise ValueError(f"gain for channel {channel} must be positive")
+        gains[channel] = gain
+    return gains
+
+
 def grid_placements(channel_ids, columns: int) -> list[GridPlacement]:
     """Place ``channel_ids`` row-major into a grid ``columns`` wide.
 
@@ -331,6 +367,8 @@ def create_waveform_window(
     columns: int = 1,
     channel_spec: str = "",
     tap_name: str = "broadband_out",
+    y_full_scale: float = 1000.0,
+    timescale_s: float = 0.0,
     reader_factory=None,
 ):
     """Build the live waveform window. Qt/pyqtgraph imports stay local.
@@ -339,11 +377,17 @@ def create_waveform_window(
     channel spec (see :func:`parse_channel_spec`) selecting which channels are
     shown and in what order. ``columns`` and ``channel_spec`` seed the initial
     layout; ``max_channels`` bounds how many channels the buffer retains.
+
+    Amplitude is a fixed scale, not auto-ranged: ``y_full_scale`` is the base
+    half-amplitude of every plot's y-window, and a Scale sub-panel adjusts a
+    global and per-channel vertical gain (see :func:`parse_gain_spec`) plus a
+    shared timescale (the x-window duration). ``timescale_s`` seeds that
+    timescale; ``0`` uses the full buffer ``duration_s``.
     """
     from PySide6.QtCore import QTimer
     from PySide6.QtWidgets import (
-        QHBoxLayout, QLabel, QLineEdit, QMainWindow, QPushButton, QSpinBox,
-        QVBoxLayout, QWidget,
+        QDoubleSpinBox, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QMainWindow,
+        QPushButton, QSpinBox, QVBoxLayout, QWidget,
     )
 
     try:
@@ -358,14 +402,22 @@ def create_waveform_window(
         def __init__(self):
             super().__init__()
             self.setWindowTitle(f"Broadband waveforms — {device_ip} / {tap_name}")
+            from .appicon import apply_app_icon
+            apply_app_icon(self)
             self.resize(1100, 720)
             self.buffer = WaveformBuffer(
                 duration_s=duration_s,
                 expected_sample_rate_hz=expected_sample_rate_hz,
                 max_channels=max_channels,
             )
-            factory = reader_factory or (lambda ip, buf: BroadbandStreamReader(ip, buf, tap_name=tap_name))
-            self.reader = factory(device_ip, self.buffer)
+            # A reader is single-use (its stop flag stays set after stop()), so
+            # Reconnect builds a fresh one from this factory rather than
+            # restarting the old instance. The buffer is shared/reused across
+            # readers, preserving history and counters across a reconnect.
+            self._reader_factory = reader_factory or (
+                lambda ip, buf: BroadbandStreamReader(ip, buf, tap_name=tap_name)
+            )
+            self.reader = self._reader_factory(device_ip, self.buffer)
 
             # Active layout: an ordered channel list and a column count. Empty
             # channel list means "all available, natural order" until frames
@@ -373,17 +425,44 @@ def create_waveform_window(
             self._active_channels: list[int] = []
             self._active_columns: int = max(1, columns)
             self._curves: dict[int, object] = {}  # position index -> curve
+            self._plots: dict[int, object] = {}  # position index -> PlotItem
             self._placements: list[GridPlacement] = []
             self._resolved_available = 0
+            # Cached time axis so the per-tick redraw allocates a new x-vector
+            # only when the sample count changes, not on every frame.
+            self._time_axis: np.ndarray | None = None
+            self._time_axis_key: tuple[int, int] | None = None
+
+            # Fixed vertical scale and shared timescale. Plots do not auto-range;
+            # each shows a fixed y-window of [-full_scale/gain, +full_scale/gain]
+            # (per-channel gain magnifies the trace) and a shared x-window of the
+            # most recent _timescale_s seconds. Seeded to the buffer duration.
+            self._full_scale: float = float(y_full_scale)
+            self._timescale_s: float = float(timescale_s or duration_s)
+            self._buffer_duration_s: float = float(duration_s)
+            self._global_gain: float = 1.0
+            self._channel_gains: dict[int, float] = {}
+            # Multiplicative step per wheel notch (120 eighths of a degree):
+            # plain wheel scales the vertical gain, Shift+wheel scales the shared
+            # timescale. >1 so wheel-up magnifies / lengthens; the inverse is
+            # applied for wheel-down.
+            self._wheel_gain_step: float = 1.2
+            self._wheel_time_step: float = 1.2
 
             root = QWidget()
             self.setCentralWidget(root)
             layout = QVBoxLayout(root)
             layout.addLayout(self._build_controls(QHBoxLayout, QLabel, QLineEdit, QPushButton, QSpinBox))
+            layout.addWidget(self._build_scale_panel(
+                QGroupBox, QHBoxLayout, QLabel, QLineEdit, QDoubleSpinBox, QPushButton))
             self.status = QLabel("Connecting…")
             layout.addWidget(self.status)
             self.plot_widget = pg.GraphicsLayoutWidget()
             layout.addWidget(self.plot_widget)
+            # Intercept wheel events over the plots to drive the fixed scale
+            # (plain = vertical gain, Shift = horizontal timescale). The plots'
+            # own mouse handling is disabled, so the wheel is free for this.
+            self.plot_widget.viewport().installEventFilter(self)
             self._pg = pg
 
             self.reader.start()
@@ -413,6 +492,13 @@ def create_waveform_window(
             self.reset_button.clicked.connect(self._reset_layout)
             bar.addWidget(self.reset_button)
 
+            # Reconnect tears down the current reader and starts a fresh tap
+            # subscription, recovering from a dropped stream or a connect error
+            # without restarting the process.
+            self.reconnect_button = QPushButton("Reconnect")
+            self.reconnect_button.clicked.connect(self._reconnect)
+            bar.addWidget(self.reconnect_button)
+
             # Quick presets for common arrangements over up to 32 channels.
             for text, spec, cols in (("4×8", "0-31", 8), ("8×4", "0-31", 4), ("1 col", "", 1)):
                 button = QPushButton(text)
@@ -423,6 +509,157 @@ def create_waveform_window(
             bar.addWidget(self.layout_note)
             return bar
 
+        def _build_scale_panel(self, QGroupBox, QHBoxLayout, QLabel, QLineEdit,
+                               QDoubleSpinBox, QPushButton):
+            """Sub-panel for the fixed vertical scale, gains, and timescale."""
+            box = QGroupBox("Scale")
+            bar = QHBoxLayout(box)
+
+            bar.addWidget(QLabel("Full-scale ±"))
+            self.full_scale_spin = QDoubleSpinBox()
+            self.full_scale_spin.setDecimals(3)
+            self.full_scale_spin.setRange(1e-6, 1e12)
+            self.full_scale_spin.setValue(self._full_scale)
+            self.full_scale_spin.setToolTip("Base y half-amplitude at gain 1")
+            bar.addWidget(self.full_scale_spin)
+
+            bar.addWidget(QLabel("Gain ×"))
+            self.gain_spin = QDoubleSpinBox()
+            self.gain_spin.setDecimals(3)
+            self.gain_spin.setRange(1e-6, 1e9)
+            self.gain_spin.setValue(self._global_gain)
+            self.gain_spin.setToolTip("Global vertical gain applied to every axis")
+            bar.addWidget(self.gain_spin)
+
+            bar.addWidget(QLabel("Per-ch gain"))
+            self.gain_edit = QLineEdit()
+            self.gain_edit.setPlaceholderText("e.g. 0:2, 4:0.5 (overrides global)")
+            self.gain_edit.returnPressed.connect(self._apply_scale)
+            bar.addWidget(self.gain_edit, 1)
+
+            bar.addWidget(QLabel("Timescale (s)"))
+            self.timescale_spin = QDoubleSpinBox()
+            self.timescale_spin.setDecimals(4)
+            # The shown window cannot exceed the buffered history.
+            self.timescale_spin.setRange(1e-4, float(duration_s))
+            self.timescale_spin.setValue(min(self._timescale_s, float(duration_s)))
+            self.timescale_spin.setToolTip("Shared x-window duration across all axes")
+            bar.addWidget(self.timescale_spin)
+
+            apply_scale = QPushButton("Apply scale")
+            apply_scale.clicked.connect(self._apply_scale)
+            bar.addWidget(apply_scale)
+
+            self.scale_note = QLabel("")
+            bar.addWidget(self.scale_note)
+            return box
+
+        def _apply_scale(self) -> None:
+            """Validate and commit the fixed-scale / gain / timescale settings."""
+            try:
+                gains = parse_gain_spec(self.gain_edit.text())
+            except ValueError as exc:
+                self.scale_note.setText(f"invalid: {exc}")
+                return
+            self._full_scale = float(self.full_scale_spin.value())
+            self._global_gain = float(self.gain_spin.value())
+            self._channel_gains = gains
+            self._timescale_s = float(self.timescale_spin.value())
+            self.scale_note.setText("")
+            # Re-apply fixed ranges to existing plots and redraw immediately.
+            self._apply_axis_ranges()
+            self._refresh()
+
+        def _gain_for(self, channel_id: int) -> float:
+            """Effective vertical gain for one channel (override else global)."""
+            return self._channel_gains.get(channel_id, self._global_gain)
+
+        def _apply_axis_ranges(self) -> None:
+            """Set every plot's fixed y-window and the shared x-window.
+
+            Plots never auto-range: the y-window is
+            ``[-full_scale/gain, +full_scale/gain]`` (so a larger per-channel
+            gain magnifies the trace within a fixed pixel height), and the
+            x-window is the most recent ``timescale_s`` seconds, shared across
+            all axes.
+            """
+            for index, placement in enumerate(self._placements):
+                plot = self._plots.get(index)
+                if plot is None:
+                    continue
+                gain = self._gain_for(placement.channel_id)
+                half = self._full_scale / gain if gain else self._full_scale
+                plot.setYRange(-half, half, padding=0.0)
+                plot.setXRange(-self._timescale_s, 0.0, padding=0.0)
+
+        def eventFilter(self, obj, event):
+            # Wheel over the plot area drives the fixed scale: plain wheel = the
+            # vertical gain, Shift+wheel = the shared timescale. Consuming the
+            # event keeps the fixed y/x windows authoritative.
+            from PySide6.QtCore import QEvent, Qt
+
+            if obj is self.plot_widget.viewport() and event.type() == QEvent.Wheel:
+                delta = event.angleDelta().y()
+                if delta != 0:
+                    notches = delta / 120.0  # one wheel detent = 120 units
+                    if event.modifiers() & Qt.ShiftModifier:
+                        self._zoom_timescale(notches)
+                    else:
+                        self._zoom_gain(notches)
+                    return True  # handled; do not pass to the plots
+            return super().eventFilter(obj, event)
+
+        def _zoom_gain(self, notches: float) -> None:
+            """Scale the global vertical gain by the wheel; wheel-up magnifies.
+
+            Adjusts the same global gain the Scale panel edits (per-channel
+            overrides are unaffected), syncs the panel spin box, and re-applies
+            the fixed y-windows.
+            """
+            factor = self._wheel_gain_step ** notches
+            new_gain = self._clamp_to_spin(self.gain_spin, self._global_gain * factor)
+            # Adopt the spin box's rounded value as authoritative so the wheel
+            # state and the panel value never drift apart by the display step.
+            self._set_spin_silently(self.gain_spin, new_gain)
+            new_gain = self.gain_spin.value()
+            if new_gain == self._global_gain:
+                return
+            self._global_gain = new_gain
+            self._apply_axis_ranges()
+            self._refresh()
+
+        def _zoom_timescale(self, notches: float) -> None:
+            """Scale the shared timescale by the wheel; wheel-up lengthens it.
+
+            Clamped to the buffered history; syncs the panel spin box and
+            re-applies the shared x-window to every axis.
+            """
+            factor = self._wheel_time_step ** notches
+            target = self._clamp_to_spin(self.timescale_spin, self._timescale_s * factor)
+            # Adopt the spin box's rounded value as authoritative so the wheel
+            # state and the panel value stay exactly consistent.
+            self._set_spin_silently(self.timescale_spin, target)
+            new_ts = self.timescale_spin.value()
+            if new_ts == self._timescale_s:
+                return
+            self._timescale_s = new_ts
+            self._apply_axis_ranges()
+            self._refresh()
+
+        @staticmethod
+        def _clamp_to_spin(spin, value: float) -> float:
+            """Clamp ``value`` into a spin box's [min, max] range."""
+            return max(spin.minimum(), min(spin.maximum(), value))
+
+        @staticmethod
+        def _set_spin_silently(spin, value: float) -> None:
+            """Set a spin box value without emitting its change signals."""
+            blocked = spin.blockSignals(True)
+            try:
+                spin.setValue(value)
+            finally:
+                spin.blockSignals(blocked)
+
         def _apply_preset(self, spec: str, cols: int) -> None:
             self.channel_edit.setText(spec)
             self.columns_spin.setValue(min(max(1, cols), max_channels))
@@ -432,6 +669,28 @@ def create_waveform_window(
             self.channel_edit.setText("")
             self.columns_spin.setValue(1)
             self._apply_layout()
+
+        def _reconnect(self) -> None:
+            """Stop the current reader and start a fresh tap subscription.
+
+            Readers are single-use, so a fresh instance is built from the
+            factory. The buffer and its counters/history are preserved. This
+            also re-arms the refresh timer if it had been stopped by a prior
+            reader error.
+            """
+            self.reconnect_button.setEnabled(False)
+            try:
+                self.status.setText("Reconnecting…")
+                self.reader.stop()
+                self.reader = self._reader_factory(device_ip, self.buffer)
+                self.reader.start()
+                # A prior reader error stops the timer permanently; restart it so
+                # the new reader's frames are drawn again.
+                if not self.timer.isActive():
+                    self.timer.start(50)
+                self._refresh()
+            finally:
+                self.reconnect_button.setEnabled(True)
 
         def _apply_layout(self) -> None:
             """Validate the requested layout and force a plot rebuild."""
@@ -459,9 +718,20 @@ def create_waveform_window(
             return list(range(available))
 
         def _rebuild_plots(self) -> None:
+            """Construct the PlotItem/curve objects for the active layout once.
+
+            This is the only place Qt graphics objects are created or destroyed.
+            It runs on a layout change or when the stream's channel count
+            changes — never on an ordinary frame tick, where :meth:`_refresh`
+            only pushes new data into the existing curves via ``setData``.
+            """
             available = self.buffer.available_channels
             self.plot_widget.clear()
             self._curves.clear()
+            self._plots.clear()
+            # Force the time axis to be recomputed for the rebuilt curves.
+            self._time_axis = None
+            self._time_axis_key = None
             channels = self._current_channels(available)
             self._placements = grid_placements(channels, self._active_columns)
             self._resolved_available = available
@@ -470,12 +740,47 @@ def create_waveform_window(
                 plot = self.plot_widget.addPlot(row=placement.row, col=placement.col)
                 plot.setTitle(f"ch {placement.channel_id}")
                 plot.showGrid(x=False, y=True, alpha=0.2)
-                plot.setMouseEnabled(x=False, y=True)
+                # Fixed scale: disable pyqtgraph auto-ranging so the y-window is
+                # the explicit fixed full-scale (adjusted per-channel by gain)
+                # and does not chase the data. The user cannot drag either axis
+                # out of the fixed window.
+                plot.setMouseEnabled(x=False, y=False)
+                plot.disableAutoRange()
                 if placement.row < last_row:
                     plot.getAxis("bottom").setStyle(showValues=False)
                 else:
                     plot.setLabel("bottom", "time", units="s")
+                self._plots[index] = plot
                 self._curves[index] = plot.plot(pen=self._pg.mkPen(width=1))
+            # Apply the fixed y-window and shared x-window to the fresh plots.
+            self._apply_axis_ranges()
+            # A layout change alters the grid's row/column count, so the plots
+            # must reflow to fill the viewport exactly as they do on a manual
+            # window resize. Fire the same reflow pass here so the arrangement
+            # fits the screen immediately instead of only after the user drags
+            # the window edge.
+            self._relayout_plots()
+
+        def _relayout_plots(self) -> None:
+            """Reflow the plot grid to the current viewport size.
+
+            Shared by the resize event and every layout change so both take the
+            identical geometry path: invalidate the pyqtgraph GraphicsLayout and
+            re-apply the view rect, which recomputes each plot's size for the
+            active row/column count. Safe to call before any plot exists.
+            """
+            # resizeEvent can fire during construction before plot_widget is
+            # assigned, so guard the attribute as well as the layout item.
+            plot_widget = getattr(self, "plot_widget", None)
+            layout = getattr(plot_widget, "ci", None)  # the central GraphicsLayout
+            if layout is None:
+                return
+            layout_obj = layout.layout  # the underlying QGraphicsGridLayout
+            if layout_obj is not None:
+                layout_obj.invalidate()
+            # Re-apply the current viewport rect so the grid recomputes sizes,
+            # matching what a manual resize triggers internally.
+            self.plot_widget.setSceneRect(self.plot_widget.viewRect())
 
         def _refresh(self) -> None:
             if self.reader.error:
@@ -492,19 +797,37 @@ def create_waveform_window(
 
             n = snapshot.samples.shape[1] if snapshot.samples.ndim == 2 else 0
             if n and snapshot.sample_rate_hz and self._placements:
-                t = (np.arange(n) - n + 1) / snapshot.sample_rate_hz
+                # Reuse the cached x-axis unless the window length or sample rate
+                # changed, so the steady-state tick only calls setData and never
+                # reallocates the time vector or any Qt object.
+                key = (n, int(snapshot.sample_rate_hz))
+                if self._time_axis_key != key:
+                    self._time_axis = (np.arange(n) - n + 1) / snapshot.sample_rate_hz
+                    self._time_axis_key = key
+                t = self._time_axis
                 for index, placement in enumerate(self._placements):
                     if placement.channel_id < snapshot.samples.shape[0]:
                         self._curves[index].setData(t, snapshot.samples[placement.channel_id])
 
             state = "connected" if self.reader.connected else "waiting for frames"
             shown = len(self._placements)
+            gain_txt = f"{self._global_gain:g}×"
+            if self._channel_gains:
+                gain_txt += f" (+{len(self._channel_gains)} per-ch)"
             self.status.setText(
                 f"{tap_name} @ {device_ip}: {state} | frames={snapshot.frames} "
                 f"missing={snapshot.missing_sequences} parse_errors={snapshot.parse_errors} "
                 f"rate={snapshot.sample_rate_hz} Hz | showing {shown}/{available} ch "
-                f"in {self._active_columns} col(s) | read-only (no device commands)"
+                f"in {self._active_columns} col(s) | ±{self._full_scale:g} gain {gain_txt} "
+                f"t={self._timescale_s:g}s | read-only (no device commands)"
             )
+
+        def resizeEvent(self, event):
+            # The window resize callback. pyqtgraph already reflows on resize;
+            # routing it through the same _relayout_plots the layout-change path
+            # uses keeps a single, shared fit-to-screen code path.
+            super().resizeEvent(event)
+            self._relayout_plots()
 
         def closeEvent(self, event):
             self.timer.stop()
@@ -523,10 +846,18 @@ def run_waveform(
     columns: int = 1,
     channel_spec: str = "",
     tap_name: str = "broadband_out",
+    y_full_scale: float = 1000.0,
+    timescale_s: float = 0.0,
 ) -> None:
     from PySide6.QtWidgets import QApplication
 
+    from .appicon import apply_app_icon, setup_taskbar_identity
+
     app = QApplication.instance() or QApplication([])
+    # Taskbar identity per platform (Windows AppUserModelID / Linux+WSLg
+    # .desktop entry), before any window is shown.
+    setup_taskbar_identity("waveform", "Broadband Waveforms")
+    apply_app_icon(app)  # taskbar icon
     window = create_waveform_window(
         device_ip,
         duration_s=duration_s,
@@ -535,6 +866,8 @@ def run_waveform(
         columns=columns,
         channel_spec=channel_spec,
         tap_name=tap_name,
+        y_full_scale=y_full_scale,
+        timescale_s=timescale_s,
     )
     window.show()
     app.exec()

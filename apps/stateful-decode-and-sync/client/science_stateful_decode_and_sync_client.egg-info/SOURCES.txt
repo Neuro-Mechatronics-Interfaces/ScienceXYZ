@@ -11,6 +11,7 @@ run_waveform.py
 ./run_service.py
 ./run_waveform.py
 ./stateful_decode_and_sync/__init__.py
+./stateful_decode_and_sync/appicon.py
 ./stateful_decode_and_sync/client.py
 ./stateful_decode_and_sync/controller.py
 ./stateful_decode_and_sync/gui.py
@@ -20,6 +21,8 @@ run_waveform.py
 ./stateful_decode_and_sync/service.py
 ./stateful_decode_and_sync/transport.py
 ./stateful_decode_and_sync/waveform.py
+./stateful_decode_and_sync/assets/icon.png
+./stateful_decode_and_sync/assets/icon.svg
 ./tests/fake_device.py
 ./tests/test_broadband_probe.py
 ./tests/test_client.py
@@ -35,6 +38,7 @@ science_stateful_decode_and_sync_client.egg-info/entry_points.txt
 science_stateful_decode_and_sync_client.egg-info/requires.txt
 science_stateful_decode_and_sync_client.egg-info/top_level.txt
 stateful_decode_and_sync/__init__.py
+stateful_decode_and_sync/appicon.py
 stateful_decode_and_sync/client.py
 stateful_decode_and_sync/controller.py
 stateful_decode_and_sync/gui.py
@@ -44,6 +48,8 @@ stateful_decode_and_sync/proto.py
 stateful_decode_and_sync/service.py
 stateful_decode_and_sync/transport.py
 stateful_decode_and_sync/waveform.py
+stateful_decode_and_sync/assets/icon.png
+stateful_decode_and_sync/assets/icon.svg
 tests/fake_device.py
 tests/test_broadband_probe.py
 tests/test_client.py

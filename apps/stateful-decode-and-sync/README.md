@@ -5,7 +5,7 @@ A Synapse App for the SciFi-2 that, over live consumer taps:
 1. **toggles a broadband stream** between the real RHD2132 probe (peripheral
  id 200) and an in-app **synthetic source** ported from the axon-peripherals gateware model;
 2. **collects labeled feature windows** into bounded independent collections
-   of per-class ring buffers;
+ of per-class ring buffers;
 3. computes **Kaifosh-2025 multivariate power-frequency (MPF)** features
  (channel-wise STFT → cross-spectral density → band averaging → Hermitian matrix logarithm);
 4. **trains and runs a small MLP** classifier (2 hidden layers, dropout,
@@ -26,32 +26,17 @@ kApplication(id=2, name="stateful-decode-and-sync")
         └─ producer  class_out        Tensor[num_classes]  softmax
 ```
 
-For the config-only recording path, `config/rhd2132_mode_switch.json` also
-connects the App's `BroadbandFrame` output to a `kDiskWriter` node. The writer
-uses its supported static `filename` setting and writes the stream to on-device
-HDF5 while the configured device chain is running. Use the normal Synapse
-device lifecycle to define the recording epoch: stop, configure/start the JSON,
-then stop before retrieving the file. The writer records the App output, so in
-`SAMPLING` mode this is the forwarded RHD2132 stream and in `SYNTHETIC` mode it
-is the App's generated stream.
+For the config-only recording path, `config/rhd2132_mode_switch.json` also connects the App's `BroadbandFrame` output to a `kDiskWriter` node. The writer uses its supported static `filename` setting and writes the stream to on-device HDF5 while the configured device chain is running. Use the normal Synapse device lifecycle to define the recording epoch: stop, configure/start the JSON, then stop before retrieving the file. The writer records the App output, so in `SAMPLING` mode this is the forwarded RHD2132 stream and in `SYNTHETIC` mode it is the App's generated stream.
 
-The current Disk Writer contract does not provide an App runtime recording
-toggle or a filename control command. A separate writer or a documented
-multi-input/fan-in capability would be needed before treating independent
-wireless streams as one HDF5 series; this config does not invent that behavior.
+The current Disk Writer contract does not provide an App runtime recording toggle or a filename control command. A separate writer or a documented multi-input/fan-in capability would be needed before treating independent wireless streams as one HDF5 series; this config does not invent that behavior.
 
-<!-- graphviz:apps/stateful-decode-and-sync/docs/disk-writer-recording-flow.dot -->
-![Configured BroadbandFrame recording flow](disk-writer-recording-flow.svg)
-<!-- /graphviz:apps/stateful-decode-and-sync/docs/disk-writer-recording-flow.dot -->
+<!-- graphviz:apps/stateful-decode-and-sync/docs/disk-writer-recording-flow.dot --> ![Configured BroadbandFrame recording flow](disk-writer-recording-flow.svg) <!-- /graphviz:apps/stateful-decode-and-sync/docs/disk-writer-recording-flow.dot -->
 
 In SAMPLING mode the App forwards each upstream `BroadbandFrame` **unchanged** on `broadband_out` (source timestamps are preserved, per repo policy). In SYNTHETIC mode it emits its own deterministic frames with a monotonic sequence number and a derived timestamp. The typed `control` tap and all legacy control shims enqueue bounded requests; the main loop applies them serially before the next source batch is routed. Raw sample batches are transferred through a bounded, thread-safe queue to `FeatureWorker`. Its ingestion thread selects channels, applies the streaming anti-alias FIR, decimates, maintains the feature-rate window, and queues immutable completed windows to a FIFO compute thread, which performs MPF and optional model inference in order. The main loop only drains bounded feature results for capture and SDK publication.
 
-The editable source for the acquisition/compute flow is
-[`docs/feature-worker-pipeline.dot`](docs/feature-worker-pipeline.dot).
+The editable source for the acquisition/compute flow is [`docs/feature-worker-pipeline.dot`](docs/feature-worker-pipeline.dot).
 
-<!-- graphviz:apps/stateful-decode-and-sync/docs/feature-worker-pipeline.dot -->
-![Feature worker acquisition and compute pipeline](docs/feature-worker-pipeline.svg)
-<!-- /graphviz:apps/stateful-decode-and-sync/docs/feature-worker-pipeline.dot -->
+<!-- graphviz:apps/stateful-decode-and-sync/docs/feature-worker-pipeline.dot --> ![Feature worker acquisition and compute pipeline](docs/feature-worker-pipeline.svg) <!-- /graphviz:apps/stateful-decode-and-sync/docs/feature-worker-pipeline.dot -->
 
 ## Source layout
 
@@ -82,25 +67,16 @@ The editable source for the acquisition/compute flow is
 
 ## Installable host client
 
-A task-oriented quick start for opening the dashboard, viewing live waveforms,
-and running the CLI tools is in [`client/README.md`](client/README.md). The
-summary below covers install and the client surface.
+A task-oriented quick start for opening the dashboard, viewing live waveforms, and running the CLI tools is in [`client/README.md`](client/README.md). The summary below covers install and the client surface.
 
-The GUI/socket client supports CPython 3.13. From the repository root, create
-or activate a virtual environment and install the client package:
+The GUI/socket client supports CPython 3.13. From the repository root, create or activate a virtual environment and install the client package:
 
 ```bash
 py -3.13 -m venv .venv
 .venv/Scripts/python -m pip install -e apps/stateful-decode-and-sync/client
 ```
 
-This installs the `stateful-decode-and-sync-service`,
-`stateful-decode-and-sync-gui`, `stateful-decode-and-sync-waveform`,
-`stateful-decode-and-sync-calibration`, and `stateful-decode-and-sync-fake-demo`
-commands. The package depends on `science-synapse` for real device Taps and
-PySide6 for the GUI; the fake demo and hardware-free tests use no SciFi-2. The
-live waveform viewer additionally needs `pyqtgraph`, installed with the
-`waveform` extra (`pip install -e "apps/stateful-decode-and-sync/client[waveform]"`).
+This installs the `stateful-decode-and-sync-service`, `stateful-decode-and-sync-gui`, `stateful-decode-and-sync-waveform`, `stateful-decode-and-sync-calibration`, and `stateful-decode-and-sync-fake-demo` commands. The package depends on `science-synapse` for real device Taps and PySide6 for the GUI; the fake demo and hardware-free tests use no SciFi-2. The live waveform viewer additionally needs `pyqtgraph`, installed with the `waveform` extra (`pip install -e "apps/stateful-decode-and-sync/client[waveform]"`).
 
 To verify the install without hardware:
 
@@ -111,75 +87,23 @@ PYTHONPATH=apps/stateful-decode-and-sync/client \
   -s apps/stateful-decode-and-sync/client/tests -v
 ```
 
-The fake demo exits after a controller/state round trip. To run the real
-tools, use `stateful-decode-and-sync-service --device-ip "$DEV" --port 8765`,
-`stateful-decode-and-sync-gui --device-ip "$DEV"`, or the calibration command
-shown below. The service host defaults to `127.0.0.1`; selecting `--host`
-outside loopback is an explicit, unauthenticated operator choice.
+The fake demo exits after a controller/state round trip. To run the real tools, use `stateful-decode-and-sync-service --device-ip "$DEV" --port 8765`, `stateful-decode-and-sync-gui --device-ip "$DEV"`, or the calibration command shown below. The service host defaults to `127.0.0.1`; selecting `--host` outside loopback is an explicit, unauthenticated operator choice.
 
 The synthetic source is a faithful port of `vendor/axon-peripherals/src/gateware/src/axon_test_source_peripheral.sv` (256-entry sine LFP LUT, 32-sample biphasic spike ROM, per-channel delay LUT, 16-bit spike-trigger LFSR seeded from `synthetic_seed`, 32-bit noise LFSR). It reproduces the gateware's per-sample values and per-channel lags but does not emulate the AXI-stream bus timing.
 
 The MPF matrix logarithm uses a hand-rolled cyclic-Jacobi Hermitian eigensolver (`mpf_features.cpp`), so **no `eigen3`/BLAS dependency is added** to `vcpkg.json`.
 
-When `frequency_bands_hz` is present, its ordered `[low_hz, high_hz]` pairs
-select the physical half-open frequency bands used by MPF. The feature worker
-chooses the largest integer decimation that preserves an anti-alias transition
-band above the highest configured edge and exactly divides both the source-rate
-window and stride. Thus the ring still represents 200 ms and advances every
-20 ms without clock drift. The temporal ring contains exactly
-`round(feature_sample_rate_hz * window_ms / 1000)` real samples; each immutable
-compute window is then zero-padded to the next power of two for one radix-2
-transform. Padding never lengthens the live ring or its represented time span.
-The FIR-center source sequence and timestamp are retained on each decimated
-sample. Omitting `frequency_bands_hz` preserves the legacy full-Nyquist split
-and disables automatic decimation.
+When `frequency_bands_hz` is present, its ordered `[low_hz, high_hz]` pairs select the physical half-open frequency bands used by MPF. The feature worker chooses the largest integer decimation that preserves an anti-alias transition band above the highest configured edge and exactly divides both the source-rate window and stride. Thus the ring still represents 200 ms and advances every 20 ms without clock drift. The temporal ring contains exactly `round(feature_sample_rate_hz * window_ms / 1000)` real samples; each immutable compute window is then zero-padded to the next power of two for one radix-2 transform. Padding never lengthens the live ring or its represented time span. The FIR-center source sequence and timestamp are retained on each decimated sample. Omitting `frequency_bands_hz` preserves the legacy full-Nyquist split and disables automatic decimation.
 
-The shipped configuration uses `[0, 62.5)`, `[62.5, 125)`, `[125, 250)`,
-`[250, 375)`, `[375, 687.5)`, and `[687.5, 1000)` Hz. With the 20 kHz source,
-200 ms window, 20 ms stride, and 1.25 guard ratio, the exact-clock constraints
-select decimation by 8: the feature rate is 2.5 kHz, its Nyquist frequency is
-1.25 kHz, and the 500-sample temporal window is zero-padded to 512 points for
-the FFT.
+The shipped configuration uses `[0, 62.5)`, `[62.5, 125)`, `[125, 250)`, `[250, 375)`, `[375, 687.5)`, and `[687.5, 1000)` Hz. With the 20 kHz source, 200 ms window, 20 ms stride, and 1.25 guard ratio, the exact-clock constraints select decimation by 8: the feature rate is 2.5 kHz, its Nyquist frequency is 1.25 kHz, and the 500-sample temporal window is zero-padded to 512 points for the FFT.
 
-The dynamically sized transform uses a preplanned radix-2 FFT. MPF accumulates
-only one CSD triangle, stops Jacobi sweeps on a scale-relative tolerance, and
-reconstructs only the configured matrix-log entries. The eigendecomposition
-still uses the complete CSD: retained matrix-log entries depend on every
-selected-channel covariance, so truncating the CSD itself would change the MPF
-operator. Feature-worker diagnostics report cumulative average and maximum MPF
-and inference service times separately (`mpf_*_us`, `inference_*_us`) alongside
-the queue/drop counters.
+The dynamically sized transform uses a preplanned radix-2 FFT. MPF accumulates only one CSD triangle, stops Jacobi sweeps on a scale-relative tolerance, and reconstructs only the configured matrix-log entries. The eigendecomposition still uses the complete CSD: retained matrix-log entries depend on every selected-channel covariance, so truncating the CSD itself would change the MPF operator. Feature-worker diagnostics report cumulative average and maximum MPF and inference service times separately (`mpf_*_us`, `inference_*_us`) alongside the queue/drop counters.
 
 The MLP z-scores each feature dimension using mean/std fit from the captured training set (applied identically at inference). Raw MPF features span orders of magnitude across bands and channel pairs; standardising them keeps SGD well-conditioned so `mlp_lr` need not be hand-tuned to the feature scale. An offline smoke test (`g++`-built, SDK-independent) confirms the synthetic source is deterministic, the reduced feature dimension is correct, and the MLP learns separable synthetic classes end-to-end.
 
-The canonical GUI/control-plane payloads are typed protobuf messages in
-`proto/gui_control.proto`. `src/control_protocol.hpp` validates protocol v1
-envelopes, command arguments, complete state snapshots, and correlated command
-results before serialization or application. The `control` consumer tap now
-validates and queues typed commands for serial application in the App main loop.
-The legacy `set_source_mode`, `set_capture`, and `fit_mlp` taps remain
-compatibility shims through the same queue. State and command-result producer
-taps publish complete v1 snapshots and correlated results; snapshots are emitted
-at startup, after command application, and periodically at 2 Hz. A running fit
-also emits one accepted `FitProgress` result and matching state snapshot per
-completed epoch, then one terminal result; malformed or non-finite training data
-is reported as a terminal `malformed` error. It trains from a value-owned
-collection snapshot, keeps the existing live model available during fitting, and
-swaps a complete candidate into inference only after success; a malformed or
-failed fit does not replace a prior model.
+The canonical GUI/control-plane payloads are typed protobuf messages in `proto/gui_control.proto`. `src/control_protocol.hpp` validates protocol v1 envelopes, command arguments, complete state snapshots, and correlated command results before serialization or application. The `control` consumer tap now validates and queues typed commands for serial application in the App main loop. The legacy `set_source_mode`, `set_capture`, and `fit_mlp` taps remain compatibility shims through the same queue. State and command-result producer taps publish complete v1 snapshots and correlated results; snapshots are emitted at startup, after command application, and periodically at 2 Hz. A running fit also emits one accepted `FitProgress` result and matching state snapshot per completed epoch, then one terminal result; malformed or non-finite training data is reported as a terminal `malformed` error. It trains from a value-owned collection snapshot, keeps the existing live model available during fitting, and swaps a complete candidate into inference only after success; a malformed or failed fit does not replace a prior model.
 
-Behavioral task state is a separate authority. Its normative v1
-configuration, validation, proposal, frame-boundary, event, lifecycle, and
-host-recording rules are in
-[`docs/task-state-contract.md`](docs/task-state-contract.md). In particular,
-clients propose configured events/transitions and react only to committed
-`TaskTransitionEvent` messages; there is no direct state setter. This contract
-drives T-29 through T-34. The host controller owns the `task_transition` tap,
-the NDJSON bridge exposes a task-transition subscription, and the dashboard
-uses transition callbacks—not accepted commands or optimistic local state—for
-task behavior. The SDK-independent definition/runtime core and hardware-free
-task/multisource simulations are implemented; hardware deployment remains
-separately gated.
+Behavioral task state is a separate authority. Its normative v1 configuration, validation, proposal, frame-boundary, event, lifecycle, and host-recording rules are in [`docs/task-state-contract.md`](docs/task-state-contract.md). In particular, clients propose configured events/transitions and react only to committed `TaskTransitionEvent` messages; there is no direct state setter. This contract drives T-29 through T-34. The host controller owns the `task_transition` tap, the NDJSON bridge exposes a task-transition subscription, and the dashboard uses transition callbacks—not accepted commands or optimistic local state—for task behavior. The SDK-independent definition/runtime core and hardware-free task/multisource simulations are implemented; hardware deployment remains separately gated.
 
 ## Feature dimension
 
@@ -196,14 +120,13 @@ Requires Docker (cross-compiles to arm64) and `synapsectl`. From the repo root:
 synapsectl apps build apps/stateful-decode-and-sync
 ```
 
-To build tests:
-```bash
+To build tests: ```bash
 cd /mnt/c/MyRepos/C/ScienceXYZ/apps/stateful-decode-and-sync
 
 cmake -S . -B build/host-tests \
-  -DBUILD_DEVICE_APP=OFF \
-  -DBUILD_TESTING=ON \
-  -DCMAKE_PREFIX_PATH="$PWD/build/host/vcpkg_installed/x64-linux"
+ -DBUILD_DEVICE_APP=OFF \
+ -DBUILD_TESTING=ON \
+ -DCMAKE_PREFIX_PATH="$PWD/build/host/vcpkg_installed/x64-linux"
 
 cmake --build build/host-tests --parallel
 ctest --test-dir build/host-tests --output-on-failure
@@ -240,83 +163,49 @@ python client/set_capture.py --device-ip $DEV --label 0 --on
 python client/set_capture.py --device-ip $DEV --label 0 --off
 
 # 3. train on everything captured
-python client/fit_mlp.py --device-ip $DEV            # uses configured epochs
+python client/fit_mlp.py --device-ip $DEV # uses configured epochs
 python client/fit_mlp.py --device-ip $DEV --epochs 200
 
 # 4. watch live classifications
 python client/listen_class.py --device-ip $DEV
 ```
 
-To watch the broadband stream itself as live per-channel traces, run the
-read-only waveform viewer (needs the client `waveform` extra for `pyqtgraph`).
-It subscribes to `broadband_out`, plots one trace per channel in a grid whose
-column count and channel selection/order are adjustable live (e.g. a 4x8 grid
-of 32 channels), and sends no device command, so it can run alongside the
-dashboard and CLI tools:
+To watch the broadband stream itself as live per-channel traces, run the read-only waveform viewer (needs the client `waveform` extra for `pyqtgraph`). It subscribes to `broadband_out`, plots one trace per channel in a grid whose column count and channel selection/order are adjustable live (e.g. a 4x8 grid of 32 channels), and sends no device command, so it can run alongside the dashboard and CLI tools:
 
 ```bash
-python client/run_waveform.py --device-ip $DEV                     # all channels, one column
-python client/run_waveform.py --device-ip $DEV --channels 0-31 --columns 8   # 4x8 grid
+python client/run_waveform.py --device-ip $DEV # all channels, one column
+python client/run_waveform.py --device-ip $DEV --channels 0-31 --columns 8 # 4x8 grid
 ```
 
-Layout and channel arrangement are documented in
-[`client/README.md`](client/README.md).
+Layout and channel arrangement are documented in [`client/README.md`](client/README.md).
 
-For a bounded, read-only producer check, run the broadband probe in each
-source mode and compare its sequence/timestamp and channel metadata:
+For a bounded, read-only producer check, run the broadband probe in each source mode and compare its sequence/timestamp and channel metadata:
 
 ```bash
 python client/broadband_probe.py --device-ip $DEV --duration 5
 ```
 
-The report includes valid-frame count and observed rate, sequence gaps and
-reordering, timestamp regressions and deltas, sample rate, payload channel
-count, `channel_ranges`, and malformed-payload count. It never sends a device
-command. A producer subscription can miss frames before the subscriber is
-ready, so use the probe's sustained count/rate and sequence diagnostics rather
-than treating the first sequence number as a zero-based stream origin.
+The report includes valid-frame count and observed rate, sequence gaps and reordering, timestamp regressions and deltas, sample rate, payload channel count, `channel_ranges`, and malformed-payload count. It never sends a device command. A producer subscription can miss frames before the subscriber is ready, so use the probe's sustained count/rate and sequence diagnostics rather than treating the first sequence number as a zero-based stream origin.
 
-Bench note (2026-08-31): after the IntanRHD2132 re-enumerated and the app was
-freshly started against the verified ID 200, the synthetic probe was clean
-(7,768 frames/5 s, no sequence or timestamp faults). The real sampling probe
-reached the `ELECTRODE:32` path but observed 97,945 missing source sequences in
-5 s; the app log also recorded a dropped-frame interval. Treat real sampling
-as a throughput investigation until that source-drop behavior is explained.
+Bench note (2026-08-31): after the IntanRHD2132 re-enumerated and the app was freshly started against the verified ID 200, the synthetic probe was clean (7,768 frames/5 s, no sequence or timestamp faults). The real sampling probe reached the `ELECTRODE:32` path but observed 97,945 missing source sequences in 5 s; the app log also recorded a dropped-frame interval. Treat real sampling as a throughput investigation until that source-drop behavior is explained.
 
 ## GUI and loopback service
 
-The graphical client owns the device Tap connections through a replaceable
-transport. The GUI never calls Synapse from the Qt thread; state snapshots are
-immutable replacements and all target changes use the atomic `prepare_capture`
-command. The controller reports malformed device messages as a state error,
-publishes `pipeline.state=disconnected` when a Tap fails, wakes pending
-commands instead of waiting for their timeout, and provides bounded reconnect
-backoff. Install the host dependencies from `client/requirements.txt`, then
-launch the dashboard with:
+The graphical client owns the device Tap connections through a replaceable transport. The GUI never calls Synapse from the Qt thread; state snapshots are immutable replacements and all target changes use the atomic `prepare_capture` command. The controller reports malformed device messages as a state error, publishes `pipeline.state=disconnected` when a Tap fails, wakes pending commands instead of waiting for their timeout, and provides bounded reconnect backoff. Install the host dependencies from `client/requirements.txt`, then launch the dashboard with:
 
 ```bash
 python client/run_gui.py --device-ip "$DEV"
 ```
 
-The dashboard is a control and state view; it does not plot waveforms. For live
-per-channel traces of the `broadband_out` stream, run the read-only waveform
-viewer (`python client/run_waveform.py --device-ip "$DEV"`), which needs the
-client `waveform` extra. See [`client/README.md`](client/README.md).
+The dashboard is a control and state view; it does not plot waveforms. For live per-channel traces of the `broadband_out` stream, run the read-only waveform viewer (`python client/run_waveform.py --device-ip "$DEV"`), which needs the client `waveform` extra. See [`client/README.md`](client/README.md).
 
-For external tools, the same controller can expose the versioned loopback
-NDJSON service. It binds only to localhost by default:
+For external tools, the same controller can expose the versioned loopback NDJSON service. It binds only to localhost by default:
 
 ```bash
 python client/run_service.py --device-ip "$DEV" --port 8766
 ```
 
-The service supports `get_state`, `subscribe_state`, `prepare_capture`,
-`select_collection`, `select_label`, `set_capture`, `fit`, and `flush`. Remote
-binding is unauthenticated in v1 and must be an explicit operator choice.
-Requests are serialized before reaching the controller. State subscribers have
-a bounded latest-snapshot queue, so a slow client cannot accumulate stale
-state indefinitely; command timeouts and controller disconnects retain
-explicit error codes in the NDJSON response.
+The service supports `get_state`, `subscribe_state`, `prepare_capture`, `select_collection`, `select_label`, `set_capture`, `fit`, and `flush`. Remote binding is unauthenticated in v1 and must be an explicit operator choice. Requests are serialized before reaching the controller. State subscribers have a bounded latest-snapshot queue, so a slow client cannot accumulate stale state indefinitely; command timeouts and controller disconnects retain explicit error codes in the NDJSON response.
 
 The controller's hardware-free tests run without a device:
 
@@ -324,34 +213,20 @@ The controller's hardware-free tests run without a device:
 PYTHONPATH=client python -m unittest discover -s client/tests -v
 ```
 
-The dependency-light socket client and safe calibration example can be used
-without importing the Synapse SDK in the calling tool:
+The dependency-light socket client and safe calibration example can be used without importing the Synapse SDK in the calling tool:
 
 ```bash
 python client/calibration_prompter.py --host 127.0.0.1 --port 8765 \
-  --collection 0 --labels 0 1 2 3 4
+ --collection 0 --labels 0 1 2 3 4
 ```
 
-The prompter first queries a complete state snapshot, then uses one atomic
-`prepare_capture(..., enabled=false)` per target. It enables capture only for
-the prompted window and disables it in a `finally` cleanup before the next
-target is selected. It never connects to device Taps directly.
+The prompter first queries a complete state snapshot, then uses one atomic `prepare_capture(..., enabled=false)` per target. It enables capture only for the prompted window and disables it in a `finally` cleanup before the next target is selected. It never connects to device Taps directly.
 
-The dashboard renders whole immutable snapshots: pipeline/source connectivity,
-active target and capture state, every reported label count/capacity, and model
-phase/epoch/loss/accuracy/duration with a stale indicator. Controller callbacks
-are queued for the Qt thread, while device connections and commands run in
-worker threads; a fake-state Qt smoke test runs with `QT_QPA_PLATFORM=offscreen`.
-Target changes use the single atomic Apply action, all mutating controls are
-gated while their request is pending, fit progress does not re-enable them
-until its terminal result, and label/collection/all flushes require explicit
-confirmation. A zero or unavailable capacity is shown as unknown rather than
-as a false percentage.
+The dashboard renders whole immutable snapshots: pipeline/source connectivity, active target and capture state, every reported label count/capacity, and model phase/epoch/loss/accuracy/duration with a stale indicator. Controller callbacks are queued for the Qt thread, while device connections and commands run in worker threads; a fake-state Qt smoke test runs with `QT_QPA_PLATFORM=offscreen`. Target changes use the single atomic Apply action, all mutating controls are gated while their request is pending, fit progress does not re-enable them until its terminal result, and label/collection/all flushes require explicit confirmation. A zero or unavailable capacity is shown as unknown rather than as a false percentage.
 
 ## Configuration parameters
 
-All parameters have safe defaults. Window/stride are defined in source-clock
-milliseconds, then divided exactly onto the selected feature-rate clock.
+All parameters have safe defaults. Window/stride are defined in source-clock milliseconds, then divided exactly onto the selected feature-rate clock.
 
 | Key | Meaning | Default |
 | --- | --- | --- |

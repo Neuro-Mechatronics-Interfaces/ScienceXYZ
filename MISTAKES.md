@@ -463,3 +463,64 @@ last good layer and run the failing command in a `docker run` to read the actual
 error. When a legacy port fails to configure while cross-compiling with a
 `try_run()` error, pre-seed the named `*_RUN` (and `*_RUN__TRYRUN_OUTPUT`) cache
 variables via the triplet's `VCPKG_CMAKE_CONFIGURE_OPTIONS`, not a policy flag.
+
+### 2026-09-04 — `setWindowIcon` did not change the Windows taskbar icon
+
+**Attempt:** Gave the PySide6 GUIs (`gui.py`, `waveform.py`) a custom icon by
+loading `assets/icon.svg` into a `QIcon` and calling `setWindowIcon` on both the
+window and the `QApplication`, expecting the taskbar/tray icon to update.
+
+**Failure:** The window title-bar and Alt-Tab icon changed, but the Windows
+taskbar still showed the generic launcher icon (the "penguin"/Python icon).
+
+**Cause:** On Windows the taskbar groups and icons a running app by its
+**AppUserModelID (AppUMID)**, not by `QApplication.windowIcon`. A
+Python-launched Qt process inherits the host launcher's AppUMID and therefore
+its taskbar icon; `setWindowIcon` cannot override that surface.
+
+**Correction:** Added `set_windows_app_id()` in
+`stateful_decode_and_sync/appicon.py`, which calls
+`ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(...)` with a
+stable id (`NML.ScienceXYZ.StatefulDecodeAndSync`) before any window is shown;
+called it from `run_gui`/`run_waveform`. It is a no-op off Windows and swallows
+failures. Verified with `GetCurrentProcessExplicitAppUserModelID` (HRESULT 0,
+id round-trips).
+
+**Candidate rule:** On Windows, `QApplication.setWindowIcon` fixes only the
+title-bar/Alt-Tab icon. To control the **taskbar** icon of a Python/Qt app, set
+an explicit AppUserModelID via `SetCurrentProcessExplicitAppUserModelID` before
+the first window is shown.
+
+### 2026-09-04 — Taskbar still showed the penguin: the GUI was launched under WSL
+
+**Attempt:** After adding the Windows AppUserModelID fix above, expected the
+taskbar icon to be correct. The user still saw the "penguin" when launching
+`stateful-decode-and-sync-waveform`.
+
+**Failure:** The AppUMID fix had no effect on the observed taskbar icon.
+
+**Cause:** The command was run from a **WSL Ubuntu** shell
+(`maxmu@MAXLENOVO:/mnt/c/...`), so the GUI is a **Linux** process rendered by
+**WSLg**. `sys.platform` is `linux`, so `set_windows_app_id()` correctly no-ops;
+the Win32 AppUMID API is not the mechanism there. WSLg icons/groups a window by
+a matching freedesktop `.desktop` entry keyed to the window's `WM_CLASS`, and
+with none installed it shows its default Linux (penguin) icon. Easy to misread
+as "the icon fix failed" when the real variable is *which OS the process runs
+under* — the same repo path is reachable from both a native-Windows Python and a
+WSL Python, and only the native one takes the AppUMID path.
+
+**Correction:** Added a Linux/WSLg path in `appicon.py`: `install_desktop_entry`
+writes `~/.local/share/applications/<app_id>.desktop` (with `StartupWMClass` =
+app id) plus a themed PNG under `~/.local/share/icons/hicolor/256x256/apps/`, and
+`set_desktop_file_name` calls `QGuiApplication.setDesktopFileName` so Qt sets the
+matching `WM_CLASS`. `setup_taskbar_identity(app_leaf, name)` dispatches
+per-platform and is called from both entry points. Shipped a rasterized
+`assets/icon.png` (WSLg wants a PNG, not the SVG) and added it to
+`package-data`. For a guaranteed-correct taskbar icon, run the **native
+Windows** venv from PowerShell/CMD, not WSL.
+
+**Candidate rule:** Before diagnosing a GUI desktop-integration symptom
+(taskbar/tray icon, window grouping), confirm which OS the process actually runs
+under. A `/mnt/c` path in a `user@HOST` prompt means WSL/WSLg (Linux), where
+Win32 APIs no-op and freedesktop `.desktop`/`WM_CLASS` is the mechanism — not the
+Windows AppUserModelID.

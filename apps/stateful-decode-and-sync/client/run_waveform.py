@@ -25,6 +25,12 @@ def main() -> None:
     parser.add_argument("--channels", default="",
                         help="initial channel selection/order, e.g. '0-31' or '0,4,8' "
                              "(empty = all). Editable live in the window.")
+    parser.add_argument("--full-scale", type=float, default=1000.0,
+                        help="fixed y half-amplitude (±) at gain 1 (default: 1000). "
+                             "Editable live in the Scale panel.")
+    parser.add_argument("--timescale", type=float, default=0.0,
+                        help="initial shared x-window in seconds (0 = full --duration). "
+                             "Editable live in the Scale panel.")
     args = parser.parse_args()
     run_waveform(
         args.device_ip,
@@ -34,6 +40,8 @@ def main() -> None:
         columns=args.columns,
         channel_spec=args.channels,
         tap_name=args.tap_name,
+        y_full_scale=args.full_scale,
+        timescale_s=args.timescale,
     )
 
 

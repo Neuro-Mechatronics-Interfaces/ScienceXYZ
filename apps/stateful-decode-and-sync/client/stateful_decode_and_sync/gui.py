@@ -27,6 +27,8 @@ def create_dashboard_window(
         def __init__(self):
             super().__init__()
             self.setWindowTitle("Stateful Decode and Sync")
+            from .appicon import apply_app_icon
+            apply_app_icon(self)
             self.resize(760, 560)
             self.controller: BroadbandController | None = None
             self.executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="gui-command")
@@ -267,7 +269,13 @@ def create_dashboard_window(
 def run_gui(device_ip: str) -> None:
     from PySide6.QtWidgets import QApplication
 
+    from .appicon import apply_app_icon, setup_taskbar_identity
+
     app = QApplication.instance() or QApplication([])
+    # Taskbar identity per platform (Windows AppUserModelID / Linux+WSLg
+    # .desktop entry), before any window is shown.
+    setup_taskbar_identity("dashboard", "Stateful Decode and Sync")
+    apply_app_icon(app)  # taskbar icon
     window = create_dashboard_window(device_ip)
     window.show()
     app.exec()

@@ -31,3 +31,8 @@ py-modules = ["run_service", "run_gui", "run_waveform", "calibration_prompter", 
 
 [tool.setuptools.packages.find]
 where = ["."]
+
+[tool.setuptools.package-data]
+# Ship the GUI window/taskbar icon (see stateful_decode_and_sync/appicon.py):
+# the SVG for Qt window icons, the PNG for Linux/WSLg .desktop entries.
+stateful_decode_and_sync = ["assets/*.svg", "assets/*.png"]

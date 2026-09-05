@@ -11,6 +11,7 @@ from stateful_decode_and_sync.waveform import (
     WaveformBuffer,
     grid_placements,
     parse_channel_spec,
+    parse_gain_spec,
 )
 
 try:
@@ -119,6 +120,23 @@ class LayoutSpecTests(unittest.TestCase):
         self.assertEqual(grid_placements([], 4), [])
 
 
+class GainSpecTests(unittest.TestCase):
+    def test_empty_spec_is_no_overrides(self):
+        self.assertEqual(parse_gain_spec(""), {})
+        self.assertEqual(parse_gain_spec("   "), {})
+
+    def test_parses_channel_colon_gain_tokens(self):
+        self.assertEqual(parse_gain_spec("0:2, 4:0.5 8:10"), {0: 2.0, 4: 0.5, 8: 10.0})
+
+    def test_last_value_wins_for_duplicates(self):
+        self.assertEqual(parse_gain_spec("3:2 3:9"), {3: 9.0})
+
+    def test_malformed_and_nonpositive_raise(self):
+        for bad in ("5", "x:2", "0:y", "-1:2", "0:0", "0:-3", "0:inf"):
+            with self.assertRaises(ValueError):
+                parse_gain_spec(bad)
+
+
 class FakeTap:
     """Minimal read-only Tap stand-in matching broadband_probe's usage."""
 
@@ -196,6 +214,20 @@ class WaveformWindowTests(unittest.TestCase):
 
         return fake_reader
 
+    @staticmethod
+    def _send_wheel(window, dy, shift=False):
+        from PySide6.QtGui import QWheelEvent
+        from PySide6.QtCore import Qt, QPoint, QPointF
+
+        mods = Qt.ShiftModifier if shift else Qt.NoModifier
+        viewport = window.plot_widget.viewport()
+        event = QWheelEvent(
+            QPointF(10, 10), viewport.mapToGlobal(QPoint(10, 10)),
+            QPoint(0, 0), QPoint(0, dy), Qt.NoButton, mods,
+            Qt.NoScrollPhase, False,
+        )
+        QApplication.instance().sendEvent(viewport, event)
+
     def test_window_plots_injected_frames_read_only(self):
         window = create_waveform_window(
             "192.0.2.1", duration_s=0.01, expected_sample_rate_hz=20_000,
@@ -207,6 +239,134 @@ class WaveformWindowTests(unittest.TestCase):
         self.assertEqual(len(xs), 20)
         self.assertIn("read-only", window.status.text())
         window.close()
+
+    def test_window_uses_the_shared_app_icon(self):
+        # The icon.svg asset must load and be set on the window; a packaging
+        # slip that drops the asset would surface here rather than silently.
+        from stateful_decode_and_sync.appicon import ICON_PATH, load_app_icon
+
+        self.assertTrue(ICON_PATH.is_file(), f"missing icon asset: {ICON_PATH}")
+        self.assertFalse(load_app_icon().isNull())
+        window = create_waveform_window(
+            "192.0.2.1", duration_s=0.01, expected_sample_rate_hz=20_000,
+            reader_factory=self._prefilled_reader(2),
+        )
+        self.assertFalse(window.windowIcon().isNull())
+        window.close()
+
+    def test_plots_use_fixed_scale_not_autorange(self):
+        window = create_waveform_window(
+            "192.0.2.1", duration_s=0.01, expected_sample_rate_hz=20_000,
+            y_full_scale=500.0, reader_factory=self._prefilled_reader(4),
+        )
+        window._refresh()
+        plot = window._plots[0]
+        # Auto-ranging is off on both axes; the y-window is the fixed full-scale.
+        self.assertFalse(plot.vb.autoRangeEnabled()[0])
+        self.assertFalse(plot.vb.autoRangeEnabled()[1])
+        (y_lo, y_hi) = plot.vb.viewRange()[1]
+        self.assertAlmostEqual(y_lo, -500.0)
+        self.assertAlmostEqual(y_hi, 500.0)
+        window.close()
+
+    def test_per_channel_and_global_gain_scale_the_y_window(self):
+        window = create_waveform_window(
+            "192.0.2.1", duration_s=0.01, expected_sample_rate_hz=20_000,
+            y_full_scale=500.0, reader_factory=self._prefilled_reader(4),
+        )
+        window._refresh()
+        window.full_scale_spin.setValue(500.0)
+        window.gain_spin.setValue(2.0)      # global: half = 500/2 = 250
+        window.gain_edit.setText("0:5")     # ch0 override: half = 500/5 = 100
+        window._apply_scale()
+        self.assertEqual(window._plots[0].vb.viewRange()[1], [-100.0, 100.0])
+        self.assertEqual(window._plots[1].vb.viewRange()[1], [-250.0, 250.0])
+        window.close()
+
+    def test_shared_timescale_sets_x_window_on_all_axes(self):
+        window = create_waveform_window(
+            "192.0.2.1", duration_s=0.02, expected_sample_rate_hz=20_000,
+            columns=2, reader_factory=self._prefilled_reader(4),
+        )
+        window._refresh()
+        window.timescale_spin.setValue(0.005)
+        window._apply_scale()
+        for plot in window._plots.values():
+            self.assertEqual(plot.vb.viewRange()[0], [-0.005, 0.0])
+        window.close()
+
+    def test_plain_wheel_changes_vertical_gain(self):
+        window = create_waveform_window(
+            "192.0.2.1", duration_s=0.02, expected_sample_rate_hz=20_000,
+            y_full_scale=500.0, reader_factory=self._prefilled_reader(4),
+        )
+        window._refresh()
+        self.assertEqual(window._global_gain, 1.0)
+        self.assertEqual(window._plots[0].vb.viewRange()[1], [-500.0, 500.0])
+
+        self._send_wheel(window, 120)  # wheel up -> magnify (gain up, y-window shrinks)
+        self.assertGreater(window._global_gain, 1.0)
+        y_hi = window._plots[0].vb.viewRange()[1][1]
+        self.assertLess(y_hi, 500.0)
+        self.assertAlmostEqual(window.gain_spin.value(), window._global_gain)  # panel synced
+
+        self._send_wheel(window, -120)  # wheel down -> back toward 1.0
+        self.assertAlmostEqual(window._global_gain, 1.0)
+        window.close()
+
+    def test_shift_wheel_changes_shared_timescale(self):
+        window = create_waveform_window(
+            "192.0.2.1", duration_s=0.02, expected_sample_rate_hz=20_000,
+            timescale_s=0.02, columns=2, reader_factory=self._prefilled_reader(4),
+        )
+        window._refresh()
+        self.assertEqual(window._timescale_s, 0.02)
+
+        self._send_wheel(window, -120, shift=True)  # shorter window
+        self.assertLess(window._timescale_s, 0.02)
+        for plot in window._plots.values():  # shared across all axes
+            self.assertEqual(plot.vb.viewRange()[0], [-window._timescale_s, 0.0])
+        self.assertAlmostEqual(window.timescale_spin.value(), window._timescale_s)
+
+        # Plain wheel must not have touched the timescale.
+        gain_before = window._global_gain
+        self._send_wheel(window, 120, shift=True)  # longer, clamped to duration
+        self.assertLessEqual(window._timescale_s, 0.02)
+        self.assertEqual(window._global_gain, gain_before)
+        window.close()
+
+    def test_shift_wheel_timescale_clamps_to_buffer_duration(self):
+        window = create_waveform_window(
+            "192.0.2.1", duration_s=0.02, expected_sample_rate_hz=20_000,
+            timescale_s=0.02, reader_factory=self._prefilled_reader(4),
+        )
+        window._refresh()
+        for _ in range(30):  # many wheel-ups must not exceed the buffered history
+            self._send_wheel(window, 120, shift=True)
+        self.assertLessEqual(window._timescale_s, 0.02 + 1e-12)
+        self.assertEqual(window._timescale_s, window.timescale_spin.maximum())
+        window.close()
+
+    def test_invalid_gain_spec_is_reported_and_scale_unchanged(self):
+        window = create_waveform_window(
+            "192.0.2.1", duration_s=0.01, expected_sample_rate_hz=20_000,
+            y_full_scale=500.0, reader_factory=self._prefilled_reader(4),
+        )
+        window._refresh()
+        before = window._plots[0].vb.viewRange()[1]
+        window.gain_edit.setText("0:not-a-number")
+        window._apply_scale()
+        self.assertEqual(window._plots[0].vb.viewRange()[1], before)  # unchanged
+        self.assertIn("invalid", window.scale_note.text())
+        window.close()
+
+    def test_set_windows_app_id_is_safe_to_call(self):
+        # Best-effort taskbar identity: a no-op off Windows and swallowing any
+        # failure on it, so it must never raise on any platform.
+        from stateful_decode_and_sync.appicon import set_windows_app_id
+
+        set_windows_app_id()  # default id
+        set_windows_app_id("NML.ScienceXYZ.Test")  # custom id
 
     def test_layout_reconfigures_to_4x8_grid(self):
         window = create_waveform_window(
@@ -253,6 +413,133 @@ class WaveformWindowTests(unittest.TestCase):
         window._apply_layout()
         self.assertEqual(window._placements, before)  # unchanged on invalid input
         self.assertIn("invalid", window.layout_note.text())
+        window.close()
+
+    def test_frame_ticks_reuse_curve_objects_without_rebuilding(self):
+        # A steady stream must not delete/reconstruct Qt graphics objects each
+        # tick: the same curve instances persist and only their data changes.
+        window = create_waveform_window(
+            "192.0.2.1", duration_s=0.01, expected_sample_rate_hz=20_000,
+            reader_factory=self._prefilled_reader(4),
+        )
+        window._refresh()  # first tick builds the curves
+        curves_before = dict(window._curves)
+        axis_before = window._time_axis
+        rebuilds = 0
+        original_rebuild = window._rebuild_plots
+
+        def counting_rebuild():
+            nonlocal rebuilds
+            rebuilds += 1
+            original_rebuild()
+
+        window._rebuild_plots = counting_rebuild
+        for _ in range(5):
+            window._refresh()
+        # No rebuild on plain frame ticks, same curve objects, cached time axis.
+        self.assertEqual(rebuilds, 0)
+        self.assertEqual({id(c) for c in window._curves.values()},
+                         {id(c) for c in curves_before.values()})
+        self.assertIs(window._time_axis, axis_before)
+        window.close()
+
+    def test_reconnect_builds_fresh_reader_and_rearms_timer(self):
+        made = []
+
+        def counting_factory(ip, buf):
+            reader = BroadbandStreamReader(ip, buf, tap_factory=None)
+            reader.connected = True
+            for i in range(20):
+                buf.add_frame(frame(i, i, tuple((i + ch) % 17 for ch in range(4))))
+            reader.start = lambda: None
+            reader.stop = lambda timeout=1.0: None
+            made.append(reader)
+            return reader
+
+        window = create_waveform_window(
+            "192.0.2.1", duration_s=0.01, expected_sample_rate_hz=20_000,
+            reader_factory=counting_factory,
+        )
+        window._refresh()
+        first_reader = window.reader
+        self.assertEqual(len(made), 1)
+
+        # Simulate a stream error that stops the timer, as _refresh would.
+        window.timer.stop()
+
+        window._reconnect()
+        self.assertEqual(len(made), 2)
+        self.assertIsNot(window.reader, first_reader)  # fresh instance
+        self.assertTrue(window.timer.isActive())       # timer re-armed
+        self.assertTrue(window.reconnect_button.isEnabled())
+        window.close()
+
+    def test_layout_change_and_resize_share_the_reflow_path(self):
+        # Changing the arrangement must fire the same reflow the resize event
+        # uses, so channels fit the screen without a manual window drag.
+        from PySide6.QtGui import QResizeEvent
+        from PySide6.QtCore import QSize
+
+        window = create_waveform_window(
+            "192.0.2.1", duration_s=0.01, expected_sample_rate_hz=20_000,
+            reader_factory=self._prefilled_reader(32),
+        )
+        window._refresh()
+
+        calls = {"n": 0}
+        original = window._relayout_plots
+
+        def counting_relayout():
+            calls["n"] += 1
+            original()
+
+        window._relayout_plots = counting_relayout
+
+        # A layout change routes through the shared reflow.
+        window.channel_edit.setText("0-31")
+        window.columns_spin.setValue(8)
+        window._apply_layout()
+        self.assertGreaterEqual(calls["n"], 1)
+
+        # A window resize routes through the same reflow.
+        before = calls["n"]
+        window.resizeEvent(QResizeEvent(QSize(900, 600), QSize(1100, 720)))
+        self.assertGreater(calls["n"], before)
+        window.close()
+
+    def test_reconnect_recovers_from_reader_error(self):
+        # After a connect error the timer stops and the error shows; Reconnect
+        # must clear it by swapping in a healthy reader.
+        class ErroringReader(BroadbandStreamReader):
+            pass
+
+        state = {"first": True}
+
+        def flaky_factory(ip, buf):
+            reader = ErroringReader(ip, buf, tap_factory=None)
+            if state["first"]:
+                reader.error = "failed to connect to producer tap 'broadband_out'"
+                state["first"] = False
+            else:
+                reader.connected = True
+                for i in range(20):
+                    buf.add_frame(frame(i, i, tuple((i + ch) % 17 for ch in range(4))))
+            reader.start = lambda: None
+            reader.stop = lambda timeout=1.0: None
+            return reader
+
+        window = create_waveform_window(
+            "192.0.2.1", duration_s=0.01, expected_sample_rate_hz=20_000,
+            reader_factory=flaky_factory,
+        )
+        window._refresh()  # observes the error, stops the timer
+        self.assertIn("failed to connect", window.status.text())
+        self.assertFalse(window.timer.isActive())
+
+        window._reconnect()
+        self.assertIsNone(window.reader.error)
+        self.assertTrue(window.timer.isActive())
+        self.assertIn("read-only", window.status.text())
         window.close()
 
 

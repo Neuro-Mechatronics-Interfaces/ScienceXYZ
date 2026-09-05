@@ -61,13 +61,13 @@ Press **Connect**. The dashboard renders whole immutable state snapshots publish
 
 - **Device** — pipeline/source connectivity and model phase/epoch/loss/accuracy;
 - **Capture control** — select collection/label, toggle capture, one atomic
-  **Apply target**;
+ **Apply target**;
 - **Fit** — trigger an on-device training pass (epochs override or configured
-  default);
+ default);
 - **Task authority** — task lifecycle, last committed boundary, and
-  start/abort/reset/propose actions (reacts only to committed transitions);
+ start/abort/reset/propose actions (reacts only to committed transitions);
 - **Collections** — per-label count/capacity progress bars, with label /
-  collection / all flushes (each confirmed).
+ collection / all flushes (each confirmed).
 
 The dashboard is a control and state view. It does not plot signal waveforms; use the waveform viewer below for that.
 
@@ -83,6 +83,14 @@ stateful-decode-and-sync-waveform --device-ip "$DEV"
 stateful-decode-and-sync-waveform --device-ip "$DEV" --channels 0-31 --columns 8
 ```
 
+> **Taskbar icon (Windows).** The GUIs set a custom taskbar icon. On native
+> Windows this uses an AppUserModelID and works from PowerShell/CMD (e.g.
+> `C:\...\.venv\Scripts\stateful-decode-and-sync-waveform.exe`). Launched from
+> **WSL**, the same command runs as a Linux process under WSLg; the app installs
+> a freedesktop `.desktop` entry so WSLg *can* pick up the icon, but coverage
+> depends on the WSLg version. For a guaranteed-correct taskbar icon, run the
+> native Windows interpreter rather than WSL.
+
 Options:
 
 | Flag | Default | Meaning |
@@ -93,6 +101,8 @@ Options:
 | `--max-channels` | `32` | maximum channels the buffer retains |
 | `--columns` | `1` | initial number of grid columns |
 | `--channels` | `` (all) | initial channel selection/order (see below) |
+| `--full-scale` | `1000` | fixed y half-amplitude (±) at gain 1 |
+| `--timescale` | `0` (= `--duration`) | initial shared x-window in seconds |
 
 #### Change the layout live
 
@@ -101,8 +111,22 @@ The controls bar at the top reconfigures the grid without reconnecting:
 - **Columns** — the grid width. The row count follows from the number of channels shown, so 32 channels at 8 columns is a 4×8 grid; at 4 columns, 8×4; at 1 column, a single stacked column.
 - **Channels** — which channels to show and in what order, as comma- and/or space-separated tokens. Each token is a single index (`5`) or an inclusive range, ascending (`0-7`) or descending (`7-0`). Order is preserved, so the field doubles as a reordering; a channel may appear more than once. Empty shows every available channel in natural order. Examples: `0-31`, `0,4,8,12`, `0-3, 8-11`, `31-0`. **Apply** (or Enter) commits it; an out-of-range or malformed spec is reported next to the controls and leaves the current layout unchanged.
 - **All** resets to every channel in one column, and the **4×8 / 8×4 / 1 col** presets are one-click arrangements of channels `0-31`.
+- **Reconnect** tears down the current tap subscription and opens a fresh one, recovering from a dropped stream or a connect error without restarting the process. The rolling buffer, its history, and its integrity counters are preserved across the reconnect; only the transport is replaced.
 
 The buffer retains every channel the stream carries (up to `--max-channels`), so hiding channels or reordering them is purely a display change and never drops data.
+
+#### Fixed scale, gain, and timescale
+
+Amplitude is a **fixed scale**, not auto-ranged: every plot shows the same explicit y-window so channels and time are directly comparable and the trace never jumps as the signal grows. The **Scale** sub-panel controls it (**Apply scale** or Enter commits; an invalid entry is reported next to the panel and leaves the scale unchanged):
+
+- **Full-scale ±** — the base y half-amplitude at gain 1. A plot's y-window is `[−full_scale/gain, +full_scale/gain]`.
+- **Gain ×** — a global vertical gain applied to every axis. A larger gain magnifies the trace (shrinks the y-window) within the same pixel height.
+- **Per-ch gain** — per-channel gain overrides as comma- and/or space-separated `channel:gain` tokens, e.g. `0:2, 4:0.5 8:10`. An override replaces the global gain for that channel only; the gain must be positive.
+- **Timescale (s)** — the shared x-window duration, applied identically to all axes (the most recent *t* seconds). It is capped at `--duration` (the buffered history); widen `--duration` to show more.
+
+The mouse wheel over the plots adjusts the same scale live: **scroll** changes the vertical gain (up magnifies), and **Shift+scroll** changes the shared timescale (up lengthens the window, capped at `--duration`). The wheel drives the global gain and the shared timescale, so the panel's spin boxes track it; per-channel gain overrides are unaffected by the wheel.
+
+The status line appends the active full-scale, gain (and how many per-channel overrides are set), and timescale.
 
 The status line reports connection state, cumulative frame count, missing sequence numbers, protobuf parse errors, the observed sample rate, and how many channels are shown in how many columns — the same transport-integrity signals as `broadband_probe.py`, streamed live. In `SAMPLING` mode this is the forwarded RHD2132 stream; in `SYNTHETIC` mode it is the App's generated stream. Switch modes with `set_source_mode.py` (below).
 
@@ -164,15 +188,13 @@ The prompter queries a state snapshot, then uses one atomic `prepare_capture(...
 ## Threading and safety contract
 
 - Synapse Taps are only touched off the Qt thread. Both windows read immutable
-  snapshots on a `QTimer`; device I/O runs on worker threads.
+ snapshots on a `QTimer`; device I/O runs on worker threads.
 - The control dashboard changes targets only through the single atomic
-  `prepare_capture` command and gates mutating controls while a request is
-  pending.
+ `prepare_capture` command and gates mutating controls while a request is pending.
 - The waveform viewer and `broadband_probe.py` / `listen_class.py` are strictly
-  read-only producers: they open a tap, read, and disconnect; they issue no
-  command.
+ read-only producers: they open a tap, read, and disconnect; they issue no command.
 - Raw source timestamps and sequence numbers are preserved end to end; nothing
-  here substitutes a host receipt time for a source time.
+ here substitutes a host receipt time for a source time.
 
 ## Layout
 
