@@ -119,10 +119,21 @@ void test_validation_hash_and_parser() {
              parsed.definition.transitions.size() == 2,
          "typed parser accepts valid cyclic task");
 
-  (*value.mutable_struct_value()->mutable_fields())["unexpected"].set_bool_value(true);
+  // Build through protobuf's JSON reader, as for an SDK-loaded configuration.
+  // Do not mutate its map through executable-side hash operations: the ARM64
+  // shared-protobuf/static-Abseil build has separate hash state across DSOs.
+  const std::string unknown_json = std::string("{\"unexpected\":true,") + json.substr(json.find('{') + 1);
+  expect(google::protobuf::util::JsonStringToMessage(unknown_json, &value).ok(),
+         "protobuf parses fixture with an unknown field");
   const auto unknown = parse_task_definition(value, 2);
   expect(!static_cast<bool>(unknown) && unknown.result.error == DefinitionError::kUnknownField,
          "parser rejects unknown fields");
+  expect(google::protobuf::util::JsonStringToMessage("{}", &value).ok(),
+         "protobuf parses empty task object");
+  const auto missing = parse_task_definition(value, 2);
+  expect(!static_cast<bool>(missing) && missing.result.error == DefinitionError::kMissingField &&
+             missing.result.field == "task_definition.schema_version",
+         "parser still rejects genuinely missing schema version");
 }
 
 void test_invalid_graphs_are_rejected() {

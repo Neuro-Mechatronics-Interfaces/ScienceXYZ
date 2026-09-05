@@ -160,8 +160,15 @@ std::string sha256_hex(std::string_view input) {
 using FieldMap = google::protobuf::Map<std::string, google::protobuf::Value>;
 
 const google::protobuf::Value* field(const FieldMap& fields, std::string_view name) {
-  const auto it = fields.find(std::string(name));
-  return it == fields.end() ? nullptr : &it->second;
+  // These schema objects contain only a handful of fields. Compare keys
+  // directly: the device builder links shared protobuf with static Abseil,
+  // whose hash state can differ across the library/executable boundary.
+  // Map::find can then miss a key that protobuf itself inserted (or trip its
+  // debug bucket-consistency check). Iteration does not recompute that hash.
+  for (const auto& entry : fields) {
+    if (entry.first == name) return &entry.second;
+  }
+  return nullptr;
 }
 
 DefinitionResult allowed_fields(const FieldMap& fields,

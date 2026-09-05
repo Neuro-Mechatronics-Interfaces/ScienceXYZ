@@ -4,6 +4,63 @@ This file records concrete mistakes encountered while working in this repository
 
 ## Entry Template
 
+### 2026-09-05 - ARM64 protobuf map lookup used inconsistent Abseil hashes
+
+Reproduced the task parser failure locally using Docker image
+`stateful-decode-and-sync:latest-amd64`, GCC 10 ARM64, its shared protobuf 25.1
+and static Abseil archives, under `qemu-aarch64-static`. The unmodified
+`field()` triggered protobuf map.h:1069's bucket-consistency assertion:
+`BucketNumberFromHash(hash_function()(k)) != VariantBucketNumber(...)`.
+Native host protobuf tests passed, masking this dependency-boundary failure.
+Changed bounded schema lookup to compare keys by iteration, avoiding hashed
+lookup across the shared-library boundary. Updated unknown-field test setup
+to use protobuf JSON parsing instead of executable-side map insertion (which
+also triggered the assertion), and added a genuinely missing-field check.
+The ARM64 task-state suite and native suite pass after the change. Device App
+rebuild/deployment and live startup verification remain outstanding; no claim
+that the installed device binary has been fixed.
+
+### 2026-09-05 - Missing-field error was mistaken for missing uploaded data
+
+Repeated configuration uploads were suggested after the App reported missing
+`task_definition.schema_version`, although the host JSON already contained it.
+The operator's completed 0.8.0 report now shows the field as numeric 1 in both
+the saved device JSON and the same App process's configuration dump, followed
+by the missing-field error. Upload loss is not supported by that evidence.
+Investigate the deployed C++ parser/build/runtime instead; exact cause remains
+unverified. Both operator 0.8.0 deployments completed, and every collection
+section in the downloaded report returned exit 0. This supersedes the earlier
+installation-blocker assessment without proving why 0.7.0 hung.
+
+### 2026-09-05 - Diagnostic installer lacked time bounds
+
+Diagnostic 0.7.0 repeatedly stalled at installation after App startup while
+device queries stayed responsive; it completed quickly in a boot without App
+journal entries. The script ran unbounded journal scans and printed the whole
+report into installer stdout. The exact blocked operation is unverified;
+journal collection and an undrained installer pipe are hypotheses. Version
+0.8.0 adds command/copy timeouts, incremental reports, removes full-journal
+scans and report stdout. Local shell/build checks pass; device recovery and
+0.8.0 behavior remain unverified. Installer diagnostics should be time-bounded
+and avoid bulk stdout.
+
+### 2026-09-05 - WSL diagnostic build lost shell variables
+
+The first package-build invocation used `wsl.exe sh -c`; the extra shell parsing
+lost the temporary-directory variable and `cp` attempted `/package`, failing
+with permission denied. Re-running with `wsl.exe --exec sh -c` preserved the
+script and built successfully. Prefer explicit `--exec` for WSL shell scripts.
+
+### 2026-09-05 - Server logs were requested to diagnose an App process
+
+Requested `synapsectl logs` for an App startup failure before checking
+`scripts/device-diag/README.md`, which already documents that this command
+returns curated server logs, not the App journal. Also initially treated July
+timestamps as stale evidence despite known device clock skew. The supplied
+output included its own GET_LOGS request. Corrected the interpretation and
+prepared boot-scoped App diagnostics. Check documented log scope and clock
+limitations before requesting more operator output.
+
 ### 2026-09-05 - MEGA2560 sync sketch timed edges by hand-counted cycles
 
 **Attempt:** Generate GPIO_0/GPIO_1 sync edges for the RHD2132 adapter with

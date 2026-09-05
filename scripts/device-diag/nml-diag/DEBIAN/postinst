@@ -1,21 +1,39 @@
 #!/bin/sh
-# Read-only diagnostic v0.5.0: boot-scoped journal (clock-skew-safe). Changes nothing.
+# v0.8.0: report-only diagnostics; no service restarts or dpkg invocation.
 REPORT=/tmp/nml-diag-report.txt
-{
-echo "=== NML-DIAG v0.5.0 ==="
-echo "--- this boot: scifi-server startup (head 120) ---"
-journalctl -b -u scifi-server --no-pager 2>&1 | head -120
-echo "--- this boot: scifi-server latest (tail 60) ---"
-journalctl -b -u scifi-server --no-pager 2>&1 | tail -60
-echo "--- this boot: at_usb/axon/peripheral/plugin mentions (tail 120) ---"
-journalctl -b --no-pager 2>&1 | grep -iE "at_usb|axon|peripheral|plugin|usbdevice|2ac1|probe.?updater|functionfs|ffs" | tail -120
-echo "--- at_usb device nodes ---"
-ls -la /dev/at_usb* 2>&1
-ls -la /dev/usb-ffs/ 2>&1
-echo "=== NML-DIAG END ==="
-} > "$REPORT" 2>&1
-cat "$REPORT"
-for d in /opt/scifi/data /opt/scifi/data/sdcard /opt/scifi/data/disk_writer; do
-  [ -d "$d" ] && cp "$REPORT" "$d/nml-diag-report.txt" 2>/dev/null
-done
+# Never print the report into the deploy server's installer pipe.
+exec >>"$REPORT" 2>&1
+printf '=== NML-DIAG v0.8.0 ===\n' >"$REPORT"
+if ! command -v timeout >/dev/null 2>&1 || ! timeout -k 1 1 true; then
+  echo 'ERROR: timeout -k unavailable; collection skipped to avoid blocking dpkg.'
+  exit 0
+fi
+publish() {
+  for report_dir in /opt/scifi/data /opt/scifi/data/sdcard /opt/scifi/data/disk_writer; do
+    [ -d "$report_dir" ] || continue
+    timeout -k 1 2 cp "$REPORT" "$report_dir/nml-diag-report.txt"
+  done
+}
+collect() {
+  section_title=$1
+  shift
+  printf '\n--- BEGIN %s ---\n' "$section_title"
+  publish
+  timeout -k 2 10 "$@"
+  section_status=$?
+  printf '\n--- END %s: exit=%s (124/137 indicates timeout) ---\n' "$section_title" "$section_status"
+  publish
+}
+publish
+collect 'device clock' date -Is
+collect 'boot identity' cat /proc/sys/kernel/random/boot_id
+collect 'saved device configuration (first 65536 bytes)' head -c 65536 /opt/scifi/config/device.json
+collect 'application service status' systemctl show stateful-decode-and-sync.service --no-pager \
+  -p LoadState -p ActiveState -p SubState -p Result -p ExecMainCode \
+  -p ExecMainStatus -p ExecStart -p FragmentPath -p NRestarts
+collect 'application service definition' systemctl cat stateful-decode-and-sync.service --no-pager
+collect 'this boot: application journal (last 1200)' journalctl -b -u stateful-decode-and-sync.service -n 1200 --no-pager
+collect 'this boot: server journal (last 80)' journalctl -b -u scifi-server -n 80 --no-pager
+echo '=== NML-DIAG END ==='
+publish
 exit 0

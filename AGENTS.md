@@ -150,10 +150,88 @@ this help output; the device's reported Synapse 2.4.1 is separate evidence.
   `synapsectl -u "$DEV" start <configuration.json>`.
 
 This summary establishes command availability, not unprovided subcommand flags.
-For example, request `synapsectl logs --help` if log filtering/selection syntax
-is needed; do not repeat `synapsectl --help` first or guess those arguments.
-Reuse any subsequent subcommand help already supplied in the conversation or
-repository. Static CLI syntax does not substitute for current device status.
+Before requesting help, check this section and the conversation. Whenever the
+operator supplies additional CLI help, record its syntax, option meanings, and
+observation date here in the same turn. Do not ask for recorded help again unless
+the operator reports a CLI change or observed behavior contradicts it. Record
+only supplied evidence; a requested help command is not verified syntax.
+Static CLI syntax does not substitute for current device status.
+
+#### `synapsectl logs --help` (operator supplied 2026-09-05)
+
+```text
+synapsectl logs [-h] [--output OUTPUT] [--quiet]
+               [--log-level {DEBUG,INFO,WARNING,ERROR,CRITICAL}] [--follow]
+               [--since N] [--start-time START_TIME] [--end-time END_TIME]
+```
+
+- `-h` / `--help`: show help and exit.
+- `-o` / `--output OUTPUT`: optional file to write logs to.
+- `-q` / `--quiet`: suppress stdout output.
+- `-l` / `--log-level {DEBUG,INFO,WARNING,ERROR,CRITICAL}`: log level filter.
+- `-f` / `--follow`: follow log output.
+- `-S` / `--since N`: retrieve the last N **milliseconds**.
+- `--start-time START_TIME` / `--end-time END_TIME`: ISO-format time bounds,
+  e.g. `2024-03-14T15:30:00`. Help does not specify timezone semantics.
+- Operator-confirmed execution: `synapsectl -u "$DEV" logs --since 1800000`
+  retrieves a 30-minute interval. The supplied output contained `scifi-server`
+  records, including configuration/start and GET_LOGS requests; it did not
+  contain the App-process failure reason. No App selector appears in this help.
+
+#### `synapsectl apps --help` (operator supplied 2026-09-05)
+
+```text
+synapsectl apps [-h] {build,deploy,list} ...
+```
+
+- `-h` / `--help`: show help and exit.
+- `build`: cross-compile and package an application into a `.deb` without deploying.
+- `deploy`: deploy an application to a Synapse device.
+- `list`: list installed applications on the device.
+- Operator-confirmed execution (2026-09-05): `synapsectl -u "$DEV" apps list`.
+  Output lists application names and versions. This confirms installation, not
+  running status or the exact source revision of a deployed build.
+- No App logs subcommand is exposed here. Arguments for `build`, `deploy`, and
+  `list` are not established by this help; request only the relevant nested
+  command's help if its arguments are needed and have not already been supplied.
+
+#### Pre-built diagnostic package deployment (operator confirmed 2026-09-05)
+
+```bash
+synapsectl -u "$DEV" peripherals deploy driver --package "$(pwd)/scripts/device-diag/nml-diag_0.6.0_all.deb"
+```
+
+The operator observed all six deployment steps succeed, ending with package
+installed successfully (nml-diag 0.6.0, 1,462 bytes). This form emits
+`Warning: --driver ignored when --package is provided; deploying the supplied .deb as-is.`
+The warning did not prevent installation. Installation success does not verify
+the diagnostic report contents or resolve the App startup failure. This records
+the tested form, not other unprovided `peripherals deploy` options.
+
+#### Diagnostic report download (operator confirmed 2026-09-05)
+
+```bash
+synapsectl -u "$DEV" file get nml-diag-report.txt
+```
+
+The operator observed a successful 59.5 kB download. Reuse this confirmed form;
+other `file get` arguments are not established here. Check the shared working
+directory for the downloaded report before asking the operator to attach it.
+
+#### `synapsectl start --help` (operator supplied 2026-09-05)
+
+```text
+synapsectl start [-h] [config_file]
+```
+
+- `config_file`: optional device configuration JSON path. When supplied, the
+  CLI uploads the configuration first, then starts the device.
+- Without an argument, starts the device without reconfiguring it.
+- `-h` / `--help`: show help and exit.
+- This installed subcommand exposes no App-specific start argument. This
+  detailed help supersedes the broader top-level description above; do not
+  pass an App name as `config_file` or assume a device start retries a failed
+  App while the overall device is already running.
 
 ## Python Environment
 

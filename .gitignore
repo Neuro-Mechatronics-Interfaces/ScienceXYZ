@@ -2,6 +2,8 @@
 # Local environment
 # -----------------------------------------------------------------------------
 TaskSocketClient.js
+nml-diag-report.txt
+
 .venv/
 venv/
 env/

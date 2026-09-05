@@ -14,12 +14,29 @@ The workaround is the **mailbox pattern**: the `postinst` writes its report to `
 
 ## Packages
 
-- `nml-diag/` — strictly read-only state gathering. The `postinst` body is edited per investigation (bump `Version:` in `DEBIAN/control` each time); the committed version captures boot-scoped `journalctl -u scifi-server`, a grep for at_usb/axon/peripheral/plugin activity, and the `at_usb` device nodes.
+- `nml-diag/` — diagnostic state gathering; writes only its report in addition to package installation. Version 0.6.0 captures the device clock/boot ID, `stateful-decode-and-sync.service` status and definition, its boot-scoped journal, matching service units and application mentions, plus the existing server/USB diagnostics. The service name is a lookup candidate; the unit list and cross-journal search also cover a missing or differently named unit. Bump `Version:` in `DEBIAN/control` when changing the report.
 - `nml-quarantine/` — the one mutating tool: moves `axon_test_source.so` from `/usr/lib/scifi/plugins/` to `/opt/scifi/data/quarantine/` to test plugin-interference hypotheses. Reversible by redeploying the original `scifi-axon-test-source` .deb. (Not needed in the 2026-08-24 investigation; the journal exonerated the plugin.)
 
 Constraints that keep these safe: install at most a doc file, never touch shared paths, end `postinst` with `exit 0` unconditionally, never restart `scifi-server` from inside `postinst` (it is the process servicing the deploy), and never call `dpkg` mutating verbs from `postinst` (the dpkg lock is held).
 
 ## Build (WSL, Docker; dpkg-deb needs sane permissions, hence the container copy)
+
+Version 0.8.0 supersedes 0.7.0: commands have a 10-second timeout plus a
+2-second kill grace, report copies have a 2-second timeout plus 1-second grace,
+and reports publish before/after each section. Full-journal scans are removed.
+The report is no longer printed to installer stdout (an undrained output pipe
+is a possible blocking point). Collection is skipped if `timeout -k` is absent.
+These limits cannot recover an already blocked installer or guarantee recovery
+from uninterruptible kernel I/O. Do not deploy another package while the prior
+installation remains unresolved. Version 0.8.0 is locally built, not bench verified.
+
+Version 0.7.0 extends the 0.6.0 report with the first 65,536 bytes of
+`/opt/scifi/config/device.json` and increases the App journal tail to 1,200
+lines. This captures nested task-definition fields that the 200-line tail
+omitted. On 2026-09-05, the operator's latest startup still reported missing
+`task_definition.schema_version` despite that field existing in the host JSON;
+the saved device configuration and full startup dump are needed to locate the
+discrepancy. Report collection does not restart the App.
 
 ```bash
 docker run --rm -v "$(pwd):/w" ubuntu:22.04 bash -c \

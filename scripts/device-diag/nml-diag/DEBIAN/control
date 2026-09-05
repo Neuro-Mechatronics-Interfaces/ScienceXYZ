@@ -1,10 +1,10 @@
 Package: nml-diag
-Version: 0.5.0
+Version: 0.8.0
 Architecture: all
 Maintainer: NML <max.murphy11@gmail.com>
 Section: synapse-peripherals
 Priority: optional
 Description: Read-only diagnostic listing for NML bench
- Prints the state of /usr/lib/libscifi-peripheral-sdk* and the scifi
- plugin/gateware directories during install. Installs one doc file and
- changes nothing else.
+ Collects boot-scoped application and server diagnostics during install.
+ Writes a report to the data directories without restarting services or
+ changing acquisition configuration. Installs one doc file.
