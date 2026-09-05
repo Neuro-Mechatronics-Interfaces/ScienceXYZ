@@ -150,6 +150,21 @@ python listen_class.py --device-ip "$DEV"
 
 ## Live control tools
 
+### GPIO sync overlays in the waveform viewer
+
+Enable **Sync edges** to draw vertical markers on every displayed subplot:
+GPIO 0 rising = cyan, falling = blue; GPIO 1 rising = orange, falling = magenta.
+Detection uses GPIO channel-range metadata from the full incoming frame, even
+when those channels are hidden or outside the waveform channel cap. On the
+confirmed 34-channel bench stream, GPIO 0/1 occupy frame positions 32/33.
+Zero is low and nonzero is high. The first observed state is a baseline, not
+an edge; missing sequences, non-increasing timestamps and reconnects break
+edge continuity. An edge is placed at the first observed sample of the new
+state, not an interpolated physical transition time.
+
+Traces and markers share source-frame timestamps relative to the newest frame.
+The toggle controls visualization only; it does not start HDF5 recording.
+
 These single-purpose tools drive the App's legacy consumer taps directly. The dashboard and loopback service issue the same effects through the typed control plane; use whichever fits the task.
 
 ```bash

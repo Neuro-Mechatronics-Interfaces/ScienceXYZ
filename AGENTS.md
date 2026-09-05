@@ -170,6 +170,25 @@ as a replacement for Git history or repository documentation.
 - Put durable rules in `AGENTS.md`, developer workflows in `README.md`, current
   tracked milestones in `TODO.md`, and concrete failure evidence in
   `MISTAKES.md`. Keep MCP handoffs transient and project-specific.
+- Before ending a session that materially changes resumable work, reconcile
+  affected MCP TODOs and write one compact handoff for that workstream. Include
+  the current Git revision, whether changes are uncommitted, exact relevant
+  paths, verification performed, remaining limitations, and the first concrete
+  next action. Do not create handoffs for routine work with nothing to resume.
+- Separate implementation, automated-test evidence, operator-reported bench
+  evidence, and unverified assumptions. Date bench observations; a working GUI
+  or passing unit test does not complete recording or physical-sync acceptance.
+  Historical CLI logs and cached device IDs are not live evidence. Follow the
+  Synapse CLI execution boundary when new device evidence is needed.
+- Keep one canonical TODO per actionable outcome. Update its remaining scope
+  as partial work lands; mark it done only when its acceptance is met. Mark a
+  duplicate dropped with the surviving TODO ID, not done. Preserve unrelated
+  open work and do not turn stale build blockers into current facts without
+  verification.
+- When replacing a handoff, create and verify the replacement first, naming
+  the records it supersedes; then resolve those old records. Carry forward
+  unresolved scope or reference its canonical TODO so it is not lost. Read
+  back affected records after mutations and report the relevant IDs at handoff.
 
 ## Repository Documentation
 

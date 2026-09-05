@@ -40,6 +40,29 @@ def frame(sequence, timestamp, values, *, sample_rate=20_000):
 
 
 class WaveformBufferTests(unittest.TestCase):
+    def test_sync_edges_use_metadata_outside_display_cap(self):
+        buf = WaveformBuffer(duration_s=1, expected_sample_rate_hz=4, max_channels=1)
+        def add(seq, ts, a, b):
+            f = frame(seq, ts, [7, a, b])
+            f.ClearField("channel_ranges")
+            f.channel_ranges.add(type=ChannelType.ELECTRODE, count=1)
+            f.channel_ranges.add(type=ChannelType.GPIO, count=2, channel_ids=[1, 0])
+            buf.add_frame(f)
+        add(0, 100, 0, 0)
+        add(1, 150, 1, 0)
+        add(2, 900, 0, 1)
+        snap = buf.snapshot()
+        self.assertEqual(snap.timestamps.tolist(), [100, 150, 900])
+        self.assertEqual(snap.sync_edges.tolist(), [
+            [False, False, True], [False, False, False],
+            [False, True, False], [False, False, True]])
+        add(4, 950, 1, 0)  # missing frame: no inferred edge
+        add(5, 940, 0, 1)  # clock regression: no inferred edge
+        buf.reset_sync_continuity()
+        add(6, 1000, 1, 0)
+        self.assertFalse(buf.snapshot().sync_edges[:, -3:].any())
+        self.assertEqual(buf.snapshot().timestamps.tolist(), [900, 950, 940, 1000])
+
     def test_channel_set_and_time_order(self):
         buf = WaveformBuffer(duration_s=1.0, expected_sample_rate_hz=4, max_channels=2)
         self.assertEqual(buf.capacity, 4)
@@ -195,6 +218,26 @@ class BroadbandStreamReaderTests(unittest.TestCase):
 
 @unittest.skipUnless(_GUI_DEPS, "PySide6 and pyqtgraph are required for the waveform window")
 class WaveformWindowTests(unittest.TestCase):
+    def test_sync_toggle_marks_every_subplot_at_source_time(self):
+        window = create_waveform_window("192.0.2.1", reader_factory=self._prefilled_reader(2))
+        try:
+            window.buffer.reset_sync_continuity()
+            for seq, ts, level in ((100, 1000000000, 0), (101, 1250000000, 1)):
+                f = frame(seq, ts, [3, 4, level])
+                f.ClearField("channel_ranges")
+                f.channel_ranges.add(type=ChannelType.ELECTRODE, count=2)
+                f.channel_ranges.add(type=ChannelType.GPIO, count=1, channel_ids=[0])
+                window.buffer.add_frame(f)
+            window.sync_toggle.setChecked(True)
+            window._refresh()
+            for curves in window._sync_curves.values():
+                self.assertTrue(curves[0].isVisible())
+                self.assertEqual(curves[0].getData()[0].tolist(), [0.0, 0.0])
+            window.sync_toggle.setChecked(False)
+            self.assertTrue(all(not c.isVisible() for cs in window._sync_curves.values() for c in cs))
+        finally:
+            window.close()
+
     @classmethod
     def setUpClass(cls):
         os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")

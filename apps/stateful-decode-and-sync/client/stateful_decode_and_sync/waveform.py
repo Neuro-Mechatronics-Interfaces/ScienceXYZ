@@ -30,6 +30,7 @@ from dataclasses import dataclass
 
 import numpy as np
 from synapse.api.datatype_pb2 import BroadbandFrame
+from synapse.api.channel_pb2 import GPIO
 
 # Pin pyqtgraph to the same Qt binding the control GUI uses. pyqtgraph would
 # otherwise pick whichever binding it finds first (PyQt5 is preferred by
@@ -52,6 +53,8 @@ class WaveformSnapshot:
     parse_errors: int
     sequence_last: int | None
     timestamp_last: int | None
+    timestamps: np.ndarray
+    sync_edges: np.ndarray  # rows: GPIO 0 rise/fall, GPIO 1 rise/fall
 
 
 @dataclass(frozen=True)
@@ -199,6 +202,9 @@ class WaveformBuffer:
         self._sample_rate_hz = expected_sample_rate_hz
         self._channel_ids: tuple[int, ...] = ()
         self._ring: np.ndarray | None = None
+        self._timestamps = np.zeros(self._capacity, dtype=np.int64)
+        self._edges = np.zeros((4, self._capacity), dtype=bool)
+        self._gpio_previous = {}
         self._filled = 0
         self._write = 0
         self.frames = 0
@@ -218,6 +224,10 @@ class WaveformBuffer:
         with self._lock:
             return len(self._channel_ids)
 
+    def reset_sync_continuity(self) -> None:
+        with self._lock:
+            self._gpio_previous = {}
+
     def add_raw(self, raw: bytes) -> bool:
         """Parse one wire payload and append it; return False if malformed."""
         frame = BroadbandFrame()
@@ -226,6 +236,7 @@ class WaveformBuffer:
         except Exception:
             with self._lock:
                 self.parse_errors += 1
+                self._gpio_previous = {}
             return False
         # A payload that decodes to zero channels is counted as malformed in
         # add_frame, so both parse and empty-frame failures land in parse_errors.
@@ -237,6 +248,7 @@ class WaveformBuffer:
         if values.size == 0:
             with self._lock:
                 self.parse_errors += 1
+                self._gpio_previous = {}
             return False
 
         with self._lock:
@@ -249,6 +261,29 @@ class WaveformBuffer:
             column = np.zeros(width, dtype=np.float64)
             usable = min(width, values.size)
             column[:usable] = values[:usable]
+            # Detect from the full wire frame, independent of displayed channels.
+            sequence = int(frame.sequence_number)
+            timestamp = int(frame.timestamp_ns)
+            contiguous = (self.sequence_last is not None
+                          and sequence == self.sequence_last + 1
+                          and self.timestamp_last is not None
+                          and timestamp > self.timestamp_last)
+            current = {}
+            offset = 0
+            for channel_range in frame.channel_ranges:
+                ids = list(channel_range.channel_ids) or list(range(channel_range.count))
+                if channel_range.type == GPIO and len(ids) == channel_range.count:
+                    for j, pin in enumerate(ids):
+                        if pin in (0, 1) and offset + j < values.size:
+                            current[pin] = (offset + j, bool(values[offset + j]))
+                offset += channel_range.count
+            self._edges[:, self._write] = False
+            for pin, (position, high) in current.items():
+                previous = self._gpio_previous.get(pin)
+                if contiguous and previous is not None and previous[0] == position and previous[1] != high:
+                    self._edges[2 * pin + (0 if high else 1), self._write] = True
+            self._gpio_previous = current
+            self._timestamps[self._write] = timestamp
             self._ring[:, self._write] = column
             self._write = (self._write + 1) % self._capacity
             self._filled = min(self._filled + 1, self._capacity)
@@ -275,6 +310,7 @@ class WaveformBuffer:
                     (self._ring[:, self._write :], self._ring[:, : self._write]),
                     axis=1,
                 )
+            indices = (np.arange(self._filled) + self._write - self._filled) % self._capacity
             return WaveformSnapshot(
                 channel_ids=self._channel_ids,
                 samples=samples,
@@ -284,6 +320,8 @@ class WaveformBuffer:
                 parse_errors=self.parse_errors,
                 sequence_last=self.sequence_last,
                 timestamp_last=self.timestamp_last,
+                timestamps=self._timestamps[indices].copy(),
+                sync_edges=self._edges[:, indices].copy(),
             )
 
 
@@ -387,7 +425,7 @@ def create_waveform_window(
     from PySide6.QtCore import QTimer
     from PySide6.QtWidgets import (
         QDoubleSpinBox, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QMainWindow,
-        QPushButton, QSpinBox, QVBoxLayout, QWidget,
+        QPushButton, QSpinBox, QVBoxLayout, QWidget, QCheckBox,
     )
 
     try:
@@ -425,6 +463,7 @@ def create_waveform_window(
             self._active_channels: list[int] = []
             self._active_columns: int = max(1, columns)
             self._curves: dict[int, object] = {}  # position index -> curve
+            self._sync_curves = {}
             self._plots: dict[int, object] = {}  # position index -> PlotItem
             self._placements: list[GridPlacement] = []
             self._resolved_available = 0
@@ -455,6 +494,9 @@ def create_waveform_window(
             layout.addLayout(self._build_controls(QHBoxLayout, QLabel, QLineEdit, QPushButton, QSpinBox))
             layout.addWidget(self._build_scale_panel(
                 QGroupBox, QHBoxLayout, QLabel, QLineEdit, QDoubleSpinBox, QPushButton))
+            self.sync_toggle = QCheckBox("Sync edges: GPIO 0 rise (cyan), fall (blue); GPIO 1 rise (orange), fall (magenta)")
+            self.sync_toggle.toggled.connect(lambda _: self._refresh())
+            layout.addWidget(self.sync_toggle)
             self.status = QLabel("Connecting…")
             layout.addWidget(self.status)
             self.plot_widget = pg.GraphicsLayoutWidget()
@@ -682,6 +724,7 @@ def create_waveform_window(
             try:
                 self.status.setText("Reconnecting…")
                 self.reader.stop()
+                self.buffer.reset_sync_continuity()
                 self.reader = self._reader_factory(device_ip, self.buffer)
                 self.reader.start()
                 # A prior reader error stops the timer permanently; restart it so
@@ -728,6 +771,7 @@ def create_waveform_window(
             available = self.buffer.available_channels
             self.plot_widget.clear()
             self._curves.clear()
+            self._sync_curves.clear()
             self._plots.clear()
             # Force the time axis to be recomputed for the rebuilt curves.
             self._time_axis = None
@@ -752,6 +796,12 @@ def create_waveform_window(
                     plot.setLabel("bottom", "time", units="s")
                 self._plots[index] = plot
                 self._curves[index] = plot.plot(pen=self._pg.mkPen(width=1))
+                self._sync_curves[index] = [
+                    plot.plot(pen=self._pg.mkPen(color, width=1.5), connect="pairs")
+                    for color in ("#00d5ff", "#4677ff", "#ffb000", "#ff55cc")
+                ]
+                for curve in self._sync_curves[index]:
+                    curve.setZValue(10)
             # Apply the fixed y-window and shared x-window to the fresh plots.
             self._apply_axis_ranges()
             # A layout change alters the grid's row/column count, so the plots
@@ -797,17 +847,18 @@ def create_waveform_window(
 
             n = snapshot.samples.shape[1] if snapshot.samples.ndim == 2 else 0
             if n and snapshot.sample_rate_hz and self._placements:
-                # Reuse the cached x-axis unless the window length or sample rate
-                # changed, so the steady-state tick only calls setData and never
-                # reallocates the time vector or any Qt object.
-                key = (n, int(snapshot.sample_rate_hz))
-                if self._time_axis_key != key:
-                    self._time_axis = (np.arange(n) - n + 1) / snapshot.sample_rate_hz
-                    self._time_axis_key = key
-                t = self._time_axis
+                # Subtract integer source times before conversion to seconds.
+                t = (snapshot.timestamps - snapshot.timestamps[-1]) / 1e9
                 for index, placement in enumerate(self._placements):
                     if placement.channel_id < snapshot.samples.shape[0]:
                         self._curves[index].setData(t, snapshot.samples[placement.channel_id])
+                    half = self._full_scale / self._gain_for(placement.channel_id)
+                    for edge_index, curve in enumerate(self._sync_curves[index]):
+                        visible = self.sync_toggle.isChecked()
+                        curve.setVisible(visible)
+                        if visible:
+                            positions = t[snapshot.sync_edges[edge_index] & (t >= -self._timescale_s) & (t <= 0)]
+                            curve.setData(np.repeat(positions, 2), np.tile([-half, half], len(positions)), connect="pairs")
 
             state = "connected" if self.reader.connected else "waiting for frames"
             shown = len(self._placements)

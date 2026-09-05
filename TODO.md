@@ -1,5 +1,15 @@
 # TODO
 
+## Calibration recording MVP (2026-09-05)
+
+Operator confirms the stateful-decode-and-sync waveforms GUI works. Next
+acceptance is a host-local HDF5 recording containing samples, observed digital
+sync signals and frame-aligned task epochs, with reproducible offline figures.
+See [the implementation audit and acceptance steps](docs/calibration-recording-mvp.md).
+The existing host task recorder does not store broadband sample payloads;
+its build, raw recording extension, instructor integration and offline analysis
+remain open. First obtain current device inventory and physical sync wiring.
+
 The initial goals are:
 
 1. Reliably discover, configure, and stream from the SciFi-2.
