@@ -55,6 +55,8 @@ class WaveformSnapshot:
     timestamp_last: int | None
     timestamps: np.ndarray
     sync_edges: np.ndarray  # rows: GPIO 0 rise/fall, GPIO 1 rise/fall
+    nominal_times: np.ndarray  # seconds relative to newest sample; display only
+    connections: np.ndarray  # connect sample i to i+1 only within continuity
 
 
 @dataclass(frozen=True)
@@ -203,6 +205,9 @@ class WaveformBuffer:
         self._channel_ids: tuple[int, ...] = ()
         self._ring: np.ndarray | None = None
         self._timestamps = np.zeros(self._capacity, dtype=np.int64)
+        self._steps = np.zeros(self._capacity, dtype=np.float64)
+        self._continuous = np.zeros(self._capacity, dtype=bool)
+        self._break_pending = True
         self._edges = np.zeros((4, self._capacity), dtype=bool)
         self._gpio_previous = {}
         self._filled = 0
@@ -227,6 +232,7 @@ class WaveformBuffer:
     def reset_sync_continuity(self) -> None:
         with self._lock:
             self._gpio_previous = {}
+            self._break_pending = True
 
     def add_raw(self, raw: bytes) -> bool:
         """Parse one wire payload and append it; return False if malformed."""
@@ -237,6 +243,7 @@ class WaveformBuffer:
             with self._lock:
                 self.parse_errors += 1
                 self._gpio_previous = {}
+                self._break_pending = True
             return False
         # A payload that decodes to zero channels is counted as malformed in
         # add_frame, so both parse and empty-frame failures land in parse_errors.
@@ -249,6 +256,7 @@ class WaveformBuffer:
             with self._lock:
                 self.parse_errors += 1
                 self._gpio_previous = {}
+                self._break_pending = True
             return False
 
         with self._lock:
@@ -264,10 +272,17 @@ class WaveformBuffer:
             # Detect from the full wire frame, independent of displayed channels.
             sequence = int(frame.sequence_number)
             timestamp = int(frame.timestamp_ns)
+            rate = int(frame.sample_rate_hz) or self._sample_rate_hz
+            delta = sequence - self.sequence_last if self.sequence_last is not None else 1
             contiguous = (self.sequence_last is not None
-                          and sequence == self.sequence_last + 1
-                          and self.timestamp_last is not None
-                          and timestamp > self.timestamp_last)
+                          and delta == 1 and rate == self._sample_rate_hz
+                          and not self._break_pending)
+            # Reconstruct display spacing from sample identity, never arrival/source
+            # timestamp jitter. Positive gaps retain missing-sample duration. A
+            # reset/reconnect/rate change breaks the line; elapsed time is unknown.
+            self._steps[self._write] = (delta if delta > 0 and rate == self._sample_rate_hz else 1) / rate
+            self._continuous[self._write] = contiguous
+            self._break_pending = False
             current = {}
             offset = 0
             for channel_range in frame.channel_ranges:
@@ -311,6 +326,12 @@ class WaveformBuffer:
                     axis=1,
                 )
             indices = (np.arange(self._filled) + self._write - self._filled) % self._capacity
+            nominal_times = np.zeros(self._filled, dtype=np.float64)
+            if self._filled > 1:
+                nominal_times[:-1] = -np.cumsum(self._steps[indices[1:]][::-1])[::-1]
+            connections = np.zeros(self._filled, dtype=bool)
+            if self._filled > 1:
+                connections[:-1] = self._continuous[indices[1:]]
             return WaveformSnapshot(
                 channel_ids=self._channel_ids,
                 samples=samples,
@@ -322,6 +343,8 @@ class WaveformBuffer:
                 timestamp_last=self.timestamp_last,
                 timestamps=self._timestamps[indices].copy(),
                 sync_edges=self._edges[:, indices].copy(),
+                nominal_times=nominal_times,
+                connections=connections,
             )
 
 
@@ -494,7 +517,7 @@ def create_waveform_window(
             layout.addLayout(self._build_controls(QHBoxLayout, QLabel, QLineEdit, QPushButton, QSpinBox))
             layout.addWidget(self._build_scale_panel(
                 QGroupBox, QHBoxLayout, QLabel, QLineEdit, QDoubleSpinBox, QPushButton))
-            self.sync_toggle = QCheckBox("Sync edges: GPIO 0 rise (cyan), fall (blue); GPIO 1 rise (orange), fall (magenta)")
+            self.sync_toggle = QCheckBox("Sync edges: bottom ▲ GPIO 0 rise (cyan), fall (blue); top ▼ GPIO 1 rise (orange), fall (magenta)")
             self.sync_toggle.toggled.connect(lambda _: self._refresh())
             layout.addWidget(self.sync_toggle)
             self.status = QLabel("Connecting…")
@@ -793,12 +816,13 @@ def create_waveform_window(
                 if placement.row < last_row:
                     plot.getAxis("bottom").setStyle(showValues=False)
                 else:
-                    plot.setLabel("bottom", "time", units="s")
+                    plot.setLabel("bottom", "nominal sample time", units="s")
                 self._plots[index] = plot
                 self._curves[index] = plot.plot(pen=self._pg.mkPen(width=1))
                 self._sync_curves[index] = [
-                    plot.plot(pen=self._pg.mkPen(color, width=1.5), connect="pairs")
-                    for color in ("#00d5ff", "#4677ff", "#ffb000", "#ff55cc")
+                    plot.plot(pen=None, symbol="t1" if edge_index < 2 else "t",
+                              symbolSize=9, symbolPen=color, symbolBrush=color)
+                    for edge_index, color in enumerate(("#00d5ff", "#4677ff", "#ffb000", "#ff55cc"))
                 ]
                 for curve in self._sync_curves[index]:
                     curve.setZValue(10)
@@ -847,18 +871,23 @@ def create_waveform_window(
 
             n = snapshot.samples.shape[1] if snapshot.samples.ndim == 2 else 0
             if n and snapshot.sample_rate_hz and self._placements:
-                # Subtract integer source times before conversion to seconds.
-                t = (snapshot.timestamps - snapshot.timestamps[-1]) / 1e9
+                t = snapshot.nominal_times
                 for index, placement in enumerate(self._placements):
                     if placement.channel_id < snapshot.samples.shape[0]:
-                        self._curves[index].setData(t, snapshot.samples[placement.channel_id])
+                        self._curves[index].setData(t, snapshot.samples[placement.channel_id],
+                                                    connect=snapshot.connections)
                     half = self._full_scale / self._gain_for(placement.channel_id)
                     for edge_index, curve in enumerate(self._sync_curves[index]):
                         visible = self.sync_toggle.isChecked()
                         curve.setVisible(visible)
                         if visible:
                             positions = t[snapshot.sync_edges[edge_index] & (t >= -self._timescale_s) & (t <= 0)]
-                            curve.setData(np.repeat(positions, 2), np.tile([-half, half], len(positions)), connect="pairs")
+                            # Inset pixel-sized triangles to avoid clipping at the
+                            # plot boundary. Both channels keep exact edge times.
+                            height = max(1, self._plots[index].getViewBox().height())
+                            inset = min(half, 2 * half * 7 / height)
+                            y = -half + inset if edge_index < 2 else half - inset
+                            curve.setData(positions, np.full(len(positions), y))
 
             state = "connected" if self.reader.connected else "waiting for frames"
             shown = len(self._placements)
@@ -870,7 +899,7 @@ def create_waveform_window(
                 f"missing={snapshot.missing_sequences} parse_errors={snapshot.parse_errors} "
                 f"rate={snapshot.sample_rate_hz} Hz | showing {shown}/{available} ch "
                 f"in {self._active_columns} col(s) | ±{self._full_scale:g} gain {gain_txt} "
-                f"t={self._timescale_s:g}s | read-only (no device commands)"
+                f"t={self._timescale_s:g}s | nominal sample time | read-only (no device commands)"
             )
 
         def resizeEvent(self, event):

@@ -10,6 +10,7 @@ regressions are counted separately from protobuf parse failures.
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 import time
 from dataclasses import dataclass, field
@@ -39,10 +40,58 @@ class FrameStats:
     sample_rates_hz: set[int] = field(default_factory=set)
     channel_counts: set[int] = field(default_factory=set)
     channel_ranges: tuple[str, ...] = ()
+    gpio: dict = field(default_factory=dict)
+    gpio_previous: dict = field(default_factory=dict)
+    gpio_last_edge: dict = field(default_factory=dict)
+    previous_rate: int | None = None
 
     def add(self, frame: BroadbandFrame) -> None:
         sequence = int(frame.sequence_number)
         timestamp = int(frame.timestamp_ns)
+        contiguous = (self.sequence_last is not None and sequence == self.sequence_last + 1
+                      and self.timestamp_last is not None and timestamp > self.timestamp_last
+                      and frame.sample_rate_hz == self.previous_rate)
+        if not contiguous:
+            self.gpio_previous.clear()
+            self.gpio_last_edge.clear()
+        current = {}
+        offset = 0
+        for group in frame.channel_ranges:
+            ids = list(group.channel_ids) or list(range(group.count))
+            if group.type == ChannelType.GPIO and len(ids) == group.count:
+                for j, pin in enumerate(ids):
+                    if offset + j < len(frame.frame_data):
+                        current[pin] = (offset + j, int(frame.frame_data[offset + j]))
+            offset += group.count
+        for pin, (position, value) in current.items():
+            g = self.gpio.setdefault(pin, {"positions": set(), "low_samples": 0, "high_samples": 0,
+                "nonbinary_samples": 0, "value_min": value, "value_max": value,
+                "rises": 0, "falls": 0, "value_changes": 0, "intervals": 0})
+            g["positions"].add(position)
+            g["high_samples" if value else "low_samples"] += 1
+            g["nonbinary_samples"] += value not in (0, 1)
+            g["value_min"], g["value_max"] = min(g["value_min"], value), max(g["value_max"], value)
+            previous = self.gpio_previous.get(pin)
+            if previous is None or previous[0] != position:
+                self.gpio_last_edge.pop(pin, None)
+                continue
+            g["value_changes"] += previous[1] != value
+            if bool(previous[1]) != bool(value):
+                g["rises" if value else "falls"] += 1
+                last = self.gpio_last_edge.get(pin)
+                if last is not None:
+                    g["intervals"] += 1
+                    for name, delta in (("edge_delta_samples", sequence - last[0]),
+                                        ("edge_delta_source_ns", timestamp - last[1])):
+                        g[name + "_min"] = min(g.get(name + "_min", delta), delta)
+                        g[name + "_max"] = max(g.get(name + "_max", delta), delta)
+                        g[name + "_sum"] = g.get(name + "_sum", 0) + delta
+                self.gpio_last_edge[pin] = (sequence, timestamp)
+        self.gpio_previous = current
+        for pin in list(self.gpio_last_edge):
+            if pin not in current:
+                self.gpio_last_edge.pop(pin)
+        self.previous_rate = int(frame.sample_rate_hz)
 
         if self.frames == 0:
             self.sequence_first = sequence
@@ -99,9 +148,13 @@ def parse_frame(raw: bytes, stats: FrameStats) -> bool:
     try:
         if not frame.ParseFromString(raw):
             stats.parse_errors += 1
+            stats.gpio_previous.clear()
+            stats.gpio_last_edge.clear()
             return False
     except Exception:
         stats.parse_errors += 1
+        stats.gpio_previous.clear()
+        stats.gpio_last_edge.clear()
         return False
     stats.add(frame)
     return True
@@ -145,6 +198,15 @@ def print_report(stats: FrameStats, elapsed_s: float) -> None:
     print(f"sample_rate_hz={sorted(stats.sample_rates_hz)} channel_counts={sorted(stats.channel_counts)}")
     print(f"channel_ranges={list(stats.channel_ranges) if stats.channel_ranges else ['(empty: legacy electrode layout)']}")
     print(f"parse_errors={stats.parse_errors}")
+    for pin, values in sorted(stats.gpio.items()):
+        report = dict(values)
+        report["positions"] = sorted(report["positions"])
+        for name in ("edge_delta_samples", "edge_delta_source_ns"):
+            total = report.pop(name + "_sum", 0)
+            report[name + "_mean"] = total / report["intervals"] if report["intervals"] else None
+        print(f"gpio_id={pin} " + json.dumps(report, sort_keys=True))
+    if not stats.gpio:
+        print("gpio: no GPIO-tagged values observed")
 
 
 def main() -> int:

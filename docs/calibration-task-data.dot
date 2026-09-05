@@ -1,0 +1,16 @@
+digraph calibration_data {
+  rankdir=LR;
+  node [shape=box];
+  browser [label="Chrome: Reactions website\nRoute B only"];
+  bridge [label="Terminal 3: bridge :9999\nBrowser journal"];
+  app [label="Terminal 2: NDJSON :18765\n+ running device task App"];
+  raw [label="C++ raw recorder\nBroadband + task taps"];
+  offline [label="Terminal 4: offline verifier\nEpochs / plots / baseline"];
+  browser -> bridge [label="TASK WebSocket"];
+  bridge -> app [label="Task requests"];
+  app -> bridge [label="Committed events"];
+  app -> raw [label="Original tap payloads"];
+  bridge -> raw [label="Start / stop"];
+  raw -> offline [label="Immutable HDF5"];
+  bridge -> offline [label="Journal + profile"];
+}

@@ -316,6 +316,7 @@ class ControlService:
 async def serve(controller: BroadbandController, host: str, port: int) -> None:
     service = ControlService(controller, host, port)
     await service.start()
+    print(f"NDJSON control service listening on {host}:{port}", flush=True)
     try:
         await asyncio.Event().wait()
     finally:

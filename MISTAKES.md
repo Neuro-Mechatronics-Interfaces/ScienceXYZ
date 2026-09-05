@@ -4,6 +4,38 @@ This file records concrete mistakes encountered while working in this repository
 
 ## Entry Template
 
+### 2026-09-05 - MEGA2560 sync sketch timed edges by hand-counted cycles
+
+**Attempt:** Generate GPIO_0/GPIO_1 sync edges for the RHD2132 adapter with
+`firmware/MEGA2560_GPIO_SYNC`, timing toggles by a `while(1)` loop in `setup()`
+claimed to take "exactly 16 clock cycles" per iteration.
+**Failure:** The LUT's labeled frequencies (16 Hz..2048 Hz) did not correspond
+to real output. Branches, 16-bit compares, and a per-edge `random()` call made
+iteration cost variable, so the iteration-count thresholds were not microseconds.
+`noInterrupts()` was held forever, disabling `micros()/millis()` and `loop()`.
+**Cause:** Timing by counting CPU cycles in C is not deterministic once branches
+and library calls (`random()`) are in the loop body; the "16 cycles" premise was
+false.
+**Correction:** Rewrote to a hardware Timer3 CTC compare ISR at the fastest rate
+(2048 Hz). D23 is the master clock (toggled every interrupt); D22 hops
+pseudo-randomly by counting master ticks, so both lines share one timebase and
+stay phase-locked for cross-device alignment. Edge is emitted before `random()`
+so the PRNG never jitters an edge. Verified with a throwaway PlatformIO
+`megaatmega2560` build (avr-gcc): clean compile/link, `firmware.hex` produced.
+**Candidate rule:** For MCU edge timing, use a hardware timer/ISR, not
+hand-counted C-loop cycles; never hold `noInterrupts()` across the main program.
+
+### 2026-09-05 - Recorder instructions omitted provenance creation
+
+**Attempt:** Operator followed the host recorder build/run instructions.
+**Failure:** The command failed with `cannot read metadata file`.
+**Cause:** The documentation named a required provenance file but supplied only
+a comment telling the operator to create it, with no template or field guidance.
+**Correction:** Added `config/calibration-provenance.template.json`, copy/edit
+commands, and guidance distinguishing unknowns, supplied config and live evidence.
+**Candidate rule:** Include a usable template whenever a quick-start command
+requires a user-authored input file.
+
 ### YYYY-MM-DD — Short description
 
 **Attempt:** What was being attempted.
@@ -541,3 +573,56 @@ relative paths preserved. The Linux host recorder and tests subsequently built.
 
 **Candidate rule:** Keep host library/header discovery within one platform and
 preserve imported protobuf directory structure during code generation.
+
+### 2026-09-05 - Mixed browser time units in supplied task client
+
+**Attempt:** Map the supplied Reactions TaskSocketClient timestamps into recording
+provenance. Inspection found `_t0 = performance.timeOrigin` (milliseconds) added
+to `performance.now()/1000` (seconds), so the resulting value cannot be interpreted
+as a consistent epoch clock.
+
+**Correction:** Preserve incoming fields literally in the browser journal. The
+companion adapter emits explicitly named millisecond clock fields; authoritative
+labels use recorded device task boundaries. The supplied reference JS is unchanged.
+No browser-to-source clock mapping or physical onset is claimed.
+
+**Candidate rule:** Check time units at every clock composition before assigning
+an epoch or aligning browser events with source samples.
+
+### 2026-09-05 - Short diagnostic traces disappeared
+
+**Attempt:** Render the synthetic 1,300-frame calibration diagnostic using a
+min/max envelope. Its one-sample bins produced zero-length vertical lines and
+invisible electrode traces.
+
+**Correction:** Plot actual samples within each continuity segment when bins
+contain one sample; retain min/max aggregation for long recordings. Inspect the
+rendered short fixture as well as the real high-rate recording.
+
+### 2026-09-05 - Preparation depended on missing session provenance
+
+The workflow referenced an ignored previous-session provenance file and claimed
+a prepared directory existed. The operator encountered an existing output path,
+then a missing provenance input. The preparer wrote config/profile before reading
+metadata, leaving partial output on that failure. It now validates inputs before
+creating output and reports existing directories without a traceback. The guide
+uses the tracked template and a fresh-directory recovery path. Two regression
+tests verify no output on missing metadata and no overwrite of existing files.
+
+### 2026-09-05 - Coincident GPIO overlays hid one channel
+
+Full-height GPIO markers were drawn in GPIO 0 then GPIO 1 order. Synchronous
+master/hopping edges could overlap exactly, making GPIO 0 appear absent. Each
+GPIO now uses a separate vertical half of the subplot without shifting time;
+an offscreen regression test verifies both lanes at the same timestamp. Missing
+visible markers alone do not prove missing raw GPIO transitions.
+
+### 2026-09-05 - Calibration guide mixed terminal roles and session names
+
+The operator encountered repeated connection, existing-journal and task-definition
+errors while following a guide that mixed setup v1/v2, port defaults and service
+versus browser roles. The operator also corrected the CLI spelling to synapsectl.
+Rewrote the guide with numbered WSL terminals, one setup/port convention, fresh
+recording names, expected readiness messages, separate terminal/browser routes,
+and an explicit App Running check. Latest info reports App Running False despite
+overall device Running; old July log output is not current failure evidence.

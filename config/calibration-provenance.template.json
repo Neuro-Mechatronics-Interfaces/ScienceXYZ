@@ -1,0 +1,31 @@
+{
+  "provenance_schema": "sciencexyz.calibration_provenance.v1",
+  "purpose": "raw recording smoke test; not physical synchronization acceptance",
+  "observation_date": null,
+  "device": {
+    "ip": null,
+    "serial_number": null,
+    "synapse_version": null,
+    "firmware_version": null,
+    "physical_peripheral_ids": null
+  },
+  "configuration_input": null,
+  "running_configuration": null,
+  "task": {
+    "definition": null,
+    "state_to_label": null,
+    "status": "not yet verified"
+  },
+  "physical_sync": {
+    "gpio_id": null,
+    "wiring_description": null,
+    "expected_pulse_count": null,
+    "timing_verified": false
+  },
+  "broadband_probe": null,
+  "notes": [
+    "null means unknown or not yet collected, not absent.",
+    "Complete device/config/task/wiring evidence before calibration acceptance.",
+    "Raw recording stores the supplied metadata verbatim; edit before starting."
+  ]
+}

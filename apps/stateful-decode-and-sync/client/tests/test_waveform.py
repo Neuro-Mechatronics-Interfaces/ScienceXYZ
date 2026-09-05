@@ -2,6 +2,7 @@ import os
 import queue
 import time
 import unittest
+import numpy as np
 
 from synapse.api.channel_pb2 import ChannelType
 from synapse.api.datatype_pb2 import BroadbandFrame
@@ -57,10 +58,11 @@ class WaveformBufferTests(unittest.TestCase):
             [False, False, True], [False, False, False],
             [False, True, False], [False, False, True]])
         add(4, 950, 1, 0)  # missing frame: no inferred edge
-        add(5, 940, 0, 1)  # clock regression: no inferred edge
+        add(5, 940, 0, 1)  # source clock regression does not change sample continuity
         buf.reset_sync_continuity()
         add(6, 1000, 1, 0)
-        self.assertFalse(buf.snapshot().sync_edges[:, -3:].any())
+        self.assertFalse(buf.snapshot().sync_edges[:, [-3, -1]].any())
+        self.assertTrue(buf.snapshot().sync_edges[:, -2].any())
         self.assertEqual(buf.snapshot().timestamps.tolist(), [900, 950, 940, 1000])
 
     def test_channel_set_and_time_order(self):
@@ -77,6 +79,23 @@ class WaveformBufferTests(unittest.TestCase):
         self.assertEqual(snap.frames, 3)
         # The buffer adopts the sample rate declared on the wire frames.
         self.assertEqual(snap.sample_rate_hz, 4)
+
+    def test_nominal_spacing_ignores_batched_and_regressing_source_times(self):
+        buf = WaveformBuffer(duration_s=1, expected_sample_rate_hz=4)
+        for seq, timestamp in enumerate([100, 100, 500000000, 10, 10, 999999999]):
+            buf.add_frame(frame(seq, timestamp, [seq], sample_rate=20000))
+        snap = buf.snapshot()  # ring wrap must preserve uniform spacing
+        np.testing.assert_allclose(np.diff(snap.nominal_times), 1 / 20000)
+        self.assertEqual(snap.timestamps.tolist(), [500000000, 10, 10, 999999999])
+        self.assertEqual(snap.connections.tolist(), [True, True, True, False])
+
+    def test_nominal_gaps_resets_and_rate_changes_break_lines(self):
+        buf = WaveformBuffer()
+        for seq, rate in [(10, 20000), (11, 20000), (14, 20000), (0, 20000), (1, 10000), (2, 10000)]:
+            buf.add_frame(frame(seq, 100, [seq], sample_rate=rate))
+        snap = buf.snapshot()
+        np.testing.assert_allclose(np.diff(snap.nominal_times), [1/20000, 3/20000, 1/20000, 1/10000, 1/10000])
+        self.assertEqual(snap.connections.tolist(), [True, False, False, False, True, False])
 
     def test_ring_wraps_and_preserves_recency(self):
         buf = WaveformBuffer(duration_s=1.0, expected_sample_rate_hz=3, max_channels=1)
@@ -218,11 +237,35 @@ class BroadbandStreamReaderTests(unittest.TestCase):
 
 @unittest.skipUnless(_GUI_DEPS, "PySide6 and pyqtgraph are required for the waveform window")
 class WaveformWindowTests(unittest.TestCase):
-    def test_sync_toggle_marks_every_subplot_at_source_time(self):
+    def test_coincident_gpio_edges_use_opposing_triangles(self):
         window = create_waveform_window("192.0.2.1", reader_factory=self._prefilled_reader(2))
         try:
             window.buffer.reset_sync_continuity()
-            for seq, ts, level in ((100, 1000000000, 0), (101, 1250000000, 1)):
+            for seq, level in [(100, 0), (101, 1)]:
+                f = frame(seq, 1000, [3, 4, level, level])
+                f.ClearField("channel_ranges")
+                f.channel_ranges.add(type=ChannelType.ELECTRODE, count=2)
+                f.channel_ranges.add(type=ChannelType.GPIO, count=2, channel_ids=[0, 1])
+                window.buffer.add_frame(f)
+            window.sync_toggle.setChecked(True)
+            window._refresh()
+            for curves in window._sync_curves.values():
+                x0, y0 = curves[0].getData()
+                x1, y1 = curves[2].getData()
+                np.testing.assert_array_equal(x0, x1)
+                self.assertLess(y0[0], 0)
+                self.assertGreater(y1[0], 0)
+                self.assertEqual(curves[0].opts["symbol"], "t1")
+                self.assertEqual(curves[2].opts["symbol"], "t")
+                self.assertIsNone(curves[0].opts["pen"])
+        finally:
+            window.close()
+
+    def test_sync_toggle_marks_every_subplot_at_nominal_time(self):
+        window = create_waveform_window("192.0.2.1", reader_factory=self._prefilled_reader(2))
+        try:
+            window.buffer.reset_sync_continuity()
+            for seq, ts, level in ((100, 1000000000, 0), (101, 1000000000, 1), (102, 9000000000, 1)):
                 f = frame(seq, ts, [3, 4, level])
                 f.ClearField("channel_ranges")
                 f.channel_ranges.add(type=ChannelType.ELECTRODE, count=2)
@@ -232,7 +275,9 @@ class WaveformWindowTests(unittest.TestCase):
             window._refresh()
             for curves in window._sync_curves.values():
                 self.assertTrue(curves[0].isVisible())
-                self.assertEqual(curves[0].getData()[0].tolist(), [0.0, 0.0])
+                np.testing.assert_allclose(curves[0].getData()[0], [-1/20000])
+            for curve in window._curves.values():
+                np.testing.assert_allclose(np.diff(curve.getData()[0][-3:]), 1/20000)
             window.sync_toggle.setChecked(False)
             self.assertTrue(all(not c.isVisible() for cs in window._sync_curves.values() for c in cs))
         finally:

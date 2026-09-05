@@ -118,7 +118,7 @@ Raw acquired data is immutable. Derived, filtered, aligned, or resampled data mu
 Prefer small deterministic smoke tests before hardware-dependent integration
 tests. Do not require physical SciFi hardware for ordinary unit tests. Hardware tests should fail clearly when the device is unavailable rather than silently substituting simulated data.
 
-When documentation, installed `synapsectl` behavior, and an example repository disagree, inspect the installed CLI with `synapsectl --help` and prefer the API supported by the installed version. Document any version-specific workaround.
+When documentation, installed `synapsectl` behavior, and an example repository disagree, prefer operator-provided installed CLI evidence. Reuse the recorded help below; request only the relevant subcommand's help when its arguments are unknown. Document any version-specific workaround.
 
 ## Synapse CLI Execution Boundary
 
@@ -128,6 +128,32 @@ or any other CLI evidence is needed, ask the user to run one specific command
 and provide the relevant output. Interpret that user-provided output against
 the canonical API and repository configuration; do not substitute an assumed
 local CLI installation or attempt device control directly.
+
+### Recorded operator CLI help (2026-09-05)
+
+The operator supplied `synapsectl --help`; do not ask for the basic help again
+merely because a new session starts. Reuse this summary unless the operator
+reports a CLI upgrade/change or observed behavior contradicts it. The executable
+is **synapsectl**, not synapsectrl. The CLI package version was not included in
+this help output; the device's reported Synapse 2.4.1 is separate evidence.
+
+- Global options: `-h`/`--help`, `-u`/`--uri URI` (device IP or name),
+  `--version`, `-v`/`--verbose`.
+- Commands: `discover`, `info`, `query`, `start`, `stop`, `configure`, `logs`,
+  `read`, `plot`, `file`, `taps`, `apps`, `peripherals`, `settings`, `deploy-model`.
+- `start` and `stop` operate on the device or an application; `configure` writes
+  device configuration; `logs` gets device logs; `query` executes a device query.
+- `read` reads a device Broadband Tap into HDF5; `plot` plots recordings;
+  `file`, `taps`, `apps`, and `settings` manage their respective resources;
+  `peripherals` builds/deploys peripheral plugins; `deploy-model` deploys a model.
+- Operator-confirmed forms: `synapsectl -u "$DEV" info` and
+  `synapsectl -u "$DEV" start <configuration.json>`.
+
+This summary establishes command availability, not unprovided subcommand flags.
+For example, request `synapsectl logs --help` if log filtering/selection syntax
+is needed; do not repeat `synapsectl --help` first or guess those arguments.
+Reuse any subsequent subcommand help already supplied in the conversation or
+repository. Static CLI syntax does not substitute for current device status.
 
 ## Python Environment
 

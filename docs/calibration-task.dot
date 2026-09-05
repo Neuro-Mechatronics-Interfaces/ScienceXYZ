@@ -1,0 +1,12 @@
+digraph calibration_task {
+  rankdir=LR;
+  graph [label="Calibration states (device-authoritative boundaries)", labelloc=t];
+  node [shape=box];
+  rest [label="1: Rest"];
+  a [label="2: Action A"];
+  b [label="3: Action B"];
+  done [label="4: Complete\nUnlabeled", peripheries=2];
+  rest -> a [label="advance"];
+  a -> b [label="advance"];
+  b -> done [label="advance"];
+}

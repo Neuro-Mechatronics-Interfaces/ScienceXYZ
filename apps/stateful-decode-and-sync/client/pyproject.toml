@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "science-stateful-decode-and-sync-client"
-version = "0.1.0"
+version = "0.1.2"
 description = "Headless controller, loopback service, calibration client, and PySide6 dashboard"
 requires-python = ">=3.13"
 dependencies = [
@@ -17,6 +17,7 @@ dependencies = [
 [project.optional-dependencies]
 test = ["pytest>=8,<9", "pytest-asyncio>=0.24,<2"]
 waveform = ["pyqtgraph>=0.13"]
+recording = ["h5py>=3.12", "matplotlib>=3.9", "websockets>=14,<17"]
 
 [project.scripts]
 stateful-decode-and-sync-service = "run_service:main"
@@ -24,10 +25,13 @@ stateful-decode-and-sync-gui = "run_gui:main"
 stateful-decode-and-sync-waveform = "run_waveform:main"
 stateful-decode-and-sync-calibration = "calibration_prompter:main"
 stateful-decode-and-sync-fake-demo = "run_fake_demo:main"
+sciencexyz-calibration-task = "calibration_task:main"
+sciencexyz-reactions-bridge = "run_reactions_bridge:main"
+sciencexyz-analyze-recording = "analyze_recording:main"
 
 [tool.setuptools]
 package-dir = {"" = "."}
-py-modules = ["run_service", "run_gui", "run_waveform", "calibration_prompter", "run_fake_demo"]
+py-modules = ["run_service", "run_gui", "run_waveform", "calibration_prompter", "run_fake_demo", "calibration_task", "run_reactions_bridge", "analyze_recording"]
 
 [tool.setuptools.packages.find]
 where = ["."]

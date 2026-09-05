@@ -3,6 +3,11 @@ protobuf
 science-synapse>=2.2.7
 PySide6>=6.7
 
+[recording]
+h5py>=3.12
+matplotlib>=3.9
+websockets<17,>=14
+
 [test]
 pytest<9,>=8
 pytest-asyncio<2,>=0.24

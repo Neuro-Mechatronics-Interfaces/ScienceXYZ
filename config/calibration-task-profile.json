@@ -1,0 +1,86 @@
+{
+  "profile_schema": "sciencexyz.calibration_task.v1",
+  "definition": {
+    "schema_version": 1,
+    "definition_id": "calibration.rest_two_actions",
+    "revision": 1,
+    "initial_state_id": 1,
+    "source_policy": {
+      "loss_action": "fault",
+      "loss_timeout_ms": 1000,
+      "sequence_gap_action": "fault",
+      "staged_command_timeout_ms": 5000
+    },
+    "states": [
+      {
+        "id": 1,
+        "name": "rest",
+        "terminal": false
+      },
+      {
+        "id": 2,
+        "name": "action_a",
+        "terminal": false
+      },
+      {
+        "id": 3,
+        "name": "action_b",
+        "terminal": false
+      },
+      {
+        "id": 4,
+        "name": "complete",
+        "terminal": true
+      }
+    ],
+    "transitions": [
+      {
+        "id": 1,
+        "name": "advance_1",
+        "from_state_id": 1,
+        "to_state_id": 2,
+        "priority": 1,
+        "trigger": {
+          "kind": "external_event",
+          "event_name": "advance"
+        }
+      },
+      {
+        "id": 2,
+        "name": "advance_2",
+        "from_state_id": 2,
+        "to_state_id": 3,
+        "priority": 1,
+        "trigger": {
+          "kind": "external_event",
+          "event_name": "advance"
+        }
+      },
+      {
+        "id": 3,
+        "name": "advance_3",
+        "from_state_id": 3,
+        "to_state_id": 4,
+        "priority": 1,
+        "trigger": {
+          "kind": "external_event",
+          "event_name": "advance"
+        }
+      }
+    ]
+  },
+  "definition_hash": "sha256:5f67d6b0807d5a2537e1e0fea26a3bbd8d45fa5978b7fd8c59b1bf2b224e9f7f",
+  "reference_source_id": "rhd2132",
+  "state_to_label": {
+    "1": "rest",
+    "2": "action_a",
+    "3": "action_b",
+    "4": null
+  },
+  "instructions": {
+    "1": "Rest",
+    "2": "Perform action A",
+    "3": "Perform action B",
+    "4": "Complete"
+  }
+}

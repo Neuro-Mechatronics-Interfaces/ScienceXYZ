@@ -2,18 +2,36 @@
 
 ## Calibration recording MVP (2026-09-05)
 
+Latest operator `synapsectl info` reports the device Running but the
+stateful-decode-and-sync App **Running: False**; displayed July logs do not
+establish the current cause. Resolve App startup before retrying instructor
+timeouts. The corrected numbered-terminal workflow uses `synapsectl`, setup v2,
+NDJSON port 18765 and a separate optional Chrome bridge on 9999. Actual browser
+origin is `https://chr.nml.wtf`; site adapter/transport acceptance remains open.
+GPIO 0 remains HIGH even when grounded in operator raw probes; investigation is
+deferred to Science at the operator's request.
+
 Operator confirms the stateful-decode-and-sync waveforms GUI works. Next
 acceptance is a host-local HDF5 recording containing samples, observed digital
 sync signals and frame-aligned task epochs, with reproducible offline figures.
 See [the implementation audit and acceptance steps](docs/calibration-recording-mvp.md).
 The C++ host recorder now builds through `host/recording/` and persists complete
 broadband/task wire messages with host receipt time, exclusive creation, checked
-writes, bounded nonblocking polling and explicit loss status. Four hardware-free
-tests cover HDF5 roundtrip, write/flush failure, loopback stop, idle timeout and
-loss accounting. T-26/T-32 remain open for bench throughput, recorded-boundary
+writes, bounded nonblocking polling and explicit loss status. Five hardware-free
+tests cover profile hashing, HDF5 roundtrip, write/flush failure, loopback stop,
+idle timeout and loss accounting. T-26/T-32 remain open for bench throughput, recorded-boundary
 validation, complete provenance and broader source/control integration.
 T-34 owns physical GPIO/recording acceptance; T-39/T-40 own instructor and offline
-analysis. No physical-sync acceptance follows from these automated tests.
+analysis. The task instructor, Reactions TASK 0.12 bridge/JS adapter and offline
+epoch/plot/baseline tools are implemented; 78 Python and three JS tests pass.
+See [task workflow](docs/calibration-task-workflow.md). Operator recording on
+2026-09-05 contains 237,360 raw frames, no task messages and zero reported errors;
+independent analysis confirms no GPIO edges. Next: operator applies generated
+task config, runs three complete labeled trials, and verifies journal/raw joins.
+Operator now cites Science's +5 V maximum/+1.5 V threshold specification and
+observes both GPIO rise/fall overlays with Mega D23 to GPIO 0, D22 to GPIO 1.
+Recorded edge/timing acceptance remains open. No physical-sync
+acceptance follows from these automated tests.
 
 The initial goals are:
 

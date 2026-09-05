@@ -1,0 +1,145 @@
+"""A bounded rest/two-action task, with device-authoritative transitions."""
+from __future__ import annotations
+
+import hashlib
+import json
+import time
+import uuid
+from pathlib import Path
+
+from .client import NdjsonClient, SocketClientError
+
+
+def make_profile():
+    definition = {
+        "schema_version": 1, "definition_id": "calibration.rest_two_actions", "revision": 1,
+        "initial_state_id": 1,
+        "source_policy": {"loss_action": "fault", "loss_timeout_ms": 1000,
+                          "sequence_gap_action": "fault", "staged_command_timeout_ms": 5000},
+        "states": [{"id": n, "name": name, "terminal": n == 4}
+                   for n, name in enumerate(["rest", "action_a", "action_b", "complete"], 1)],
+        "transitions": [{"id": n, "name": f"advance_{n}", "from_state_id": n,
+                         "to_state_id": n + 1, "priority": 1,
+                         "trigger": {"kind": "external_event", "event_name": "advance"}}
+                        for n in range(1, 4)],
+    }
+    return {"profile_schema": "sciencexyz.calibration_task.v1", "definition": definition,
+            "definition_hash": definition_hash(definition), "reference_source_id": "rhd2132",
+            "state_to_label": {"1": "rest", "2": "action_a", "3": "action_b", "4": None},
+            "instructions": {"1": "Rest", "2": "Perform action A", "3": "Perform action B", "4": "Complete"}}
+
+
+def definition_hash(definition):
+    # All fields/defaults are explicit in this profile. This ordering matches
+    # task::canonical_json in src/task_state.cpp; tested against the C++ parser.
+    canonical = dict(definition)
+    canonical["states"] = sorted(definition["states"], key=lambda s: s["id"])
+    canonical["transitions"] = sorted(definition["transitions"], key=lambda s: s["id"])
+    data = json.dumps(canonical, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return "sha256:" + hashlib.sha256(data.encode()).hexdigest()
+
+
+def load_profile(path):
+    profile = json.loads(Path(path).read_text(encoding="utf-8-sig"))
+    expected = make_profile()
+    if profile["definition"] != expected["definition"] or profile["definition_hash"] != expected["definition_hash"]:
+        raise ValueError("This MVP requires the supplied rest/two-action definition unchanged")
+    if profile.get("reference_source_id") != expected["reference_source_id"]:
+        raise ValueError("reference_source_id does not match calibration task")
+    labels = profile.get("state_to_label", {})
+    if set(labels) != {"1", "2", "3", "4"} or labels["4"] is not None or any(
+            not isinstance(labels[k], str) or not labels[k] for k in ["1", "2", "3"]):
+        raise ValueError("three nonempty labels and an unlabeled completion state required")
+    if len(set(labels[k] for k in ["1", "2", "3"])) != 3:
+        raise ValueError("labels must be distinct")
+    instructions = profile.get("instructions", {})
+    if any(not isinstance(instructions.get(k), str) or not instructions[k] for k in ["1", "2", "3", "4"]):
+        raise ValueError("all four states require nonempty instructions")
+    return profile
+
+
+class Journal:
+    def __init__(self, path):
+        self.file = Path(path).open("x", encoding="utf-8")
+
+    def write(self, kind, **values):
+        record = {"kind": kind, "host_monotonic_ns": time.monotonic_ns(),
+                  "host_unix_ns": time.time_ns(), **values}
+        self.file.write(json.dumps(record, separators=(",", ":"), allow_nan=False) + "\n")
+        self.file.flush()
+
+    def close(self):
+        self.file.close()
+
+
+class TaskInstructor:
+    def __init__(self, client, profile, journal):
+        self.client, self.profile, self.journal = client, profile, journal
+        self.session = None
+        self.last_event = None
+
+    def prepare(self):
+        self.client.subscribe_task_transitions(True)
+        snapshot = self.client.get_state_snapshot()
+        task = snapshot.get("task", {})
+        if not task.get("configured") or task.get("definition_hash") != self.profile["definition_hash"]:
+            raise SocketClientError("Deploy the generated task configuration before running the instructor")
+        if task.get("lifecycle") != "idle":
+            raise SocketClientError("Task must be idle before a new instructor session")
+        self.session = task["app_session_id"]
+        self.client.set_capture(False)
+        self.journal.write("task_prepared", profile=self.profile, snapshot=snapshot)
+
+    def command(self, command, **arguments):
+        snapshot = self.client.get_state_snapshot()
+        task = snapshot["task"]
+        if task["app_session_id"] != self.session or task["definition_hash"] != self.profile["definition_hash"]:
+            raise SocketClientError("Device task session/definition changed; refusing replay")
+        if self.last_event and (int(task["run_sequence"]), int(task["transition_sequence"])) != (
+                int(self.last_event["run_sequence"]), int(self.last_event["transition_sequence"])):
+            raise SocketClientError("Another controller changed the task")
+        request_id = "calibration/" + uuid.uuid4().hex
+        preconditions = NdjsonClient.task_preconditions(snapshot)
+        self.journal.write("task_request", request_id=request_id, command=command, arguments=arguments,
+                           preconditions=preconditions)
+        result = self.client.request(command, request_id=request_id, **preconditions, **arguments)
+        self.journal.write("task_result", result=result)
+        deadline = time.monotonic() + self.client.timeout
+        while time.monotonic() < deadline:
+            event = self.client.wait_for_task_transition(max(0.001, deadline - time.monotonic()))
+            self.journal.write("task_observed", event=event)
+            if event.get("request_id") != request_id:
+                raise SocketClientError("Unexpected concurrent task commit; abort this instructor run")
+            expected_run = int(task["run_sequence"]) + (command == "start_task")
+            if (event["app_session_id"] != self.session or int(event["run_sequence"]) != expected_run
+                    or event["definition_hash"] != self.profile["definition_hash"]):
+                raise SocketClientError("Committed task identity does not match request")
+            expected_kind = {"start_task": "start", "reset_task": "reset", "abort_task": "abort",
+                             "propose_task_event": "transition"}[command]
+            expected_state = {"start_task": 1, "reset_task": 0, "abort_task": 0}.get(
+                command, int(task.get("current_state_id") or 0) + 1)
+            if event["event_kind"] != expected_kind or int(event["current_state_id"]) != expected_state:
+                raise SocketClientError("Committed task state does not match request")
+            expected_transition = 1 if command == "start_task" else int(task["transition_sequence"]) + 1
+            if (int(event["transition_sequence"]) != expected_transition or
+                    int(event["previous_state_id"]) != int(task.get("current_state_id") or 0) or
+                    event["effective_frame"]["source_id"] != self.profile["reference_source_id"]):
+                raise SocketClientError("Committed task sequence/source does not match request")
+            self.last_event = event
+            self.journal.write("task_committed", event=event)
+            return event
+        raise SocketClientError("No committed task boundary received")
+
+    def cleanup(self):
+        # Fresh connection is needed after a timeout: buffered socket reads may
+        # no longer be usable. Never replay an uncertain start/advance request.
+        try:
+            with NdjsonClient(self.client.host, self.client.port, timeout=self.client.timeout) as c:
+                c.set_capture(False)
+                snapshot = c.get_state_snapshot()
+                task = snapshot.get("task", {})
+                if task.get("app_session_id") == self.session and task.get("lifecycle") == "running":
+                    c.abort_task(preconditions=c.task_preconditions(snapshot))
+            self.journal.write("cleanup_requested")
+        except Exception as error:
+            self.journal.write("cleanup_failed", error=str(error))
