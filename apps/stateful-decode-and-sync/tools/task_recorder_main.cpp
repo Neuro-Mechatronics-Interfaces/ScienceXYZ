@@ -1,28 +1,11 @@
-// Host-side task-timeline recorder consumer.
-//
-// STATUS: reviewed, not yet built. This program links vendor/synapse-cpp (the
-// Synapse Tap client) and the concrete libhdf5 RecordSink backend, neither of
-// which is part of the SDK-free host-tests build. It is committed as the
-// consumer half of T-32/H-53 so the design and wire handling are reviewable;
-// its CMake target (tools/CMakeLists.txt) and the Hdf5RecordSink .cpp are
-// enabled once the project selects an HDF5 dependency mechanism.
-//
-// Architecture (AGENTS.md, host fusion): the device App is the task_transition
-// PRODUCER; this is a separate host CONSUMER. It reads two producer taps --
-//
-//   task_transition   stateful_decode_and_sync::v1::TaskTransitionEvent
-//   broadband_out     synapse::BroadbandFrame   (the task reference stream)
-//
-// -- and drives TaskTimelineAdapter, which validates each event against the
-// producer-side contract, stamps a host receive time, and marks reference-
-// stream discontinuities. TaskRecorderHdf5Writer persists the authoritative
-// records/intervals/diagnostics and the auxiliary clock-model history to HDF5.
-//
-// The recorder never overwrites a source timestamp, never resamples or
-// interpolates, and records every message it could not persist as an explicit
-// discarded count on the stop control event (AGENTS.md data integrity).
-
 #include <atomic>
+#include <limits>
+#include <sstream>
+#include <fstream>
+#include <condition_variable>
+#include <mutex>
+#include <google/protobuf/struct.pb.h>
+#include <google/protobuf/util/json_util.h>
 #include <chrono>
 #include <csignal>
 #include <cstdint>
@@ -43,6 +26,10 @@
 #include "task_recorder_writer.hpp"
 #include "task_timeline.hpp"
 #include "task_timeline_adapter.hpp"
+
+#ifndef SCIENCEXYZ_REVISION
+#define SCIENCEXYZ_REVISION "unknown"
+#endif
 
 namespace {
 
@@ -66,9 +53,10 @@ struct Options {
   std::string reference_tap = "broadband_out";
   std::string reference_source_id = "rhd2132";
   std::string output_path;
-  std::string metadata_json = "{}";
+  std::string metadata_json;
+  std::string metadata_file;
   std::string session_id = "task-recording";
-  int read_timeout_ms = 100;
+  int idle_timeout_ms = 5000;
 };
 
 void print_usage(const char* argv0) {
@@ -79,9 +67,10 @@ void print_usage(const char* argv0) {
       << "  --task-tap <name>           task_transition tap name (default: task_transition)\n"
       << "  --reference-tap <name>      reference BroadbandFrame tap (default: broadband_out)\n"
       << "  --reference-source-id <id>  reference source id label (default: rhd2132)\n"
-      << "  --metadata-json <json>      opaque provenance stored verbatim (default: {})\n"
+      << "  --metadata-file <path>      required operator device/config provenance JSON\n"
+      << "  --metadata-json <json>      alternative inline provenance JSON\n"
       << "  --session-id <id>           recording session id (default: task-recording)\n"
-      << "  --read-timeout-ms <n>       per-poll tap read timeout (default: 100)\n";
+      << "  --idle-timeout-ms <n>       abort after broadband silence (default: 5000)\n";
 }
 
 bool parse_args(int argc, char** argv, Options& out) {
@@ -107,12 +96,18 @@ bool parse_args(int argc, char** argv, Options& out) {
       if (!next(out.reference_source_id)) return false;
     } else if (arg == "--metadata-json") {
       if (!next(out.metadata_json)) return false;
+    } else if (arg == "--metadata-file") {
+      if (!next(out.metadata_file)) return false;
     } else if (arg == "--session-id") {
       if (!next(out.session_id)) return false;
-    } else if (arg == "--read-timeout-ms") {
+    } else if (arg == "--idle-timeout-ms") {
       std::string value;
       if (!next(value)) return false;
-      out.read_timeout_ms = std::atoi(value.c_str());
+            try {
+        std::size_t end = 0;
+        out.idle_timeout_ms = std::stoi(value, &end);
+        if (end != value.size() || out.idle_timeout_ms <= 0) return false;
+      } catch (...) { return false; }
     } else if (arg == "-h" || arg == "--help") {
       return false;
     } else {
@@ -124,13 +119,56 @@ bool parse_args(int argc, char** argv, Options& out) {
     std::cerr << "--device and --output are required\n";
     return false;
   }
+  if (!out.metadata_file.empty()) {
+    if (!out.metadata_json.empty()) {
+      std::cerr << "choose --metadata-file or --metadata-json\n";
+      return false;
+    }
+    std::ifstream input(out.metadata_file, std::ios::binary);
+    if (!input) { std::cerr << "cannot read metadata file\n"; return false; }
+    std::ostringstream contents;
+    contents << input.rdbuf();
+    if (input.bad()) { std::cerr << "metadata read failed\n"; return false; }
+    out.metadata_json = contents.str();
+  }
+  google::protobuf::Struct metadata;
+  if (out.metadata_json.empty() ||
+      !google::protobuf::util::JsonStringToMessage(out.metadata_json, &metadata).ok() ||
+      metadata.fields().empty()) {
+    std::cerr << "supply a nonempty provenance JSON object using --metadata-file or --metadata-json\n";
+    return false;
+  }
+  if (out.session_id.empty() || out.reference_source_id.empty()) return false;
   return true;
 }
 
 // Connect one producer tap by name. Returns false with a message on failure so
 // the operator sees exactly which tap is unavailable rather than a silent stall.
 bool connect_tap(synapse::Tap& tap, const std::string& name) {
-  const auto status = tap.connect(name);
+  // Upstream Tap::connect issues a query without a deadline. Bound this startup
+  // phase externally; no recording file has been created yet. A stuck upstream
+  // call cannot be safely cancelled/detached while it owns the Tap object.
+  std::mutex mutex;
+  std::condition_variable changed;
+  bool finished = false;
+  std::thread watchdog([&] {
+    std::unique_lock lock(mutex);
+    if (!changed.wait_for(lock, std::chrono::seconds(10), [&] { return finished; })) {
+      std::cerr << "tap connection timed out: " << name << std::endl;
+      std::_Exit(1);
+    }
+  });
+  science::Status status;
+  try { status = tap.connect(name); }
+  catch (const std::exception& error) {
+    status = science::Status(science::StatusCode::kInternal, error.what());
+  }
+  {
+    std::lock_guard lock(mutex);
+    finished = true;
+  }
+  changed.notify_one();
+  watchdog.join();
   if (!status.ok()) {
     std::cerr << "failed to connect tap '" << name << "': " << status.message()
               << "\n";
@@ -172,93 +210,156 @@ int main(int argc, char** argv) {
     std::cerr << "failed to open recording file: " << options.output_path << "\n";
     return 1;
   }
+  if (!sink.write_provenance("software_revision", SCIENCEXYZ_REVISION) ||
+      !sink.write_provenance("device_uri", options.device_uri) ||
+      !sink.write_provenance("reference_source_id", options.reference_source_id) ||
+      !sink.write_provenance("reference_tap", options.reference_tap) ||
+      !sink.write_provenance("task_tap", options.task_tap) ||
+      !sink.write_provenance("clock_mapping", "unmeasured; source and host clocks are not interchangeable")) {
+    std::cerr << "failed to persist provenance\n";
+    if (!writer.close()) std::cerr << "failed to close recording\n";
+    return 1;
+  }
   if (!writer.start(options.session_id, host_steady_now_ns(),
                     /*request_id=*/"cli")) {
     std::cerr << "failed to start recording epoch\n";
-    writer.close();
+    if (!writer.close()) std::cerr << "failed to close recording\n";
     return 1;
   }
-  std::cerr << "recording task timeline to " << options.output_path
+  std::cerr << "recording raw broadband and task messages to " << options.output_path
             << " (Ctrl-C to stop)\n";
 
-  // Loss accounting: messages the consumer read but could not persist as a
-  // value record are counted and reported on stop, never hidden. A decode
-  // failure means a wire message did not parse; an adapter rejection means the
-  // event failed the producer-side contract (both are explicit losses).
-  std::uint64_t discarded_task_events = 0;
-  std::uint64_t discarded_reference_frames = 0;
-
+  std::uint64_t discarded_task_events = 0, discarded_reference_frames = 0;
+  std::uint64_t task_parse_errors = 0, reference_parse_errors = 0;
+  std::uint64_t transport_errors = 0, write_errors = 0;
+  std::uint64_t missing_sequences = 0, sequence_regressions = 0;
+  std::uint64_t raw_task_count = 0, raw_reference_count = 0;
+  std::uint64_t last_sequence = 0;
+  bool have_sequence = false, failed = false;
+  auto last_reference = std::chrono::steady_clock::now();
+  auto last_flush = last_reference;
+  constexpr int kBatchSize = 256;
   std::vector<std::uint8_t> buffer;
-  std::uint64_t flush_counter = 0;
-  constexpr std::uint64_t kFlushEveryMessages = 256;
-  // Bound each per-iteration drain so a sustained high-rate stream (the
-  // reference broadband tap) cannot starve the other tap; the outer loop then
-  // re-polls both and re-checks the stop flag.
-  constexpr int kMaxDrainPerIteration = 1024;
+  std::string failure_reason;
 
-  while (!g_stop_requested.load()) {
+  // Alternate bounded nonblocking drains; an idle task stream cannot block raw data.
+  while (!g_stop_requested.load() && !failed) {
     bool did_work = false;
-
-    // Drain the task_transition tap. Each message is one committed event.
-    for (int drained = 0; drained < kMaxDrainPerIteration; ++drained) {
-      const auto status = task_tap.read(&buffer, options.read_timeout_ms);
-      if (!status.ok()) break;  // timeout or transient: fall through to reference
-      did_work = true;
-      stateful_decode_and_sync::v1::TaskTransitionEvent wire;
-      if (!wire.ParseFromArray(buffer.data(),
-                               static_cast<int>(buffer.size()))) {
-        ++discarded_task_events;
-        continue;
+    for (bool reference : {false, true}) {
+      auto& tap = reference ? reference_tap : task_tap;
+      std::vector<app::recording::RawTapMessage> batch;
+      for (int n = 0; n < kBatchSize && !g_stop_requested.load(); ++n) {
+        const auto status = tap.read(&buffer, 0);
+        const auto receipt = host_steady_now_ns();
+        if (!status.ok()) {
+          if (status.code() != science::StatusCode::kDeadlineExceeded &&
+              !g_stop_requested.load()) {
+            ++transport_errors;
+            failed = true;
+            failure_reason = reference ? "reference_transport_error" : "task_transport_error";
+            std::cerr << failure_reason << ": " << status.message() << "\n";
+          }
+          break;
+        }
+        did_work = true;
+        batch.push_back({receipt, buffer});
+        const bool parseable_size = buffer.size() <= static_cast<std::size_t>(std::numeric_limits<int>::max());
+        if (reference) {
+          last_reference = std::chrono::steady_clock::now();
+          synapse::BroadbandFrame frame;
+          if (!parseable_size || !frame.ParseFromArray(buffer.data(), static_cast<int>(buffer.size()))) {
+            ++reference_parse_errors;
+            timeline.mark_reference_discontinuity("unparseable broadband wire message");
+            continue;
+          }
+          if (have_sequence) {
+            if (frame.sequence_number() <= last_sequence) ++sequence_regressions;
+            else missing_sequences += frame.sequence_number() - last_sequence - 1;
+          }
+          have_sequence = true;
+          last_sequence = frame.sequence_number();
+          adapter.on_reference_frame({frame.sequence_number(), frame.timestamp_ns()});
+        } else {
+          stateful_decode_and_sync::v1::TaskTransitionEvent event;
+          if (!parseable_size || !event.ParseFromArray(buffer.data(), static_cast<int>(buffer.size()))) {
+            ++task_parse_errors;
+            timeline.mark_reference_discontinuity("unparseable task wire message");
+            continue;
+          }
+          if (!adapter.on_task_transition(event).accepted)
+            timeline.mark_reference_discontinuity("rejected task event; raw wire retained");
+        }
       }
-      const auto result = adapter.on_task_transition(wire);
-      if (!result.accepted) {
-        ++discarded_task_events;
+      if (!batch.empty()) {
+        if (!sink.write_raw_messages(reference, batch)) {
+          ++write_errors;
+          (reference ? discarded_reference_frames : discarded_task_events) += batch.size();
+          failed = true;
+          failure_reason = "raw_write_failed";
+        } else {
+          (reference ? raw_reference_count : raw_task_count) += batch.size();
+        }
       }
-      if (++flush_counter % kFlushEveryMessages == 0) {
-        writer.flush(timeline, clock);
-      }
+      if (failed) break;
     }
-
-    // Drain the reference BroadbandFrame tap. Only the two continuity fields
-    // are needed; the adapter marks reference-stream gaps/regressions.
-    for (int drained = 0; drained < kMaxDrainPerIteration; ++drained) {
-      const auto status = reference_tap.read(&buffer, options.read_timeout_ms);
-      if (!status.ok()) break;
-      did_work = true;
-      synapse::BroadbandFrame frame;
-      if (!frame.ParseFromArray(buffer.data(),
-                                static_cast<int>(buffer.size()))) {
-        ++discarded_reference_frames;
-        continue;
+    const auto now = std::chrono::steady_clock::now();
+    if (now - last_reference > std::chrono::milliseconds(options.idle_timeout_ms)) {
+      failed = true;
+      failure_reason = "reference_idle_timeout";
+    }
+    if (!failed && now - last_flush >= std::chrono::seconds(1)) {
+      if (!writer.flush(timeline, clock)) {
+        ++write_errors;
+        failed = true;
+        failure_reason = "timeline_write_failed";
       }
-      adapter.on_reference_frame(
-          {frame.sequence_number(), frame.timestamp_ns()});
+      last_flush = now;
     }
-
-    if (!did_work) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    }
+    if (!did_work && !failed) std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
 
-  std::cerr << "stopping: " << adapter.accepted_events() << " events, "
-            << adapter.reference_frames() << " reference frames, "
-            << adapter.reference_discontinuities() << " discontinuities\n";
-
-  // The counts above are exact for messages we read; a queue we could not drain
-  // at shutdown is unknown, so discarded_counts_complete=false keeps an analysis
-  // from treating unread backlog as zero loss.
-  const bool discarded_counts_complete = false;
-  if (!writer.stop(timeline, clock, options.session_id, host_steady_now_ns(),
-                   /*request_id=*/"cli", discarded_task_events,
-                   discarded_reference_frames, discarded_counts_complete)) {
-    std::cerr << "failed to stop recording epoch cleanly\n";
-    writer.abort(options.session_id, host_steady_now_ns(), "cli",
-                 discarded_task_events, discarded_reference_frames,
-                 /*discarded_counts_complete=*/false);
+  // PUB/SUB provides neither an end barrier nor trustworthy queue-drop counters.
+  std::ostringstream status;
+  status << "{\"state\":\"" << (failed ? "failed" : "stopped")
+         << "\",\"reason\":\"" << failure_reason
+         << "\",\"queue_loss_known\":false,\"head_complete\":false,\"tail_complete\":false"
+         << ",\"raw_reference_messages\":" << raw_reference_count
+         << ",\"raw_task_messages\":" << raw_task_count
+         << ",\"reference_parse_errors\":" << reference_parse_errors
+         << ",\"task_parse_errors\":" << task_parse_errors
+         << ",\"rejected_task_events\":" << adapter.rejected_events()
+         << ",\"missing_reference_sequences\":" << missing_sequences
+         << ",\"reference_sequence_regressions\":" << sequence_regressions
+         << ",\"reference_discontinuities\":" << adapter.reference_discontinuities()
+         << ",\"transport_errors\":" << transport_errors
+         << ",\"write_errors\":" << write_errors << "}";
+  auto pending_status = status.str();
+  const auto stopped_at = pending_status.find("\"stopped\"");
+  if (stopped_at != std::string::npos) pending_status.replace(stopped_at, 9, "\"finalizing\"");
+  if (!sink.write_recording_status(pending_status)) {
+    failed = true;
+    std::cerr << "failed to persist recording status; file remains incomplete\n";
+  }
+  if (!failed && !writer.stop(timeline, clock, options.session_id,
+        host_steady_now_ns(), "cli", discarded_task_events,
+        discarded_reference_frames, false)) {
+    failed = true;
+    std::cerr << "failed to persist stop\n";
+  }
+  if (!failed && !sink.write_recording_status(status.str())) {
+    failed = true;
+    std::cerr << "failed to persist final status\n";
+  }
+  if (failed) {
+    if (writer.is_active() && !writer.abort(options.session_id, host_steady_now_ns(), "cli",
+          discarded_task_events, discarded_reference_frames, false))
+      std::cerr << "failed to persist abort\n";
   }
   if (!writer.close()) {
-    std::cerr << "failed to close recording file cleanly\n";
-    return 1;
+    failed = true;
+    std::cerr << "failed to close recording\n";
   }
-  return 0;
+  std::cerr << status.str() << "\n";
+  if (!failed) std::cerr << "recording stopped and flushed; unread tail/queue loss unknown\n";
+  return failed ? 1 : 0;
 }

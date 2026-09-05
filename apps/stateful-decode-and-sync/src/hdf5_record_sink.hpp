@@ -9,15 +9,17 @@
 
 namespace app::recording {
 
+// Wire bytes are authoritative, including unknown protobuf fields and malformed
+// messages. Receipt time is host steady-clock time, never a source timestamp.
+struct RawTapMessage {
+  std::uint64_t host_receive_time_ns = 0;
+  std::vector<std::uint8_t> payload;
+};
+
 // Concrete RecordSink backed by the raw C libhdf5 API.
 //
-// STATUS: interface declared, implementation pending.  The .cpp backend is a
-// deliberate follow-up gated on the project selecting an HDF5 dependency
-// mechanism (libhdf5 is currently absent from apps/stateful-decode-and-sync/
-// vcpkg.json and from the WSL host-tests toolchain).  It is intentionally NOT
-// part of the SDK-free host-tests build: that build exercises the writer's
-// value logic through an in-memory FakeRecordSink, so no HDF5 dependency is
-// pulled into unit testing.
+// Built by host/recording/CMakeLists.txt using libhdf5. The SDK-free host-tests
+// build still exercises the writer with FakeRecordSink without HDF5.
 //
 // The backend carries none of the timeline/clock logic; it only serializes the
 // fully-formed value structures TaskRecorderHdf5Writer hands it, mirroring the
@@ -36,8 +38,9 @@ namespace app::recording {
 //   /clock_epochs     ClockModel history (completed epochs + active model)
 //   /                 attr: timeline_complete
 //
-// Every write is append/overwrite-and-flush so a crash mid-recording leaves a
-// readable file whose control events bound whatever was persisted.
+// Raw /raw_broadband and /raw_task rows preserve wire bytes and host receipt.
+// Successful writes flush HDF5 buffers, without promising power-loss recovery.
+// Local stop/close does not establish PUB/SUB queue or tail completeness.
 class Hdf5RecordSink : public RecordSink {
  public:
   explicit Hdf5RecordSink(std::string path);
@@ -59,6 +62,10 @@ class Hdf5RecordSink : public RecordSink {
       const std::vector<wireless::ClockModel>& epochs) override;
   bool write_timeline_complete(bool complete) override;
   bool close() override;
+  bool write_raw_messages(bool reference_stream,
+                          const std::vector<RawTapMessage>& messages);
+  bool write_recording_status(const std::string& status_json);
+  bool write_provenance(const std::string& key, const std::string& value);
 
  private:
   struct Impl;                   // hides the libhdf5 handles from consumers

@@ -524,3 +524,20 @@ Windows** venv from PowerShell/CMD, not WSL.
 under. A `/mnt/c` path in a `user@HOST` prompt means WSL/WSLg (Linux), where
 Win32 APIs no-op and freedesktop `.desktop`/`WM_CLASS` is the mechanism — not the
 Windows AppUserModelID.
+
+### 2026-09-05 - WSL recorder selected Windows HDF5 and omitted nested protos
+
+**Attempt:** Build the standalone raw recorder with distribution host dependencies.
+
+**Failure:** Linux compilation found Windows HDF5 1.14.3 headers and failed on a
+conflicting ssize_t definition; API node headers were also missing.
+
+**Cause:** HDF5 package-config discovery inherited a Windows installation; the
+initial protobuf glob included only top-level API definitions.
+
+**Correction:** Use HDF5 C-wrapper discovery (HDF5_NO_FIND_PACKAGE_CONFIG_FILE),
+clear cached HDF5 variables, and recursively generate canonical API protos with
+relative paths preserved. The Linux host recorder and tests subsequently built.
+
+**Candidate rule:** Keep host library/header discovery within one platform and
+preserve imported protobuf directory structure during code generation.

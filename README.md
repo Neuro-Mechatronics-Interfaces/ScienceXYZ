@@ -45,6 +45,11 @@ Science currently supports and tests Synapse App development on Ubuntu Linux and
 
 ## Quick Start
 
+The host-local raw broadband/task recorder has a standalone C++ build, separate
+from the device App. See [recorder build, schema and operator workflow](docs/calibration-recording-mvp.md#host-recorder-build-and-use)
+for Linux/WSL dependencies, hardware-free tests, and exclusive-create recording.
+Physical GPIO timing and end-to-end calibration acceptance remain open.
+
 ### 1. Clone the repository
 
 ```bash

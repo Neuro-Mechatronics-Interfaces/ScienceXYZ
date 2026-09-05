@@ -13,8 +13,8 @@
 //   * whole-collection snapshot datasets (/transitions, /intervals,
 //     /diagnostics, /clock_epochs) rewritten on every flush so a mid-recording
 //     flush and a final stop flush leave identical, self-consistent state;
-//   * a global flush after every write, so an interrupted recording still opens
-//     as a readable file bounded by its control events.
+//   * a global flush after every write. This is not transactional crash recovery;
+//     a local stop acknowledgment requires successful writes and close.
 //
 // Every method reports success/failure; a libhdf5 error is surfaced (never
 // swallowed) so partial-write loss is visible to the writer rather than hidden.
@@ -90,47 +90,44 @@ DataType make_vlen_string_type() {
   if (!type) return type;
   if (H5Tset_size(type.get(), H5T_VARIABLE) < 0) return DataType();
   // Tag the encoding so a reader treats the bytes as UTF-8 rather than ASCII.
-  H5Tset_cset(type.get(), H5T_CSET_UTF8);
+  if (H5Tset_cset(type.get(), H5T_CSET_UTF8) < 0) return DataType();
   return type;
 }
 
 // Write (create or overwrite) a scalar string attribute on an object.
 bool write_string_attribute(hid_t object, const char* name,
                             const std::string& value) {
-  if (H5Aexists(object, name) > 0) {
-    H5Adelete(object, name);
-  }
+  const auto exists = H5Aexists(object, name);
+  if (exists < 0) return false;
   DataType type = make_vlen_string_type();
   if (!type) return false;
   DataSpace space(H5Screate(H5S_SCALAR));
   if (!space) return false;
-  Attribute attr(H5Acreate2(object, name, type.get(), space.get(), H5P_DEFAULT,
-                            H5P_DEFAULT));
+  Attribute attr(exists ? H5Aopen(object, name, H5P_DEFAULT) :
+      H5Acreate2(object, name, type.get(), space.get(), H5P_DEFAULT, H5P_DEFAULT));
   if (!attr) return false;
   const char* ptr = value.c_str();
   return H5Awrite(attr.get(), type.get(), &ptr) >= 0;
 }
 
 bool write_u64_attribute(hid_t object, const char* name, std::uint64_t value) {
-  if (H5Aexists(object, name) > 0) {
-    H5Adelete(object, name);
-  }
+  const auto exists = H5Aexists(object, name);
+  if (exists < 0) return false;
   DataSpace space(H5Screate(H5S_SCALAR));
   if (!space) return false;
-  Attribute attr(H5Acreate2(object, name, H5T_STD_U64LE, space.get(),
-                            H5P_DEFAULT, H5P_DEFAULT));
+  Attribute attr(exists ? H5Aopen(object, name, H5P_DEFAULT) :
+      H5Acreate2(object, name, H5T_STD_U64LE, space.get(), H5P_DEFAULT, H5P_DEFAULT));
   if (!attr) return false;
   return H5Awrite(attr.get(), H5T_NATIVE_UINT64, &value) >= 0;
 }
 
 bool write_u8_attribute(hid_t object, const char* name, std::uint8_t value) {
-  if (H5Aexists(object, name) > 0) {
-    H5Adelete(object, name);
-  }
+  const auto exists = H5Aexists(object, name);
+  if (exists < 0) return false;
   DataSpace space(H5Screate(H5S_SCALAR));
   if (!space) return false;
-  Attribute attr(H5Acreate2(object, name, H5T_STD_U8LE, space.get(),
-                            H5P_DEFAULT, H5P_DEFAULT));
+  Attribute attr(exists ? H5Aopen(object, name, H5P_DEFAULT) :
+      H5Acreate2(object, name, H5T_STD_U8LE, space.get(), H5P_DEFAULT, H5P_DEFAULT));
   if (!attr) return false;
   return H5Awrite(attr.get(), H5T_NATIVE_UINT8, &value) >= 0;
 }
@@ -152,6 +149,8 @@ bool insert_member(hid_t type, const char* name, size_t offset,
 // ---------------------------------------------------------------------------
 struct Hdf5RecordSink::Impl {
   File file;
+  hsize_t raw_reference_rows = 0;
+  hsize_t raw_task_rows = 0;
   bool header_written = false;
 
   // ---- control events (/events, append-only) ----
@@ -534,7 +533,9 @@ bool Hdf5RecordSink::Impl::replace_rows(const char* name, hid_t type,
   // recreate it at the current row count.  (HDF5 does not reclaim the freed
   // space in-file, but recordings are bounded and a self-consistent, readable
   // snapshot after every flush is the property that matters here.)
-  if (H5Lexists(file.get(), name, H5P_DEFAULT) > 0) {
+  const auto exists = H5Lexists(file.get(), name, H5P_DEFAULT);
+  if (exists < 0) return false;
+  if (exists > 0) {
     if (H5Ldelete(file.get(), name, H5P_DEFAULT) < 0) return false;
   }
   const hsize_t dims[1] = {count};
@@ -563,10 +564,13 @@ bool Hdf5RecordSink::open(const std::string& schema_version,
   if (impl_->header_written || impl_->file) {
     return false;  // open is a once-only header write
   }
-  impl_->file = File(H5Fcreate(path_.c_str(), H5F_ACC_TRUNC, H5P_DEFAULT,
+  impl_->file = File(H5Fcreate(path_.c_str(), H5F_ACC_EXCL, H5P_DEFAULT,
                                H5P_DEFAULT));
   if (!impl_->file) return false;
   const hid_t root = impl_->file.get();
+  if (!write_string_attribute(root, "raw_schema", "sciencexyz.raw_taps.v1") ||
+      !write_string_attribute(root, "host_receive_clock", "std::chrono::steady_clock nanoseconds; epoch host-local") ||
+      !write_string_attribute(root, "recording_status_json", "{\"state\":\"incomplete\",\"queue_loss_known\":false}")) return false;
   if (!write_string_attribute(root, "schema_version", schema_version)) {
     return false;
   }
@@ -767,8 +771,41 @@ bool Hdf5RecordSink::write_timeline_complete(bool complete) {
 bool Hdf5RecordSink::close() {
   if (!impl_->file) return false;
   const bool flushed = impl_->flush_file();
-  impl_->file.reset();  // H5Fclose
-  return flushed;
+  const bool closed = H5Fclose(impl_->file.get()) >= 0;
+  if (closed) impl_->file.release();
+  return flushed && closed;
+}
+
+bool Hdf5RecordSink::write_raw_messages(
+    bool reference_stream, const std::vector<RawTapMessage>& messages) {
+  if (!impl_->header_written || !impl_->file) return false;
+  if (messages.empty()) return true;
+  struct Row { std::uint64_t host_receive_time_ns; hvl_t payload; };
+  DataType bytes(H5Tvlen_create(H5T_NATIVE_UINT8));
+  DataType type(H5Tcreate(H5T_COMPOUND, sizeof(Row)));
+  if (!bytes || !type ||
+      !insert_member(type.get(), "host_receive_time_ns", HOFFSET(Row, host_receive_time_ns), H5T_NATIVE_UINT64) ||
+      !insert_member(type.get(), "payload", HOFFSET(Row, payload), bytes.get())) return false;
+  std::vector<Row> rows;
+  rows.reserve(messages.size());
+  for (const auto& message : messages) {
+    rows.push_back({message.host_receive_time_ns,
+        {message.payload.size(), const_cast<std::uint8_t*>(message.payload.data())}});
+  }
+  auto& length = reference_stream ? impl_->raw_reference_rows : impl_->raw_task_rows;
+  return impl_->append_rows(reference_stream ? "/raw_broadband" : "/raw_task", type.get(),
+                             rows.data(), rows.size(), length) && impl_->flush_file();
+}
+
+bool Hdf5RecordSink::write_recording_status(const std::string& status_json) {
+  return impl_->file && write_string_attribute(impl_->file.get(), "recording_status_json", status_json)
+      && impl_->flush_file();
+}
+
+bool Hdf5RecordSink::write_provenance(const std::string& key, const std::string& value) {
+  const std::string name = "provenance_" + key;
+  return impl_->file && write_string_attribute(impl_->file.get(), name.c_str(), value)
+      && impl_->flush_file();
 }
 
 }  // namespace app::recording

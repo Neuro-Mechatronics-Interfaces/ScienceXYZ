@@ -6,9 +6,14 @@ Operator confirms the stateful-decode-and-sync waveforms GUI works. Next
 acceptance is a host-local HDF5 recording containing samples, observed digital
 sync signals and frame-aligned task epochs, with reproducible offline figures.
 See [the implementation audit and acceptance steps](docs/calibration-recording-mvp.md).
-The existing host task recorder does not store broadband sample payloads;
-its build, raw recording extension, instructor integration and offline analysis
-remain open. First obtain current device inventory and physical sync wiring.
+The C++ host recorder now builds through `host/recording/` and persists complete
+broadband/task wire messages with host receipt time, exclusive creation, checked
+writes, bounded nonblocking polling and explicit loss status. Four hardware-free
+tests cover HDF5 roundtrip, write/flush failure, loopback stop, idle timeout and
+loss accounting. T-26/T-32 remain open for bench throughput, recorded-boundary
+validation, complete provenance and broader source/control integration.
+T-34 owns physical GPIO/recording acceptance; T-39/T-40 own instructor and offline
+analysis. No physical-sync acceptance follows from these automated tests.
 
 The initial goals are:
 
