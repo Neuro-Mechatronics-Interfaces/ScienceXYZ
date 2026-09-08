@@ -129,6 +129,12 @@ target_include_directories(stateful-decode-and-sync-control-state-tests PRIVATE
 target_include_directories(stateful-decode-and-sync-task-state-tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../src
 )
+# Cross-language canonical-hash anchor shared with the Python profile generator
+# (client/stateful_decode_and_sync/motion_profile.py). Passed as a compile
+# definition so the test needs no working-directory assumption under ctest.
+target_compile_definitions(stateful-decode-and-sync-task-state-tests PRIVATE
+    HUB_SPOKE_FIXTURE_PATH="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/hub_spoke_definition.json"
+)
 target_include_directories(stateful-decode-and-sync-task-timeline-tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../src
 )

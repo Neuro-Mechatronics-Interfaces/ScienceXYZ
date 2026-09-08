@@ -10,7 +10,7 @@
         "--open",
         "none",
         "--port",
-        "8765"
+        "9090"
       ],
       "isBackground": true,
       "problemMatcher": [
@@ -50,7 +50,7 @@
       "id": "openHandoffViewer",
       "type": "command",
       "command": "simpleBrowser.show",
-      "args": "http://127.0.0.1:8765/"
+      "args": "http://127.0.0.1:9090/"
     }
   ]
 }

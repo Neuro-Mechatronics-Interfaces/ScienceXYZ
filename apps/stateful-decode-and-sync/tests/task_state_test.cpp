@@ -2,8 +2,10 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <fstream>
 #include <iostream>
 #include <limits>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 
@@ -433,11 +435,74 @@ void test_sequence_gap_policy() {
          "fault policy rejects an increasing sequence gap");
 }
 
+// Cross-language canonical-hash anchor. The Python profile generator
+// (stateful_decode_and_sync.motion_profile) and this C++ parser must agree on
+// the normalized definition hash for the hub-and-spoke band-calibration shape.
+// The shared fixture at HUB_SPOKE_FIXTURE_PATH carries a task_definition plus
+// the hash Python computed; parsing it here and recomputing must reproduce that
+// exact hash. A divergence in either canonicalization fails this build.
+void test_hub_spoke_cross_language_hash() {
+#ifndef HUB_SPOKE_FIXTURE_PATH
+  expect(false, "HUB_SPOKE_FIXTURE_PATH is not defined for the cross-language test");
+#else
+  std::ifstream stream(HUB_SPOKE_FIXTURE_PATH);
+  expect(stream.good(), std::string("cannot open hub-and-spoke fixture ") +
+                            HUB_SPOKE_FIXTURE_PATH);
+  std::ostringstream buffer;
+  buffer << stream.rdbuf();
+  const std::string fixture_json = buffer.str();
+
+  google::protobuf::Struct fixture;
+  const auto fixture_result =
+      google::protobuf::util::JsonStringToMessage(fixture_json, &fixture);
+  expect(fixture_result.ok(), "protobuf parses the hub-and-spoke fixture");
+
+  const auto& fixture_fields = fixture.fields();
+  const auto definition_it = fixture_fields.find("task_definition");
+  const auto hash_it = fixture_fields.find("expected_definition_hash");
+  expect(definition_it != fixture_fields.end() && hash_it != fixture_fields.end(),
+         "fixture carries task_definition and expected_definition_hash");
+  const std::string expected_hash = hash_it->second.string_value();
+
+  google::protobuf::Value definition_value;
+  *definition_value.mutable_struct_value() = definition_it->second.struct_value();
+  // Hub-and-spoke uses only external-event triggers, so num_classes does not
+  // gate it; a nonzero value keeps decoder validation available for parity.
+  const auto parsed = parse_task_definition(definition_value, 5);
+  expect(static_cast<bool>(parsed),
+         "parser accepts the hub-and-spoke definition: " + parsed.result.message);
+  expect(parsed.definition.definition_hash == expected_hash,
+         "C++ canonical hash matches the Python-generated fixture hash");
+
+  const auto& states = parsed.definition.states;
+  const auto& transitions = parsed.definition.transitions;
+  expect(parsed.definition.initial_state_id == 1, "rest hub is the initial state");
+  const auto rest = std::find_if(states.begin(), states.end(),
+                                 [](const auto& s) { return s.id == 1; });
+  expect(rest != states.end() && rest->name == "rest" && !rest->terminal,
+         "state 1 is the non-terminal rest hub");
+  expect(std::none_of(states.begin(), states.end(),
+                      [](const auto& s) { return s.terminal; }),
+         "hub-and-spoke definition has no terminal state");
+  // Each gesture contributes one spoke state and two transitions (enter/leave).
+  const std::size_t gestures = states.size() - 1;
+  expect(gestures >= 1 && transitions.size() == gestures * 2,
+         "every gesture has an enter and an exit transition");
+  std::size_t rest_outgoing = 0;
+  for (const auto& transition : transitions) {
+    if (transition.from_state_id == 1) ++rest_outgoing;
+  }
+  expect(rest_outgoing == gestures,
+         "rest hub has exactly one outgoing transition per gesture");
+#endif
+}
+
 }  // namespace
 
 int main() {
   try {
     test_validation_hash_and_parser();
+    test_hub_spoke_cross_language_hash();
     test_invalid_graphs_are_rejected();
     test_lifecycle_preconditions_duplicates_and_conflicts();
     test_source_timer_boundary();

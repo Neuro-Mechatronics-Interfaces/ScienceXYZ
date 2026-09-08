@@ -39,8 +39,8 @@ def definition_hash(definition):
     return "sha256:" + hashlib.sha256(data.encode()).hexdigest()
 
 
-def load_profile(path):
-    profile = json.loads(Path(path).read_text(encoding="utf-8-sig"))
+def _load_linear_profile(profile):
+    """Validate the linear rest/two-action MVP profile shape."""
     expected = make_profile()
     if profile["definition"] != expected["definition"] or profile["definition_hash"] != expected["definition_hash"]:
         raise ValueError("This MVP requires the supplied rest/two-action definition unchanged")
@@ -56,6 +56,23 @@ def load_profile(path):
     if any(not isinstance(instructions.get(k), str) or not instructions[k] for k in ["1", "2", "3", "4"]):
         raise ValueError("all four states require nonempty instructions")
     return profile
+
+
+def load_profile(path):
+    """Load and structurally validate a calibration task profile from disk.
+
+    Accepts either the linear rest/two-action MVP shape or the hub-and-spoke
+    band-calibration shape (``profile_shape == "hub_and_spoke"``). Both are
+    validated against the on-device contract, including a recomputed
+    definition_hash that must match the stored value.
+    """
+    profile = json.loads(Path(path).read_text(encoding="utf-8-sig"))
+    if profile.get("profile_shape") == "hub_and_spoke":
+        # Imported lazily so the linear MVP path stays importable even if the
+        # tracked MOTION_LUT copy is absent.
+        from .motion_profile import validate_profile
+        return validate_profile(profile)
+    return _load_linear_profile(profile)
 
 
 class Journal:
