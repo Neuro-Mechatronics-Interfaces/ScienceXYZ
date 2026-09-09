@@ -27,6 +27,9 @@ htmlcov/
 # Generated protobuf Python
 *_pb2.py
 *_pb2.pyi
+*.egg-info
+apps/stateful-decode-and-sync/client/science_stateful_decode_and_sync_client.egg-info/PKG-INFO
+apps/stateful-decode-and-sync/client/science_stateful_decode_and_sync_client.egg-info/SOURCES.txt
 
 # -----------------------------------------------------------------------------
 # C / C++ / CMake

@@ -106,7 +106,16 @@ include(CPack)
 endif()
 
 if(BUILD_TESTING)
-    find_package(Protobuf CONFIG REQUIRED)
+    # The device App (find_package above) is built inside the Synapse SDK image,
+    # whose protobuf (>=22) ships CMake config files. The SDK-free host-tests
+    # build may run against a distro protobuf (e.g. Ubuntu's 3.21.x) that offers
+    # only the module-mode FindProtobuf.cmake. Both create the same
+    # protobuf::libprotobuf target the tests link, so prefer CONFIG and fall back
+    # to module mode rather than hard-failing on a host without config files.
+    find_package(Protobuf CONFIG QUIET)
+    if(NOT Protobuf_FOUND)
+        find_package(Protobuf MODULE REQUIRED)
+    endif()
     add_subdirectory(tests)
 endif()
 

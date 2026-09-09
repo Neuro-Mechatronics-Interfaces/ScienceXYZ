@@ -42,7 +42,7 @@ class PrepareTests(unittest.TestCase):
                 with self.assertRaises(SystemExit) as result:
                     main()
             self.assertEqual(result.exception.code, 2)
-            self.assertIn("cannot read preparation input", errors.getvalue())
+            self.assertIn("cannot prepare calibration session", errors.getvalue())
             self.assertFalse((root / "out").exists())
 
     def test_prepare_and_existing_directory_preservation(self):

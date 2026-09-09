@@ -1,6 +1,7 @@
 """A bounded rest/two-action task, with device-authoritative transitions."""
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import time
@@ -27,6 +28,44 @@ def make_profile():
             "definition_hash": definition_hash(definition), "reference_source_id": "rhd2132",
             "state_to_label": {"1": "rest", "2": "action_a", "3": "action_b", "4": None},
             "instructions": {"1": "Rest", "2": "Perform action A", "3": "Perform action B", "4": "Complete"}}
+
+
+def prepare_session(base_config_path, output_dir, *, provenance_path=None, profile=None):
+    """Generate a device-config/profile/provenance triple into a fresh directory.
+
+    Shared by the ``calibration_task.py prepare`` CLI and the session launcher
+    (``run_calibration_session.py``) so both embed the task definition into the
+    base config identically. ``profile`` defaults to the linear rest/two-action
+    MVP (``make_profile``); pass a hub-and-spoke profile from
+    ``motion_profile.make_hub_spoke_profile`` to configure a band-calibration run.
+
+    ``output_dir`` is created with ``exist_ok=False`` so an existing session is
+    never overwritten. No device commands are executed. Returns the profile.
+    """
+    config = json.loads(Path(base_config_path).read_text(encoding="utf-8-sig"))
+    metadata = json.loads(Path(provenance_path).read_text(encoding="utf-8-sig")) if provenance_path else {
+        "purpose": "calibration task acceptance", "device_inventory": None, "physical_sync": None}
+    if not isinstance(metadata, dict) or not metadata:
+        raise ValueError("provenance must be a nonempty JSON object")
+    if not isinstance(config, dict) or not isinstance(config.get("nodes"), list):
+        raise ValueError("base config must contain a nodes list")
+    app = [n for n in config["nodes"] if n.get("application", {}).get("name") == "stateful-decode-and-sync"]
+    if len(app) != 1:
+        raise ValueError("base config must contain exactly one stateful-decode-and-sync App")
+    if profile is None:
+        profile = make_profile()
+    app[0]["application"].setdefault("parameters", {}).update(
+        task_definition=copy.deepcopy(profile["definition"]), task_reference_source_id=profile["reference_source_id"])
+    out = Path(output_dir)
+    out.mkdir(parents=True, exist_ok=False)  # exclusive: never overwrite a session
+    (out / "device-config.json").write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+    (out / "task-profile.json").write_text(json.dumps(profile, indent=2) + "\n", encoding="utf-8")
+    metadata["task_profile"] = profile
+    metadata["configuration_input"] = {"path": str(out / "device-config.json"), "snapshot": config,
+        "evidence": "Generated configuration for operator deployment; not a live device readback"}
+    metadata["running_configuration"] = None
+    (out / "provenance.json").write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
+    return profile
 
 
 def definition_hash(definition):

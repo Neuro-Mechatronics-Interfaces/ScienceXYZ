@@ -4,6 +4,26 @@ This file records concrete mistakes encountered while working in this repository
 
 ## Entry Template
 
+### 2026-09-09 - App host-tests build required CONFIG-mode protobuf absent on the distro
+
+Building the SDK-free host tests to run `test_hub_spoke_cross_language_hash`
+(`cmake -S apps/stateful-decode-and-sync -B build/app-tests -DBUILD_DEVICE_APP=OFF`)
+failed at configure: `find_package(Protobuf CONFIG REQUIRED)` at
+`apps/stateful-decode-and-sync/CMakeLists.txt:109` could not find
+`protobuf-config.cmake`. The cause was a protobuf-version mismatch, not a missing
+package: the device App is built inside the Synapse SDK image (protobuf >=22, which
+ships CMake config files), but the operator's Ubuntu host had protobuf 3.21.12,
+whose `libprotobuf-dev` provides only module-mode `FindProtobuf.cmake`. Installing
+`libabsl-dev`/`protobuf-compiler` did not help because 3.21.x simply predates the
+config-file packaging. The recorder project builds because it uses module-mode
+`find_package(Protobuf REQUIRED)`. Corrected by making only the `BUILD_TESTING`
+protobuf discovery prefer CONFIG then fall back to `MODULE` (both create the same
+`protobuf::libprotobuf` target the tests link); the device-App discovery stays
+strict CONFIG. Candidate rule: on a version-mismatch `find_package(... CONFIG)`
+failure, verify the installed version against the config-file requirement before
+adding packages, and prefer a CONFIG-then-MODULE fallback for targets that only
+need a mode-agnostic imported target.
+
 ### 2026-09-05 - ARM64 protobuf map lookup used inconsistent Abseil hashes
 
 Reproduced the task parser failure locally using Docker image

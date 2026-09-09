@@ -1,10 +1,7 @@
 """Prepare a task config or run an operator-controlled terminal instructor."""
 import argparse
-import copy
-import json
 import time
-from pathlib import Path
-from stateful_decode_and_sync.calibration_task import make_profile, load_profile, Journal, TaskInstructor
+from stateful_decode_and_sync.calibration_task import load_profile, prepare_session, Journal, TaskInstructor
 from stateful_decode_and_sync.client import NdjsonClient, SocketClientError
 
 
@@ -25,34 +22,10 @@ def main():
     if args.command == "prepare":
         # Validate inputs before creating any output, including optional metadata.
         try:
-            config = json.loads(Path(args.base_config).read_text(encoding="utf-8-sig"))
-            metadata = json.loads(Path(args.provenance).read_text(encoding="utf-8-sig")) if args.provenance else {
-                "purpose": "calibration task acceptance", "device_inventory": None, "physical_sync": None}
+            profile = prepare_session(args.base_config, args.output_dir, provenance_path=args.provenance)
         except (OSError, ValueError) as error:
-            parser.error(f"cannot read preparation input: {error}")
-        if not isinstance(metadata, dict) or not metadata:
-            parser.error("provenance must be a nonempty JSON object")
-        if not isinstance(config, dict) or not isinstance(config.get("nodes"), list):
-            parser.error("base config must contain a nodes list")
-        app = [n for n in config["nodes"] if n.get("application", {}).get("name") == "stateful-decode-and-sync"]
-        if len(app) != 1:
-            parser.error("base config must contain exactly one stateful-decode-and-sync App")
-        profile = make_profile()
-        app[0]["application"].setdefault("parameters", {}).update(
-            task_definition=copy.deepcopy(profile["definition"]), task_reference_source_id=profile["reference_source_id"])
-        out = Path(args.output_dir)
-        try:
-            out.mkdir(parents=True, exist_ok=False)
-        except OSError as error:
-            parser.error(f"cannot create new output directory {out}: {error}; choose a fresh --output-dir")
-        (out / "device-config.json").write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
-        (out / "task-profile.json").write_text(json.dumps(profile, indent=2) + "\n", encoding="utf-8")
-        metadata["task_profile"] = profile
-        metadata["configuration_input"] = {"path": str(out / "device-config.json"), "snapshot": config,
-            "evidence": "Generated configuration for operator deployment; not a live device readback"}
-        metadata["running_configuration"] = None
-        (out / "provenance.json").write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
-        print(f"Prepared {out}; definition {profile['definition_hash']}. No device commands executed.")
+            parser.error(f"cannot prepare calibration session: {error}")
+        print(f"Prepared {args.output_dir}; definition {profile['definition_hash']}. No device commands executed.")
         return
     if args.repetitions < 1 or not 0 < args.hold_seconds <= 3600:
         parser.error("positive repetitions and hold-seconds in (0, 3600] required")

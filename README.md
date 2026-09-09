@@ -112,6 +112,86 @@ Confirm that:
 1. the SciFi-2 responds;
 2. its software/firmware information is reported
 
+## Run a Calibration Session
+
+`calibrate-session` (the `run_calibration_session.py` entry point) is the single
+launcher for a Reactions-driven calibration recording. It generates the session
+artifacts, gates on the operator's device start, and then runs the host control
+service and the Reactions WebSocket bridge that owns the built C++ recorder. **It
+never runs `synapsectl` and never controls the device** — you run the `synapsectl`
+commands yourself and hand the launcher the resulting `info` capture.
+
+Prerequisites: the client installed (`pip install -e
+'apps/stateful-decode-and-sync/client[recording]'`) and the C++ raw recorder
+built (see [recorder build](docs/calibration-recording-mvp.md#host-recorder-build-and-use)).
+
+### 1. Preview the exact commands (`--dry-run`)
+
+`--dry-run` prints the operator `synapsectl` line and both host child commands
+without generating a session or starting anything:
+
+```bash
+calibrate-session \
+  --device-uri 192.168.100.157 --device-tap 192.168.100.157:647 \
+  --session-dir data/reactions/session-001 \
+  --origin https://chr.nml.wtf --dry-run
+```
+
+Use `--device-uri` for the `synapsectl` address and `--device-tap` for the
+device tap address (`<ip>:<port>`) the recorder connects to. Add `--gestures
+Fist Paper ...` (MOTION_LUT CamelCase keys) for a hub-and-spoke band profile;
+omit it for the linear rest/two-action MVP.
+
+### 2. Generate the session and print the operator start line
+
+Run the same command without `--dry-run`. The launcher creates the fresh,
+exclusive `--session-dir` (it refuses to overwrite an existing directory) with
+`device-config.json`, `task-profile.json`, and `provenance.json`, then prints
+the exact `synapsectl start` line and stops (exit code 2) because no `info`
+capture was supplied yet:
+
+```bash
+calibrate-session \
+  --device-uri 192.168.100.157 --device-tap 192.168.100.157:647 \
+  --session-dir data/reactions/session-001 \
+  --origin https://chr.nml.wtf
+```
+
+### 3. Operator: start the device App and capture `info`
+
+Run the printed command yourself, then save an `info` capture to a file:
+
+```bash
+synapsectl -u 192.168.100.157 start data/reactions/session-001/device-config.json
+synapsectl -u 192.168.100.157 info > data/reactions/session-001/info.txt
+```
+
+Confirm the capture shows Application **`stateful-decode-and-sync` → Running:
+True** (the overall device `Status: Running` is not sufficient).
+
+### 4. Launch the host processes past the device gate
+
+Rerun the launcher with the **same** `--session-dir` plus `--info-capture`. The
+launcher parses the capture; it starts the control service (port 18765) and the
+Reactions bridge (port 9999) only if the App reports Running: True, otherwise it
+refuses (exit code 3):
+
+```bash
+calibrate-session \
+  --device-uri 192.168.100.157 --device-tap 192.168.100.157:647 \
+  --session-dir data/reactions/session-001 \
+  --origin https://chr.nml.wtf \
+  --info-capture data/reactions/session-001/info.txt
+```
+
+Leave it running. Connect the Reactions page, run the calibration, then stop
+with Ctrl-C. The bridge creates its own exclusive recording directory under
+`--output-root` (default `data/reactions/`); analyze it offline with
+`analyze-recording` against the returned `session_dir`.
+
+The browser integration, transport requirements, and offline verification are
+detailed in the [calibration task workflow](docs/calibration-task-workflow.md).
+
 ## Repository Layout
 
 As the project develops, use the following top-level organization:
