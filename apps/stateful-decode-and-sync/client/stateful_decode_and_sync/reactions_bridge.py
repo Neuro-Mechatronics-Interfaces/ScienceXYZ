@@ -96,6 +96,15 @@ class BridgeSession:
         self.seen_requests = set()
         self.recording = False
         self.task_failed = False
+        self.task_started = False
+        # Map GifManager CamelCase gesture keys to on-device motion ids. Only the
+        # hub-and-spoke band-calibration profile translates animation events; the
+        # LUT is absent for the linear MVP, in which case an animation gesture
+        # event has no configured transition and is rejected rather than guessed.
+        self._motion_lut = {}
+        if profile.get("profile_shape") == "hub_and_spoke":
+            from .motion_profile import load_motion_lut
+            self._motion_lut = load_motion_lut()["lut"]
 
     async def start(self, browser_metadata):
         if self.recording:
@@ -109,7 +118,19 @@ class BridgeSession:
         self.recording = True
         return result
 
-    async def task_command(self, command):
+    def _default_event_name(self):
+        """The single external event name for a profile that has exactly one.
+
+        The linear rest/two-action MVP uses ``advance`` for every transition, so
+        an explicit ``propose_task_event`` with no gesture argument is
+        unambiguous. The hub-and-spoke shape has a distinct event per gesture and
+        direction, so it has no default; a caller must name the event (the
+        animation translation path does)."""
+        names = {t["trigger"]["event_name"] for t in self.profile["definition"]["transitions"]
+                 if t["trigger"].get("kind") == "external_event"}
+        return next(iter(names)) if len(names) == 1 else None
+
+    async def task_command(self, command, *, event_name=None):
         if self.task_failed:
             raise ValueError("task outcome uncertain; close session and inspect logs before a new run")
         if not self.recording:
@@ -122,7 +143,12 @@ class BridgeSession:
                 await asyncio.to_thread(self.client.connect)
                 self.instructor = TaskInstructor(self.client, self.profile, self.journal)
                 await asyncio.to_thread(self.instructor.prepare)
-            arguments = {"event_name": "advance"} if command == "propose_task_event" else {}
+            arguments = {}
+            if command == "propose_task_event":
+                name = event_name or self._default_event_name()
+                if not name:
+                    raise ValueError("propose_task_event requires an event_name for this profile")
+                arguments["event_name"] = name
             event = await asyncio.to_thread(self.instructor.command, command, **arguments)
             self.recorder.check_running()
             return event
@@ -133,7 +159,45 @@ class BridgeSession:
                 await asyncio.to_thread(self.instructor.cleanup)
             raise
 
+    async def _ensure_task_started(self):
+        """Move NO_STATE -> initial (rest hub) exactly once per run.
+
+        The band-calibration page never sends an explicit ``start_task``; it only
+        emits animation events. The first such event that would propose a gesture
+        transition first starts the run so the device is in the rest hub. A
+        committed ``start`` is required before any proposal can be validated."""
+        if not self.task_started:
+            await self.task_command("start_task")
+            self.task_started = True
+
+    async def animation_event(self, sample):
+        """Translate one GifManager ``browser`` animation sample into a task edge.
+
+        Returns the committed task_transition event when the sample is a gesture
+        transition (``payload.direction`` toActive/toRest), or ``None`` for a
+        sample that is not an authoritative gesture edge (terminal frames with a
+        null direction, rest-target markers, connect notifications). Only the
+        transitioning event names both a direction and a gesture, so it is the
+        single edge that drives the device; everything else is journal-only."""
+        data = sample.get("data") if isinstance(sample, dict) else None
+        if not isinstance(data, dict) or data.get("type") != "browser_event":
+            return None
+        payload = data.get("payload")
+        if not isinstance(payload, dict):
+            return None
+        direction = payload.get("direction")
+        if direction not in ("toActive", "toRest"):
+            return None  # terminal/rest-target event; journalled but not a task edge
+        key = payload.get("name")
+        motion_id = self._motion_lut.get(key) if isinstance(key, str) else None
+        if not motion_id:
+            raise ValueError(f"animation event gesture key {key!r} is not in the MOTION_LUT")
+        event_name = ("to_active." if direction == "toActive" else "to_rest.") + motion_id
+        await self._ensure_task_started()
+        return await self.task_command("propose_task_event", event_name=event_name)
+
     async def stop(self):
+        self.task_started = False
         if self.instructor:
             # A task that was stopped early is explicitly aborted, never completed.
             await asyncio.to_thread(self.instructor.cleanup)
@@ -199,6 +263,20 @@ class BridgeSession:
                 raise ValueError("recording_control requires one boolean enabled sample")
             body = samples[0]["data"]
             result = await self.start(body) if body["enabled"] else await self.stop()
+        elif stream == "browser" and self._motion_lut:
+            # GifManager animation events. Each gesture-transition sample is
+            # translated in wire order into a device-authoritative propose_task_event;
+            # non-transition samples (terminal frames, rest-target markers) are
+            # journalled only. The committed events are reported for visibility,
+            # but behavior clients still react only to the device task_transition
+            # tap, never to this reply.
+            committed = []
+            for sample in samples:
+                event = await self.animation_event(sample)
+                if event is not None:
+                    committed.append(event)
+            result = {"journaled_samples": len(samples), "stream_id": stream,
+                      "authoritative_task_event": bool(committed), "committed_events": committed}
         else:
             result = {"journaled_samples": len(samples), "stream_id": stream,
                       "authoritative_task_event": False}

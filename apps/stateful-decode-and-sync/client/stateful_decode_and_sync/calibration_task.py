@@ -107,6 +107,34 @@ class TaskInstructor:
         self.client.set_capture(False)
         self.journal.write("task_prepared", profile=self.profile, snapshot=snapshot)
 
+    def _expected_current_state(self, command, current_state, arguments):
+        """The state id the committed event must land on for this command.
+
+        Resolved from the profile definition rather than assumed to be
+        ``current_state + 1`` so both the linear MVP and the hub-and-spoke
+        band-calibration shape validate correctly. ``propose_task_event`` is the
+        only command whose target depends on the definition: the device selects
+        the outgoing external-event transition leaving ``current_state`` whose
+        ``event_name`` matches the proposed event, so the expected landing state
+        is that transition's ``to_state_id``.
+        """
+        definition = self.profile["definition"]
+        if command == "start_task":
+            return int(definition["initial_state_id"])
+        if command in ("reset_task", "abort_task"):
+            return 0  # NO_STATE
+        event_name = arguments.get("event_name")
+        matches = [t for t in definition["transitions"]
+                   if int(t["from_state_id"]) == current_state
+                   and t["trigger"].get("kind") == "external_event"
+                   and t["trigger"].get("event_name") == event_name]
+        if len(matches) != 1:
+            # Two transitions leaving one state cannot share an event name, so
+            # zero or many means the proposal cannot uniquely commit from here.
+            raise SocketClientError(
+                f"no unique external transition for event {event_name!r} from state {current_state}")
+        return int(matches[0]["to_state_id"])
+
     def command(self, command, **arguments):
         snapshot = self.client.get_state_snapshot()
         task = snapshot["task"]
@@ -133,8 +161,8 @@ class TaskInstructor:
                 raise SocketClientError("Committed task identity does not match request")
             expected_kind = {"start_task": "start", "reset_task": "reset", "abort_task": "abort",
                              "propose_task_event": "transition"}[command]
-            expected_state = {"start_task": 1, "reset_task": 0, "abort_task": 0}.get(
-                command, int(task.get("current_state_id") or 0) + 1)
+            expected_state = self._expected_current_state(
+                command, int(task.get("current_state_id") or 0), arguments)
             if event["event_kind"] != expected_kind or int(event["current_state_id"]) != expected_state:
                 raise SocketClientError("Committed task state does not match request")
             expected_transition = 1 if command == "start_task" else int(task["transition_sequence"]) + 1
