@@ -32,9 +32,7 @@ For basic Synapse client use:
 - 64-bit CPython 3.13
 - access to the same network as the SciFi-2
 
-Python 3.13 is the current recommended development baseline. The project may
-advance this baseline as newer stable Python releases and project dependencies
-mature.
+Python 3.13 is the current recommended development baseline. The project may advance this baseline as newer stable Python releases and project dependencies mature.
 
 For Synapse App development:
 
@@ -45,13 +43,7 @@ Science currently supports and tests Synapse App development on Ubuntu Linux and
 
 ## Quick Start
 
-The host-local raw broadband/task recorder has a standalone C++ build, separate
-from the device App. See [recorder build, schema and operator workflow](docs/calibration-recording-mvp.md#host-recorder-build-and-use)
-for Linux/WSL dependencies, hardware-free tests, and exclusive-create recording.
-The [calibration task workflow](docs/calibration-task-workflow.md) covers the
-terminal instructor, Reactions WebSocket adapter, epoch verification and offline
-diagnostic/model-fitting commands.
-Physical GPIO timing and end-to-end calibration acceptance remain open.
+The host-local raw broadband/task recorder has a standalone C++ build, separate from the device App. See [recorder build, schema and operator workflow](docs/calibration-recording-mvp.md#host-recorder-build-and-use) for Linux/WSL dependencies, hardware-free tests, and exclusive-create recording. The [calibration task workflow](docs/calibration-task-workflow.md) covers the terminal instructor, Reactions WebSocket adapter, epoch verification and offline diagnostic/model-fitting commands. Physical GPIO timing and end-to-end calibration acceptance remain open.
 
 ### 1. Clone the repository
 
@@ -72,8 +64,7 @@ Third-party Science repositories under `vendor/` are maintained as Git submodule
 
 The recommended interpreter is 64-bit Python 3.13.
 
-On Windows use WSL Ubuntu terminal, to set up:
-```bash
+On Windows use WSL Ubuntu terminal, to set up: ```bash
 deactivate
 rm -rf ~/.venvs/sciencexyz
 
@@ -81,13 +72,11 @@ uv python install 3.13
 uv venv --python 3.13 --seed ~/.venvs/sciencexyz
 ```
 
-Then you should be able to cleanly activate your environment:  
-```bash
+Then you should be able to cleanly activate your environment:   ```bash
 source ~/.venvs/sciencexyz/bin/activate
 ```
 
-For troubleshooting: 
-```bash
+For troubleshooting: ```bash
 python --version
 python -m pip --version
 
@@ -114,47 +103,26 @@ Confirm that:
 
 ## Run a Calibration Session
 
-`calibrate-session` (the `run_calibration_session.py` entry point) is the single
-launcher for a Reactions-driven calibration recording. It generates the session
-artifacts, gates on the operator's device start, and then runs the host control
-service and the Reactions WebSocket bridge that owns the built C++ recorder. **It
-never runs `synapsectl` and never controls the device** — you run the `synapsectl`
-commands yourself and hand the launcher the resulting `info` capture.
+`calibrate-session` (the `run_calibration_session.py` entry point) is the single launcher for a Reactions-driven calibration recording. It generates the session artifacts, gates on the operator's device start, and then runs the host control service and the Reactions WebSocket bridge that owns the built C++ recorder. **It never runs `synapsectl` and never controls the device** — you run the `synapsectl` commands yourself and hand the launcher the resulting `info` capture.
 
-Prerequisites: the client installed (`pip install -e
-'apps/stateful-decode-and-sync/client[recording]'`) and the C++ raw recorder
-built (see [recorder build](docs/calibration-recording-mvp.md#host-recorder-build-and-use)).
+Prerequisites: the client installed (`pip install -e 'apps/stateful-decode-and-sync/client[recording]'`) and the C++ raw recorder built (see [recorder build](docs/calibration-recording-mvp.md#host-recorder-build-and-use)).
 
 ### 1. Preview the exact commands (`--dry-run`)
 
-`--dry-run` prints the operator `synapsectl` line and both host child commands
-without generating a session or starting anything:
+`--dry-run` prints the operator `synapsectl` line and both host child commands without generating a session or starting anything:
 
 ```bash
-calibrate-session \
-  --device-uri 192.168.100.157 --device-tap 192.168.100.157:647 \
-  --session-dir data/reactions/session-001 \
-  --origin https://chr.nml.wtf --dry-run
+calibrate-session --device-uri 192.168.100.157 --device-tap 192.168.100.157:647 --session-dir data/reactions/session-001 --origin https://chr.nml.wtf --dry-run
 ```
 
-Use `--device-uri` for the `synapsectl` address and `--device-tap` for the
-device tap address (`<ip>:<port>`) the recorder connects to. Add `--gestures
-Fist Paper ...` (MOTION_LUT CamelCase keys) for a hub-and-spoke band profile;
-omit it for the linear rest/two-action MVP.
+Use `--device-uri` for the `synapsectl` address and `--device-tap` for the device tap address (`<ip>:<port>`) the recorder connects to. Add `--gestures Fist Paper ...` (MOTION_LUT CamelCase keys) for a hub-and-spoke band profile; omit it for the linear rest/two-action MVP.
 
 ### 2. Generate the session and print the operator start line
 
-Run the same command without `--dry-run`. The launcher creates the fresh,
-exclusive `--session-dir` (it refuses to overwrite an existing directory) with
-`device-config.json`, `task-profile.json`, and `provenance.json`, then prints
-the exact `synapsectl start` line and stops (exit code 2) because no `info`
-capture was supplied yet:
+Run the same command without `--dry-run`. The launcher creates the fresh `--session-dir` (a directory that already holds a complete session is reused, not overwritten) with `device-config.json`, `task-profile.json`, and `provenance.json`, then prints the exact `synapsectl start` line and stops (exit code 2) because no `info` capture was supplied yet:
 
 ```bash
-calibrate-session \
-  --device-uri 192.168.100.157 --device-tap 192.168.100.157:647 \
-  --session-dir data/reactions/session-001 \
-  --origin https://chr.nml.wtf
+calibrate-session --device-uri 192.168.100.157 --device-tap 192.168.100.157:647 --session-dir data/reactions/session-003 --origin https://chr.nml.wtf
 ```
 
 ### 3. Operator: start the device App and capture `info`
@@ -162,35 +130,34 @@ calibrate-session \
 Run the printed command yourself, then save an `info` capture to a file:
 
 ```bash
-synapsectl -u 192.168.100.157 start data/reactions/session-001/device-config.json
-synapsectl -u 192.168.100.157 info > data/reactions/session-001/info.txt
+synapsectl -u 192.168.100.157 start data/reactions/session-003/device-config.json
+synapsectl -u 192.168.100.157 info > data/reactions/session-003/info.txt
 ```
 
-Confirm the capture shows Application **`stateful-decode-and-sync` → Running:
-True** (the overall device `Status: Running` is not sufficient).
+Confirm the capture shows Application **`stateful-decode-and-sync` → Running: True** (the overall device `Status: Running` is not sufficient).
 
 ### 4. Launch the host processes past the device gate
 
-Rerun the launcher with the **same** `--session-dir` plus `--info-capture`. The
-launcher parses the capture; it starts the control service (port 18765) and the
-Reactions bridge (port 9999) only if the App reports Running: True, otherwise it
-refuses (exit code 3):
+Rerun the launcher with the **same** `--session-dir` plus `--info-capture`. It reuses the session generated in step 2 (it does not regenerate, and saving the capture inside the session directory is fine), parses the capture, and starts the control service (port 18765) and the Reactions bridge (port 9999) only if the App reports Running: True, otherwise it refuses (exit code 3):
 
 ```bash
-calibrate-session \
-  --device-uri 192.168.100.157 --device-tap 192.168.100.157:647 \
-  --session-dir data/reactions/session-001 \
-  --origin https://chr.nml.wtf \
-  --info-capture data/reactions/session-001/info.txt
+calibrate-session --device-uri 192.168.100.157 --device-tap 192.168.100.157:647 --session-dir data/reactions/session-003 --origin https://chr.nml.wtf --info-capture data/reactions/session-003/info.txt
 ```
 
-Leave it running. Connect the Reactions page, run the calibration, then stop
-with Ctrl-C. The bridge creates its own exclusive recording directory under
-`--output-root` (default `data/reactions/`); analyze it offline with
-`analyze-recording` against the returned `session_dir`.
+Leave it running. Connect the Reactions page, run the calibration, then stop with Ctrl-C. The bridge creates its own exclusive recording directory under `--output-root` (default `data/reactions/`); analyze it offline with `analyze-recording` against the returned `session_dir`.
 
-The browser integration, transport requirements, and offline verification are
-detailed in the [calibration task workflow](docs/calibration-task-workflow.md).
+The browser integration, transport requirements, and offline verification are detailed in the [calibration task workflow](docs/calibration-task-workflow.md).
+
+### GUI console (`calibrate-gui`)
+
+`calibrate-gui` is a PySide6 front end for the same flow, so the whole session can be driven from one window instead of the terminal. It performs the identical steps with the same boundaries — it **never** runs `synapsectl`. Launch it (or make a shortcut to `calibrate-gui.exe`) and work top to bottom:
+
+1. **Device and session** — set the device URI, tap, origin, optional gestures, and session dir, then **Generate / reuse session** (an existing complete session is reused, matching the terminal launcher).
+2. **Operator device start** — the exact `synapsectl start` line is shown with a **Copy** button; run it yourself, capture `synapsectl info` to a file, and **Load info capture…**. The window gates on Application `stateful-decode-and-sync` → Running: True.
+3. **Host processes** — **Start service + bridge** (enabled only after the gate passes) launches the control service and Reactions bridge as child processes this window owns, streaming their output into the log pane.
+4. **Recording and task control** — once the bridge reports ready, **Connect to bridge** opens a loopback WebSocket using the same envelopes the Reactions page sends, then **Start/Stop recording** and the task-event buttons drive the C++ recorder directly (no browser required). The Reactions page can still connect to the same bridge instead.
+
+Closing the window stops the recording, bridge, and service. The HTTPS-page → loopback-WebSocket transport caveat for the hosted Reactions page still applies (see the [calibration task workflow](docs/calibration-task-workflow.md)).
 
 ## Repository Layout
 
@@ -198,17 +165,17 @@ As the project develops, use the following top-level organization:
 
 ```text
 ScienceXYZ/
-├── apps/       # Synapse Apps deployed to SciFi-2
-├── config/     # Tracked Synapse and experiment configurations
-├── data/       # Local recordings; ignored by Git
-├── firmware/   # Auxiliary sensor firmware
-├── host/       # Host-side C++ acquisition/synchronization/fusion
-├── protocol/   # Shared versioned wire contracts
-├── scripts/    # Reproducible setup and diagnostic utilities
-├── vendor/     # Upstream Science dependencies as Git submodules
-├── AGENTS.md   # Persistent repository-specific development rules
+├── apps/ # Synapse Apps deployed to SciFi-2
+├── config/ # Tracked Synapse and experiment configurations
+├── data/ # Local recordings; ignored by Git
+├── firmware/ # Auxiliary sensor firmware
+├── host/ # Host-side C++ acquisition/synchronization/fusion
+├── protocol/ # Shared versioned wire contracts
+├── scripts/ # Reproducible setup and diagnostic utilities
+├── vendor/ # Upstream Science dependencies as Git submodules
+├── AGENTS.md # Persistent repository-specific development rules
 ├── MISTAKES.md # Evidence log for recurring development mistakes
-├── TODO.md     # Current milestones and planned work
+├── TODO.md # Current milestones and planned work
 └── README.md
 ```
 
@@ -224,7 +191,7 @@ At a high level, the first objective is to establish a reproducible path from:
 Axon Omnetics
       │
       ▼
-   SciFi-2
+ SciFi-2
       │
       ▼
 Synapse signal chain
@@ -232,7 +199,7 @@ Synapse signal chain
       ├── on-device C++ Synapse App
       │
       ▼
-   Synapse Tap
+ Synapse Tap
       │
       ▼
 host-side C++ acquisition
@@ -243,15 +210,7 @@ auxiliary wireless sensors
 
 The first multimodal implementation should prioritize explicit timestamps, sequence numbers, dropped-packet detection, and synchronization diagnostics over application-specific signal processing.
 
-The supported wireless architecture uses external phone/tablet/laptop gateways
-that publish versioned L2CAP batches over LAN ZeroMQ/TCP. The contract,
-receiver configuration schema, and copy/paste LAN requirements are in
-[`docs/wireless-batch-contract.md`](docs/wireless-batch-contract.md) and
-[`docs/wireless-gateway-ingress-requirements.md`](docs/wireless-gateway-ingress-requirements.md).
-The hardware-free ingress implementation and test command are documented in
-[`docs/wireless-ingress-spike.md`](docs/wireless-ingress-spike.md).
-The measured loopback/LAN/wireless acceptance schema and checker are in
-[`docs/alignment-acceptance.md`](docs/alignment-acceptance.md).
+The supported wireless architecture uses external phone/tablet/laptop gateways that publish versioned L2CAP batches over LAN ZeroMQ/TCP. The contract, receiver configuration schema, and copy/paste LAN requirements are in [`docs/wireless-batch-contract.md`](docs/wireless-batch-contract.md) and [`docs/wireless-gateway-ingress-requirements.md`](docs/wireless-gateway-ingress-requirements.md). The hardware-free ingress implementation and test command are documented in [`docs/wireless-ingress-spike.md`](docs/wireless-ingress-spike.md). The measured loopback/LAN/wireless acceptance schema and checker are in [`docs/alignment-acceptance.md`](docs/alignment-acceptance.md).
 
 ## Synapse Apps
 

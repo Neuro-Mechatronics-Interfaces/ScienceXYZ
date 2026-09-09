@@ -52,10 +52,7 @@ For an **operator-run** recording, first create a new session directory and a `p
 mkdir -p data/calibration-unique-session
 cp -n config/calibration-provenance.template.json data/calibration-unique-session/provenance.json
 nano data/calibration-unique-session/provenance.json
-build/raw-recorder/task-recorder --device "$DEV:647" \
-  --output data/calibration-unique-session/raw.h5 \
-  --session-id calibration-unique-session \
-  --metadata-file data/calibration-unique-session/provenance.json
+build/raw-recorder/task-recorder --device "$DEV:647" --output data/calibration-unique-session/raw.h5 --session-id calibration-unique-session --metadata-file data/calibration-unique-session/provenance.json
 ```
 
 The template is valid JSON and can be used for a recording smoke test with unknowns left as `null`. These keys are a documentation convention, not an additional recorder validation schema: the recorder accepts any nonempty JSON object. `null` means unknown, not absent. Set `observation_date` and device IP; copy only currently observed inventory values into `device`. If you know which file you supplied to the start command, use `configuration_input` to record its path, SHA-256, JSON snapshot and operator evidence. This preserves the input even if the original file changes later. A current local snapshot is not proof that the file was unchanged since start. Put the actual running configuration JSON in `running_configuration` when available, rather than assuming the tracked example is deployed. Put task definition and label mapping in `task` when known; leave them unknown if not yet inspected. Describe the physical connection and expected pulse count in `physical_sync` before an edge acceptance trial. A probe can populate `broadband_probe` with its command, reported frame/rate/channel counts and continuity counters; it cannot establish device firmware, physical wiring, task configuration or timing precision.

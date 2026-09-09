@@ -123,10 +123,41 @@ class GateStopTests(unittest.TestCase):
             self.assertIn("--info-capture", err.getvalue())
             files = {p.name for p in session.iterdir()}
             self.assertEqual(files, {"device-config.json", "task-profile.json", "provenance.json"})
-            # Rerunning into the same directory must fail rather than overwrite.
+
+    def test_rerun_reuses_complete_session_without_regenerating(self):
+        # The two-pass operator flow reruns the same --session-dir; a complete
+        # existing session is reused (never overwritten) rather than colliding
+        # on prepare_session's exclusive create.
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            base = _base_config(root)
+            session = root / "session"
+            args = _common_args(root, session, base)
+            spawn = SpawnRecorder()
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                first = launcher.main(args, spawn=spawn)
+            self.assertEqual(first, 2)
+            before = (session / "task-profile.json").read_text()
+            with contextlib.redirect_stdout(io.StringIO()) as out, contextlib.redirect_stderr(io.StringIO()):
+                second = launcher.main(args, spawn=spawn)
+            self.assertEqual(second, 2)  # reused, still gated on --info-capture
+            self.assertEqual(spawn.calls, [])
+            self.assertEqual((session / "task-profile.json").read_text(), before)  # untouched
+            self.assertIn("Reused existing session", out.getvalue())
+
+    def test_conflicting_existing_directory_is_rejected(self):
+        # A directory that exists but is not a complete session is a conflict,
+        # not something to launch against.
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            base = _base_config(root)
+            session = root / "session"
+            session.mkdir()
+            (session / "device-config.json").write_text("{}")  # partial: missing the rest
+            args = _common_args(root, session, base)
             with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
                 with self.assertRaises(SystemExit):
-                    launcher.main(args, spawn=spawn)
+                    launcher.main(args, spawn=SpawnRecorder())
 
     def test_app_not_running_capture_refuses_to_launch(self):
         with tempfile.TemporaryDirectory() as temp:

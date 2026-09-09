@@ -29,10 +29,11 @@ calibrate-gestures = "calibration_task:main"
 task-reactions = "run_reactions_bridge:main"
 analyze-recording = "analyze_recording:main"
 calibrate-session = "run_calibration_session:main"
+calibrate-gui = "run_calibration_gui:main"
 
 [tool.setuptools]
 package-dir = {"" = "."}
-py-modules = ["run_service", "run_gui", "run_waveform", "calibration_prompter", "run_fake_demo", "calibration_task", "run_reactions_bridge", "analyze_recording", "run_calibration_session"]
+py-modules = ["run_service", "run_gui", "run_waveform", "calibration_prompter", "run_fake_demo", "calibration_task", "run_reactions_bridge", "analyze_recording", "run_calibration_session", "run_calibration_gui"]
 
 [tool.setuptools.packages.find]
 where = ["."]

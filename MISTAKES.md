@@ -4,6 +4,33 @@ This file records concrete mistakes encountered while working in this repository
 
 ## Entry Template
 
+### 2026-09-09 - calibrate-session two-pass flow could never reach pass two
+
+The documented calibration launcher workflow (README "Run a Calibration
+Session") runs `calibrate-session` twice with the *same* `--session-dir`: pass 1
+generates the session and prints the operator `synapsectl start` line (exit 2),
+pass 2 reruns with `--info-capture` to gate on App Running and launch the host
+processes. Pass 2 always failed with `[WinError 183] Cannot create a file when
+that file already exists ... choose a fresh --session-dir`. Cause:
+`run_calibration_session.main` unconditionally called `build_profile` ->
+`calibration_task.prepare_session`, whose `out.mkdir(exist_ok=False)` is an
+exclusive create; pass 2 tried to regenerate over the directory pass 1 had
+created, so the two-pass flow was structurally impossible. The unit tests missed
+it because each test used a fresh temp dir and never ran two passes into one
+directory; one test even asserted the collision (`assertRaises(SystemExit)`) as
+if it were the intended contract. Separately, running the child commands printed
+by `--dry-run` by hand also failed (`FileNotFoundError: task-profile.json`)
+because `--dry-run` deliberately generates nothing; those lines are launched by
+the launcher on pass 2, not run manually. Corrected by adding `obtain_session`:
+if the session dir already contains the three artifacts (extra files such as an
+`info.txt` capture saved inside it are tolerated via a subset check) it is
+reused via `load_profile` instead of regenerated; a dir missing a core artifact
+still errors. Tests updated to exercise the real two-pass reuse and a
+conflicting-directory rejection. Candidate rule: when a CLI documents a
+multi-invocation workflow into the same output path, add a test that actually
+runs the invocations in sequence against one path — a per-test fresh temp dir
+hides state-collision bugs.
+
 ### 2026-09-09 - App host-tests build required CONFIG-mode protobuf absent on the distro
 
 Building the SDK-free host tests to run `test_hub_spoke_cross_language_hash`

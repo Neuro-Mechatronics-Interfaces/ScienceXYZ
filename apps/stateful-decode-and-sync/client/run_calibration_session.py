@@ -27,12 +27,15 @@ import subprocess
 import sys
 from pathlib import Path
 
-from stateful_decode_and_sync.calibration_task import prepare_session
+from stateful_decode_and_sync.calibration_task import load_profile, prepare_session
 
 # Repository root is four levels up from apps/stateful-decode-and-sync/client.
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _CLIENT_DIR = Path(__file__).resolve().parent
 _APP_NAME = "stateful-decode-and-sync"
+
+
+_SESSION_ARTIFACTS = ("device-config.json", "task-profile.json", "provenance.json")
 
 
 def build_profile(gestures, base_config, output_dir, provenance):
@@ -43,6 +46,34 @@ def build_profile(gestures, base_config, output_dir, provenance):
         from stateful_decode_and_sync.motion_profile import make_hub_spoke_profile
         profile = make_hub_spoke_profile(gestures)
     return prepare_session(base_config, output_dir, provenance_path=provenance, profile=profile)
+
+
+def obtain_session(gestures, base_config, output_dir, provenance):
+    """Generate the session, or reuse an already-generated one at ``output_dir``.
+
+    The two-pass operator flow runs this launcher twice with the *same*
+    ``--session-dir``: first to generate and print the ``synapsectl start`` line,
+    then again with ``--info-capture`` to gate and launch. ``prepare_session``
+    creates the directory exclusively, so the second pass would collide with the
+    first. When the directory already holds a complete, valid session, reuse it
+    (validating ``task-profile.json`` via ``load_profile``) instead of
+    regenerating. Returns ``(profile, reused)``.
+
+    A directory that exists but lacks any of the three expected artifacts is a
+    conflict, not a reusable session, and is left to ``prepare_session`` to
+    reject rather than silently launched against. Extra files are tolerated so
+    the operator may save the ``synapsectl info`` capture inside the session
+    directory (as the documented workflow does) without defeating reuse.
+    """
+    session = Path(output_dir)
+    if session.exists():
+        present = {p.name for p in session.iterdir()}
+        if set(_SESSION_ARTIFACTS) <= present:
+            profile = load_profile(session / "task-profile.json")
+            return profile, True
+        # Fall through: an existing directory missing a core artifact is a
+        # conflict; prepare_session's exclusive create surfaces it clearly.
+    return build_profile(gestures, base_config, session, provenance), False
 
 
 def synapsectl_start_line(device_uri, config_path):
@@ -141,10 +172,11 @@ def main(argv=None, *, spawn=subprocess.Popen):
 
     session_dir = Path(args.session_dir)
     try:
-        profile = build_profile(args.gestures, args.base_config, session_dir, args.provenance)
+        profile, reused = obtain_session(args.gestures, args.base_config, session_dir, args.provenance)
     except (OSError, ValueError) as error:
         parser.error(f"cannot generate calibration session: {error}; choose a fresh --session-dir")
-    print(f"Generated session {session_dir}; definition {profile['definition_hash']}. "
+    verb = "Reused existing session" if reused else "Generated session"
+    print(f"{verb} {session_dir}; definition {profile['definition_hash']}. "
           "No device commands executed.")
 
     _print_lines("Operator step -- run this yourself to deploy and start the device App:", [start_line])
