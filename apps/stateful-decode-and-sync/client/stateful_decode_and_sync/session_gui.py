@@ -135,6 +135,7 @@ def create_session_window():
             self.events: queue.Queue[tuple[str, object]] = queue.Queue()
             self.service: QProcess | None = None
             self.bridge: QProcess | None = None
+            self.synapsectl_process: QProcess | None = None
             self.client: _AsyncClient | None = None
             self.session_dir: Path | None = None
             self.app_running = False
@@ -165,12 +166,17 @@ def create_session_window():
             self.recorder = QLineEdit("build/raw-recorder/task-recorder")
             self.service_port = QLineEdit("18765")
             self.bridge_port = QLineEdit("9999")
+            self.synapsectl = QLineEdit("synapsectl")
+            self.synapsectl.setToolTip(
+                "Command for the optional Run synapsectl buttons. The default resolves from the "
+                "active venv/PATH; override with an absolute path, or a prefixed form such as "
+                "'wsl synapsectl' only if your install lives elsewhere.")
             for label, widget in [
                 ("Device URI (synapsectl)", self.device_uri), ("Device tap (ip:port)", self.device_tap),
                 ("Reactions origin", self.origin), ("Gestures", self.gestures),
                 ("Session dir", self.session_input), ("Output root", self.output_root),
                 ("Recorder path", self.recorder), ("Service port", self.service_port),
-                ("Bridge port", self.bridge_port)]:
+                ("Bridge port", self.bridge_port), ("synapsectl command", self.synapsectl)]:
                 form.addRow(label, widget)
             self.generate_button = QPushButton("Generate / reuse session")
             self.generate_button.clicked.connect(self._generate)
@@ -190,9 +196,20 @@ def create_session_window():
             self.load_info_button.clicked.connect(self._load_info)
             copy_row.addWidget(self.copy_button)
             copy_row.addWidget(self.load_info_button)
+            # Optional: run synapsectl directly (operator machine only; see
+            # AGENTS.md Synapse CLI Execution Boundary scope). Copy/paste and
+            # Load-info above remain the fallback when the CLI is not reachable.
+            run_row = QHBoxLayout()
+            self.run_start_button = QPushButton("Run: start device")
+            self.run_start_button.clicked.connect(self._run_start_device)
+            self.run_info_button = QPushButton("Run: fetch info + gate")
+            self.run_info_button.clicked.connect(self._run_fetch_info)
+            run_row.addWidget(self.run_start_button)
+            run_row.addWidget(self.run_info_button)
             self.gate_label = QLabel("App Running gate: not checked")
             v2.addWidget(self.start_line)
             v2.addLayout(copy_row)
+            v2.addLayout(run_row)
             v2.addWidget(self.gate_label)
             layout.addWidget(box2)
 
@@ -263,6 +280,10 @@ def create_session_window():
             generated = self.session_dir is not None
             self.copy_button.setEnabled(bool(self.start_line.text()))
             self.load_info_button.setEnabled(generated)
+            # synapsectl runs need a generated config; disabled while one is in flight.
+            idle = self.synapsectl_process is None
+            self.run_start_button.setEnabled(generated and idle)
+            self.run_info_button.setEnabled(generated and idle)
             self.launch_button.setEnabled(generated and self.app_running and self.service is None)
             self.stop_hosts_button.setEnabled(self.service is not None or self.bridge is not None)
             self.connect_button.setEnabled(self.bridge_ready and self.client is None)
@@ -305,14 +326,56 @@ def create_session_window():
             except OSError as error:
                 self._log(f"cannot read info capture: {error}")
                 return
+            self._apply_gate(info_text, Path(path).name)
+
+        def _apply_gate(self, info_text: str, source: str) -> None:
             self.app_running = launcher.app_running(info_text)
             if self.app_running:
-                self.gate_label.setText(f"App Running gate: PASSED ({Path(path).name})")
-                self._log(f"info capture shows {launcher._APP_NAME} Running: True -- host launch enabled")
+                self.gate_label.setText(f"App Running gate: PASSED ({source})")
+                self._log(f"info shows {launcher._APP_NAME} Running: True -- host launch enabled")
             else:
-                self.gate_label.setText(f"App Running gate: FAILED ({Path(path).name})")
-                self._log(f"info capture does NOT show {launcher._APP_NAME} Running: True -- resolve the device App start")
+                self.gate_label.setText(f"App Running gate: FAILED ({source})")
+                self._log(f"info does NOT show {launcher._APP_NAME} Running: True -- resolve the device App start")
             self._refresh_enabled()
+
+        # -- (2 optional) run synapsectl directly ----------------------------
+        def _synapsectl_argv(self, *tail: str) -> list[str]:
+            """Build the synapsectl argv from the configurable command field.
+
+            The field may carry more than one token (e.g. ``wsl synapsectl``) so
+            a Windows GUI can reach a WSL install; each token becomes an argv
+            element. Operator-machine only, per AGENTS.md boundary scope."""
+            base = [token for token in self.synapsectl.text().split() if token] or ["synapsectl"]
+            return [*base, "-u", self.device_uri.text().strip(), *tail]
+
+        def _run_synapsectl(self, tail: list[str], capture_to: Path | None, label: str) -> None:
+            if self.session_dir is None or self.synapsectl_process is not None:
+                return
+            argv = self._synapsectl_argv(*tail)
+            self._log(f"running: {' '.join(argv)}")
+            process = QProcess(self)
+            process.setProgram(argv[0])
+            process.setArguments(argv[1:])
+            process.setProcessChannelMode(QProcess.MergedChannels)
+            buffer: list[str] = []
+            process.readyReadStandardOutput.connect(
+                lambda p=process, b=buffer: b.append(bytes(p.readAllStandardOutput()).decode("utf-8", "replace")))
+            process.errorOccurred.connect(
+                lambda err, l=label: self._emit("synapsectl_error", (l, str(err))))
+            process.finished.connect(
+                lambda code, status, b=buffer, c=capture_to, l=label:
+                    self._emit("synapsectl_done", (l, code, "".join(b), str(c) if c else None)))
+            self.synapsectl_process = process
+            self._refresh_enabled()
+            process.start()
+
+        def _run_start_device(self) -> None:
+            config = self.session_dir / "device-config.json"
+            self._run_synapsectl(["start", str(config)], None, "start")
+
+        def _run_fetch_info(self) -> None:
+            capture = self.session_dir / "info.txt"
+            self._run_synapsectl(["info"], capture, "info")
 
         # -- (3) host processes ----------------------------------------------
         def _spawn(self, name: str, argv: list[str]) -> "QProcess":
@@ -408,6 +471,26 @@ def create_session_window():
                     self._log(f"[{name}] exited with code {code}")
                     if name == "bridge":
                         self.bridge_ready = False
+                    self._refresh_enabled()
+                elif kind == "synapsectl_error":
+                    label, error = payload
+                    self._log(f"[synapsectl {label}] could not run: {error} "
+                              "(check the 'synapsectl command' field or use Copy + run it yourself)")
+                    self.synapsectl_process = None
+                    self._refresh_enabled()
+                elif kind == "synapsectl_done":
+                    label, code, output, capture = payload
+                    self.synapsectl_process = None
+                    for line in output.splitlines():
+                        self._log(f"[synapsectl {label}] {line}")
+                    self._log(f"[synapsectl {label}] exited with code {code}")
+                    if label == "info" and capture:
+                        try:
+                            Path(capture).write_text(output, encoding="utf-8")
+                            self._log(f"saved info capture to {capture}")
+                        except OSError as error:
+                            self._log(f"could not save info capture: {error}")
+                        self._apply_gate(output, "synapsectl info")
                     self._refresh_enabled()
                 elif kind == "ws_connected":
                     self._log(f"connected to bridge at {payload}")

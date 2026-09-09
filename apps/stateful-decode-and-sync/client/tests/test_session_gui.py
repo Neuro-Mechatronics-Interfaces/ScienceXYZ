@@ -61,6 +61,27 @@ class SessionGuiLogicTests(unittest.TestCase):
             window._generate()
             self.assertEqual((session / "task-profile.json").read_text(), before)
 
+    def test_synapsectl_argv_uses_configurable_command(self):
+        window = self._window()
+        window.device_uri.setText("192.168.100.157")
+        # Default single-token command.
+        self.assertEqual(window._synapsectl_argv("info"),
+                         ["synapsectl", "-u", "192.168.100.157", "info"])
+        # Multi-token command (e.g. a WSL-prefixed install) splits into argv.
+        window.synapsectl.setText("wsl synapsectl")
+        self.assertEqual(window._synapsectl_argv("start", "cfg.json"),
+                         ["wsl", "synapsectl", "-u", "192.168.100.157", "start", "cfg.json"])
+        # Empty field falls back to the bare command rather than an empty argv.
+        window.synapsectl.setText("   ")
+        self.assertEqual(window._synapsectl_argv("info")[0], "synapsectl")
+
+    def test_apply_gate_reads_running_from_captured_info(self):
+        window = self._window()
+        window._apply_gate("Applications\n  stateful-decode-and-sync\n    Running: True\n", "synapsectl info")
+        self.assertTrue(window.app_running)
+        window._apply_gate("Applications\n  stateful-decode-and-sync\n    Running: False\n", "synapsectl info")
+        self.assertFalse(window.app_running)
+
     def test_hub_spoke_gestures_embed_in_generated_profile(self):
         with tempfile.TemporaryDirectory() as temp:
             session = Path(temp) / "session"

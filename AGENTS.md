@@ -129,6 +129,18 @@ and provide the relevant output. Interpret that user-provided output against
 the canonical API and repository configuration; do not substitute an assumed
 local CLI installation or attempt device control directly.
 
+**Scope of this boundary.** It governs the *agent* and any tooling that runs in
+the automated agent environment. It does not forbid an *operator-run* tool on
+the operator's own machine from invoking `synapsectl`: the calibration launcher
+(`run_calibration_session.py`) and the operator GUI (`run_calibration_gui.py` /
+`calibrate-gui`) may run `synapsectl` because a human operator launches and
+watches them. Such a tool must (1) make the exact command visible before it runs
+(the launcher's `--dry-run` and the GUI's shown/copyable command line), (2) treat
+the CLI path as configurable rather than hard-coding one install, and (3) never
+run any device command from a test, an agent invocation, or a headless/CI path.
+The agent itself still never runs `synapsectl`; it only edits and reasons about
+these operator tools.
+
 ### Recorded operator CLI help (2026-09-05)
 
 The operator supplied `synapsectl --help`; do not ask for the basic help again
