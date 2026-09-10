@@ -18,6 +18,12 @@ dependencies = [
 test = ["pytest>=8,<9", "pytest-asyncio>=0.24,<2"]
 waveform = ["pyqtgraph>=0.13"]
 recording = ["h5py>=3.12", "matplotlib>=3.9", "websockets>=14,<17"]
+# NML_Hand_Exo dual-CDC control. The SDK lives in the third_party/exo submodule;
+# install it editable from there (run submodule update --init first):
+#   pip install -e '../../../third_party/exo'
+#   pip install -e '.[exo]'
+# pyserial is what the worker's transport actually needs from the SDK's deps.
+exo = ["pyserial>=3.5"]
 
 [project.scripts]
 service-main = "run_service:main"
@@ -30,10 +36,11 @@ calibrate-gestures = "calibration_task:main"
 task-reactions = "run_reactions_bridge:main"
 analyze-recording = "analyze_recording:main"
 calibrate-session = "run_calibration_session:main"
+exo-service = "run_exo_service:main"
 
 [tool.setuptools]
 package-dir = {"" = "."}
-py-modules = ["run_service", "run_gui", "run_waveform", "calibration_prompter", "run_fake_demo", "calibration_task", "run_reactions_bridge", "analyze_recording", "run_calibration_session", "run_calibration_gui"]
+py-modules = ["run_service", "run_gui", "run_waveform", "calibration_prompter", "run_fake_demo", "calibration_task", "run_reactions_bridge", "analyze_recording", "run_calibration_session", "run_calibration_gui", "run_exo_service"]
 
 [tool.setuptools.packages.find]
 where = ["."]

@@ -1,5 +1,18 @@
 # TODO
 
+## Long-term MCP, voice, and motor-unit integration (2026-09-10)
+
+These are planned capabilities, not implemented or bench-accepted features. See [SECURITY.md](SECURITY.md) and [CONTRIBUTING.md](CONTRIBUTING.md) for requirements. The project handoff MCP holds the canonical actionable records:
+
+- [ ] **T-51:** Harden existing Science MCP file confinement, resource limits, side-effect declarations, and capability boundaries.
+- [ ] **T-53:** Implement and validate local Exo authorization, calibrated limits/presets, replay/expiry protection, and independent stop/fault handling before enabling assistant-driven motion.
+- [ ] **T-52:** Add an Exo MCP suite over the WIP worker/service: read-only state/preset discovery first, then scoped requests for full opening and precision grasp, gated by T-53.
+- [ ] **T-54:** Implement and validate online motor-unit decomposition in the loaded SciFi-2 `kApplication`; first establish suitable input bandwidth/rate and bounded compute budgets. Current `broadband_out` is decimated (T-46), not an assumed native raw input.
+- [ ] **T-55:** Add a versioned motor-unit database and read-only interval queries, dependent on T-54, with bounded on-device state and host archival. Answer sustained light index-flexion questions with detected-unit counts, explicit interval/quality/provenance, and unavailable results when evidence is insufficient.
+- [ ] **T-56:** Build an opt-in host voice assistant with configurable lightweight transcription/inference, restricted local MCP dispatch, host-held API credentials, export controls, and measured accuracy/latency/cost. Stage observation before motion; integrate T-52/T-53 and T-55 as they become accepted.
+
+Existing **T-48** (classifier diagnostics), **T-49** (device identity), and **T-50** (MCP registration/setup) remain canonical and are not replaced. MCP setup/test guidance is now in CONTRIBUTING; T-50 still needs operator registration/launch verification. Acquisition, synchronization, and physical recording acceptance remain with T-22/T-26/T-34 and related existing tasks.
+
 ## Calibration recording MVP (2026-09-05)
 
 Latest operator `synapsectl info` reports the device Running but the

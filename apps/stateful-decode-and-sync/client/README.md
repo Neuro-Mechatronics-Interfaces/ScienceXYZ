@@ -208,10 +208,51 @@ python calibration_prompter.py --host 127.0.0.1 --port 8766 \
 
 The prompter queries a state snapshot, then uses one atomic `prepare_capture(..., enabled=false)` per target, enabling capture only for the prompted window and disabling it in a `finally` cleanup before the next target. It never connects to device Taps directly.
 
+## NML_Hand_Exo control service
+
+A separate loopback NDJSON service drives the NML Hand Exoskeleton over its dual
+USB-CDC link, independent of the neural-device controller above. It owns the exo
+serial transport on one worker thread (`ExoWorker`) and exposes a *position*
+control model — connect/arm/home/disarm, batched `set_finger_angles` poses
+(signed `[-100, 100]` per joint, rest-anchored), pose read-back, and an
+inactivity watchdog that eases the hand back to neutral rest when commands stop.
+This mirrors the `position` control mode of the exo SDK's `08_udp` example.
+
+The exo SDK (`nml_hand_exo`) is an optional dependency shipped as the
+`third_party/exo` submodule. Install it editable alongside this client:
+
+```bash
+git submodule update --init third_party/exo
+.venv/Scripts/python -m pip install -e third_party/exo
+.venv/Scripts/python -m pip install -e "apps/stateful-decode-and-sync/client[exo]"
+```
+
+Run the service (auto-discovers the CDC pair by USB VID/PID, or pass both ports):
+
+```bash
+exo-service --cmd-port COM10 --telem-port COM11 --port 18766
+# or: python run_exo_service.py            # auto-discover the pair
+```
+
+Commands: `exo_connect`, `exo_disconnect`, `exo_arm` (optional `home`),
+`exo_disarm`, `exo_home`, `exo_set_finger_angles` (`values`: joint → signed
+value or `null` to hold), `exo_read_pose`, `exo_get_state`, and
+`subscribe_exo_state`. The device requires exo firmware ≥ 0.6.4 (the
+`set_finger_angles` batch command); the worker reports `firmware_ok: false` and
+refuses to arm below that.
+
+The exo tests are hardware-free: they drive the real SDK against an in-process
+fake transport, and skip when the SDK is not importable.
+
 ## Threading and safety contract
 
 - Synapse Taps are only touched off the Qt thread. Both windows read immutable
  snapshots on a `QTimer`; device I/O runs on worker threads.
+- The exo serial link is owned exclusively by one `ExoWorker` thread. The async
+ exo service and any GUI enqueue jobs and read immutable `ExoState` snapshots;
+ nothing else touches the port. Torque is applied only after the current budget
+ is set, disarm releases torque on every exit path, and the watchdog returns the
+ hand to neutral rest when commands stop arriving.
 - The control dashboard changes targets only through the single atomic
  `prepare_capture` command and gates mutating controls while a request is pending.
 - `broadband_probe.py` / `listen_class.py` are strictly read-only producers: they
@@ -229,6 +270,7 @@ client/
 ├── run_gui.py            # control dashboard entry point
 ├── run_waveform.py       # live waveform viewer entry point
 ├── run_service.py        # loopback NDJSON service entry point
+├── run_exo_service.py    # NML_Hand_Exo dual-CDC NDJSON service entry point
 ├── run_fake_demo.py      # hardware-free controller smoke test
 ├── broadband_probe.py    # read-only frame/rate/sequence probe
 ├── listen_class.py       # live class_out softmax listener
@@ -241,6 +283,9 @@ client/
 │   ├── gui.py           # PySide6 control/state dashboard
 │   ├── waveform.py       # WaveformBuffer + reader + pyqtgraph window
 │   ├── service.py        # NDJSON loopback service
+│   ├── exo_worker.py     # threaded NML_Hand_Exo owner (position control)
+│   ├── exo_service.py    # NDJSON loopback service for the exo worker
+│   ├── exo_transport.py  # dual-CDC comm factory + CDC-pair discovery
 │   ├── client.py         # dependency-light NDJSON socket client
 │   ├── model.py          # immutable state / result dataclasses
 │   ├── transport.py      # replaceable Tap transport (+ fake)

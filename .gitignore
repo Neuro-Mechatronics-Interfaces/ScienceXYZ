@@ -131,6 +131,7 @@ Desktop.ini
 /structure.txt
 .scienv
 .local
+.env
 
 scifi-errors.log
 scifi-info.log

@@ -240,6 +240,9 @@ synapsectl deploy --help
 
 The repository separates documentation by purpose:
 
+* [CONTRIBUTING.md](CONTRIBUTING.md) — contribution workflow, MCP setup/testing, and integration acceptance;
+* [SECURITY.md](SECURITY.md) — security reporting, experimental-data handling, and future voice/Exo control requirements;
+
 * `README.md` — concise human-facing setup, build, run, and repository orientation;
 * `AGENTS.md` — durable repository rules and implementation constraints for coding agents;
 * `TODO.md` — current milestones, investigations, and unfinished work;
