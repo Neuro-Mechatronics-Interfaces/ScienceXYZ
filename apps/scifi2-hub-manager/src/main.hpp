@@ -28,6 +28,7 @@
 #include "feature_worker.hpp"
 #include "task_state.hpp"
 #include "exo_link.hpp"
+#include <future>
 
 namespace scifi2_hub {
 
@@ -89,12 +90,10 @@ class SciFi2HubManagerApp : public synapse::App {
 
     // ---- optional on-device NML_Hand_Exo link ----
     // Off unless exo_enabled is set true in config. The exo is driven over the
-    // App-owned serial link (NOT a separate Synapse peripheral). exo_device_path
-    // is a plain config parameter so the target tty is trivially changeable once
-    // the OpenRB-150 is plugged in (see the device-identification procedure in
-    // config/README). Decode-driven control maps each class to a pose via
-    // exo_class_poses; a class with no entry holds neutral.
+    // App-owned USB CDC link. Optional tty transport is for other kernels.
+    // Decode classes with no pose leave the last target until watchdog disarm.
     bool exo_enabled = false;
+    bool exo_motion_enabled = false;
     exo::ExoLinkConfig exo_link;
     // Per-class target pose for EXO_MODE_DECODE, indexed by class id. An empty
     // pose (no joints) means "hold" for that class.
@@ -167,10 +166,12 @@ class SciFi2HubManagerApp : public synapse::App {
   void publish_class(const std::vector<float>& probs, uint64_t timestamp_ns);
 
   // ---- exo integration ----
-  // Apply a validated SET_EXO_MODE / SET_EXO_POSE. Both no-op-succeed when exo
-  // support is disabled in config except that a pose in a non-external mode is
-  // rejected, so a client learns the mode is wrong rather than silently losing
-  // the command.
+  // Commands fail when Exo support is disabled. Host poses require external
+  // mode; completion is polled on the App thread without blocking acquisition.
+  void drain_exo_result();
+  void launch_exo(const protocol::ControlCommand& command);
+  std::future<std::pair<bool, std::string>> exo_pending_;
+  std::optional<protocol::ControlCommand> exo_pending_command_;
   void apply_set_exo_mode(const protocol::ControlCommand& command);
   void apply_set_exo_pose(const protocol::ControlCommand& command);
   // In EXO_MODE_DECODE, map a softmax distribution to a configured pose and

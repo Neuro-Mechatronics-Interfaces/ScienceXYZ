@@ -37,6 +37,8 @@ void expect(bool condition, const char* message) {
 // while the test thread inspects sent().
 class FakeSerialPort : public SerialPort {
  public:
+  bool suppress_route = false;
+  bool suppress_pose = false;
   explicit FakeSerialPort(std::string firmware) : firmware_(std::move(firmware)) {}
 
   bool open() override {
@@ -95,8 +97,10 @@ class FakeSerialPort : public SerialPort {
  private:
   std::string reply_for(const std::string& command) {
     const auto head = command.substr(0, command.find(':'));
+    if (command == "set_reply_route:cmd") return suppress_route ? "" : "OK: reply_route cmd;";
+    if (command == "check_limits") return "Limit check:\nMotor 1: OK;";
     if (head == "version") return "Exo Device Version: " + firmware_ + ";";
-    if (head == "set_finger_angles") return "OK: finger_angles " + command + ";";
+    if (head == "set_finger_angles") return suppress_pose ? "" : "OK: finger_angles " + command + ";";
     if (head == "set_total_current_lim") return "OK: total_current_lim;";
     if (head == "set_current_lim") return "OK: set_current_lim;";
     if (head == "home") return "OK: home;";
@@ -232,7 +236,7 @@ void test_set_pose_writes_batch() {
   worker.stop();
 }
 
-void test_watchdog_returns_to_neutral() {
+void test_watchdog_disarms() {
   auto config = test_config();
   config.watchdog_ms = 50;
   auto port = std::make_unique<FakeSerialPort>("0.6.4");
@@ -249,8 +253,42 @@ void test_watchdog_returns_to_neutral() {
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
   }
   expect(worker.snapshot().watchdog_tripped, "watchdog tripped");
-  expect(sent_contains(raw->sent(), "set_finger_angles:0:0:0:0:0:0"), "neutral pose written");
+  expect(sent_contains(raw->sent(), "disable:all"), "watchdog disables torque");
+  expect(!worker.snapshot().armed, "watchdog requires rearm");
+  expect(!worker.set_pose(pose), "late pose cannot reset watchdog");
   worker.stop();
+}
+
+void test_missing_reply_closes_without_replay() {
+  ExoLinkConfig config;
+  config.watchdog_ms = 1000;
+  config.reply_timeout_ms = 20;
+  auto port = std::make_unique<FakeSerialPort>("0.6.4");
+  auto* raw = port.get();
+  raw->suppress_pose = true;
+  ExoLinkWorker worker(config, std::move(port));
+  expect(worker.connect(), "handshake");
+  expect(worker.query("check_limits"), "read query");
+  expect(worker.snapshot().last_reply.find("Limit check:") != std::string::npos, "query reply retained");
+  expect(!worker.query("enable:all"), "raw writes rejected");
+  expect(worker.arm(false), "arm without home");
+  expect(!worker.query("check_limits"), "queries cannot delay armed watchdog");
+  JointPose pose; pose.set(Joint::kIndex, 10);
+  expect(!worker.set_pose(pose), "missing pose ACK fails");
+  expect(!worker.snapshot().link_open, "uncertain link closed");
+  expect(!worker.disarm(), "closed link cannot confirm disarm");
+  expect(!worker.disconnect(), "disconnect reports unknown torque");
+  expect(!sent_contains(raw->sent(), "home:all"), "no implicit home");
+}
+
+void test_missing_route_ack_never_arms() {
+  ExoLinkConfig config; config.reply_timeout_ms = 20;
+  auto port = std::make_unique<FakeSerialPort>("0.6.4");
+  auto* raw = port.get(); raw->suppress_route = true;
+  ExoLinkWorker worker(config, std::move(port));
+  expect(!worker.connect(), "route acknowledgement required");
+  expect(!worker.snapshot().link_open, "failed handshake closed");
+  expect(!sent_contains(raw->sent(), "enable:all"), "probe cannot enable");
 }
 
 void test_disconnect_disarms() {
@@ -275,8 +313,10 @@ int main() {
   test_arm_orders_current_before_enable();
   test_set_pose_requires_arm();
   test_set_pose_writes_batch();
-  test_watchdog_returns_to_neutral();
+  test_watchdog_disarms();
   test_disconnect_disarms();
+  test_missing_reply_closes_without_replay();
+  test_missing_route_ack_never_arms();
   std::cout << "exo_link_test: all tests passed\n";
   return 0;
 }

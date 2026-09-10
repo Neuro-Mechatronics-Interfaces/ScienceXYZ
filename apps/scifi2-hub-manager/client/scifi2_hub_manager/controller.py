@@ -479,6 +479,13 @@ class BroadbandController:
         command.propose_task_transition.transition_id = transition_id
         return self.execute(command)
 
+    def query_exo(self, query: str, request_id: str | None = None):
+        if query not in {"version", "check_limits", "get_gesture_angles:all"}:
+            raise ValueError("query must be version, check_limits, or get_gesture_angles:all")
+        command = self._new_command("query_exo", request_id)
+        command.query_exo.query = query
+        return self.execute(command)
+
     def set_exo_mode(self, mode: str, request_id: str | None = None):
         """Engage or disengage the on-device exo link.
 
@@ -487,9 +494,11 @@ class BroadbandController:
         ``"decode"`` (the App's decode output drives the hand). Requires the
         device App to be built with exo support enabled in its config.
         """
+        if not isinstance(mode, str):
+            raise ValueError("mode must be a string")
         mode_value = proto.EXO_MODE.get(mode.strip().lower())
         if mode_value is None:
-            raise ValueError("mode must be off, external, or decode")
+            raise ValueError("mode must be off, connected, external, or decode")
         command = self._new_command("set_exo_mode", request_id)
         command.set_exo_mode.mode = mode_value
         return self.execute(command)
@@ -502,10 +511,12 @@ class BroadbandController:
         rest-anchored axis: -100 extend, 0 rest, +100 flex. A joint omitted from
         the mapping is held unchanged by the firmware.
         """
-        if not joints:
+        if not isinstance(joints, dict) or not joints:
             raise ValueError("joints must name at least one joint")
         command = self._new_command("set_exo_pose", request_id)
         for name, value in joints.items():
+            if not isinstance(name, str):
+                raise ValueError("joint names must be strings")
             joint_value = proto.EXO_JOINT.get(name.strip().lower())
             if joint_value is None:
                 raise ValueError(f"unknown joint: {name!r}")

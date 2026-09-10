@@ -59,6 +59,8 @@ add_executable(scifi2-hub-manager
     ${CMAKE_CURRENT_SOURCE_DIR}/src/wireless_zmq_reader.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/task_state.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/serial_port.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/usb_cdc_port.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/libusb_backend.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/exo_link.cpp
 )
 

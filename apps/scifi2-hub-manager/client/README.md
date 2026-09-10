@@ -292,3 +292,14 @@ client/
 │   └── proto.py
 └── tests/                # hardware-free unit tests (fakes + offscreen Qt)
 ```
+
+## Exo attached to SciFi-2 (wireless laptop control)
+
+With the updated App running `config/rhd2132_with_exo.json`, launch
+`gui-exo --device-ip 192.168.100.157`. The GUI connects directly to the App's
+Synapse Taps; no separate bridge process or laptop COM port is needed.
+For Python/other-language clients, `run_service.py` exposes the same typed
+commands over loopback NDJSON; `exo-via-scifi probe` uses that service.
+See the [deployment, probe and motion-test workflow](../docs/exo-integration.md).
+The existing `exo-service` above is for an Exo plugged into the **laptop**;
+it is a different transport placement and is not used for headstage USB.

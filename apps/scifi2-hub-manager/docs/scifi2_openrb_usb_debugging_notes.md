@@ -2,6 +2,26 @@
 
 ## Implementation status (2026-09-10)
 
+**App-context access confirmed by subsequent operator capture:** repo-local
+`scifi-info.log` contains process 302364 at boot-monotonic time 21363.953048,
+real/effective UID/GID all zero, 10 enumerated devices, `2f5d:2202` at bus 2
+address 12, `SUCCESS: libusb_open(OpenRB-150)`, and setup complete in SAMPLING.
+The observation was supplied 2026-09-10; the device's July 24 wall-clock stamp
+is not the observation date. Bus/address are transient. Prior temporary
+permission changes mean this does not establish default or non-root access.
+Interface claims, CDC control/bulk transfers, and motion remain untested.
+
+The initial 1,200-line journal tail contained 1,196 broadband messages and no
+startup diagnostics. To retrieve the probe, filter the entire current boot
+before truncating. From the repo root in Windows cmd:
+
+```cmd
+adb -s 192.168.100.157:5555 shell "journalctl -b -u scifi2-hub-manager.service --no-pager -o short-monotonic | grep -E 'runtime uid|libusb|OpenRB|USB |setup complete' | tail -n 100" > scifi-info.log 2>&1
+```
+
+This overwrites the Git-ignored local capture. The probe runs once during
+setup; replugging after setup does not rerun it.
+
 These operator notes were supplied during the rename to
 `apps/scifi2-hub-manager`. The current diagnostic lives in `src/main.cpp`,
 `scifi2_hub::SciFi2HubManagerApp::setup()`, and logs real/effective UID/GID,

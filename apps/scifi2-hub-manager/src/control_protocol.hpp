@@ -90,6 +90,7 @@ inline bool is_known_command(CommandKind command) {
     case stateful_decode_and_sync::v1::COMMAND_RESET_TASK:
     case stateful_decode_and_sync::v1::COMMAND_SET_EXO_MODE:
     case stateful_decode_and_sync::v1::COMMAND_SET_EXO_POSE:
+    case stateful_decode_and_sync::v1::COMMAND_QUERY_EXO:
       return true;
     default:
       return false;
@@ -101,7 +102,7 @@ constexpr int kMaxExoPoseJoints = 6;
 
 inline bool is_known_exo_mode(stateful_decode_and_sync::v1::ExoMode mode) {
   using namespace stateful_decode_and_sync::v1;
-  return mode == EXO_MODE_OFF || mode == EXO_MODE_EXTERNAL || mode == EXO_MODE_DECODE;
+  return mode == EXO_MODE_OFF || mode == EXO_MODE_EXTERNAL || mode == EXO_MODE_DECODE || mode == EXO_MODE_CONNECTED;
 }
 
 inline bool is_known_exo_joint(stateful_decode_and_sync::v1::ExoJoint joint) {
@@ -356,6 +357,12 @@ inline ValidationResult validate_command(const ControlCommand& command) {
     case COMMAND_SET_EXO_POSE:
       if (!command.has_set_exo_pose()) break;
       return validate_set_exo_pose(command.set_exo_pose());
+    case COMMAND_QUERY_EXO:
+      if (!command.has_query_exo()) break;
+      if (command.query_exo().query() == "version" ||
+          command.query_exo().query() == "get_gesture_angles:all" ||
+          command.query_exo().query() == "check_limits") return valid_result();
+      return invalid_result(ValidationCode::kInvalidArgument, "query_exo.query", "unsupported read-only Exo query");
     default:
       break;
   }

@@ -26,12 +26,14 @@ COMMAND = {
     "propose_task_transition": COMMAND_PROPOSE_TASK_TRANSITION,
     "abort_task": COMMAND_ABORT_TASK,
     "reset_task": COMMAND_RESET_TASK,
+    "query_exo": COMMAND_QUERY_EXO,
     "set_exo_mode": COMMAND_SET_EXO_MODE,
     "set_exo_pose": COMMAND_SET_EXO_POSE,
 }
 
 EXO_MODE = {
     "off": EXO_MODE_OFF,
+    "connected": EXO_MODE_CONNECTED,
     "external": EXO_MODE_EXTERNAL,
     "decode": EXO_MODE_DECODE,
 }
@@ -59,6 +61,8 @@ def enum_name(message, field_name: str) -> str:
         return "unspecified"
     return (value.name.removeprefix("PIPELINE_")
             .removeprefix("SOURCE_MODE_")
+            .removeprefix("EXO_MODE_")
+            .removeprefix("EXO_JOINT_")
             .removeprefix("MODEL_")
             .removeprefix("TASK_LIFECYCLE_")
             .removeprefix("TASK_EVENT_")

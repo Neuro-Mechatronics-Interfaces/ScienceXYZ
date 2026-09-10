@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nml-science-xyz"
-version = "0.3.5"
+version = "0.4.0"
 description = "Headless controller, loopback service, calibration client, and PySide6 dashboard"
 requires-python = ">=3.13"
 dependencies = [
@@ -27,6 +27,8 @@ exo = ["pyserial>=3.5"]
 
 [project.scripts]
 service-main = "run_service:main"
+gui-exo = "run_exo_gui:main"
+exo-via-scifi = "exo_via_scifi:main"
 gui-device = "run_gui:main"
 gui-waveforms = "run_waveform:main"
 gui-calibrate = "run_calibration_gui:main"
@@ -40,7 +42,7 @@ exo-service = "run_exo_service:main"
 
 [tool.setuptools]
 package-dir = {"" = "."}
-py-modules = ["run_service", "run_gui", "run_waveform", "calibration_prompter", "run_fake_demo", "calibration_task", "run_reactions_bridge", "analyze_recording", "run_calibration_session", "run_calibration_gui", "run_exo_service"]
+py-modules = ["run_exo_gui", "exo_via_scifi", "run_service", "run_gui", "run_waveform", "calibration_prompter", "run_fake_demo", "calibration_task", "run_reactions_bridge", "analyze_recording", "run_calibration_session", "run_calibration_gui", "run_exo_service"]
 
 [tool.setuptools.packages.find]
 where = ["."]

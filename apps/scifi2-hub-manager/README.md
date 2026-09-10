@@ -80,7 +80,7 @@ The editable source for the acquisition/compute flow is [`docs/feature-worker-pi
 | `src/control_state.hpp` | atomic target transition and selection rules |
 | `src/task_state.{hpp,cpp}` | SDK-independent authoritative task definition parser, validator, digest, and runtime core |
 | `src/serial_port.{hpp,cpp}` | abstract serial link + POSIX termios implementation for the exo (device path from config) |
-| `src/exo_link.{hpp,cpp}` | threaded NML_Hand_Exo worker: connect/arm/home/set_pose, watchdog-to-neutral; SDK-independent |
+| `src/exo_link.{hpp,cpp}` | threaded NML_Hand_Exo worker: connect/arm/home/set_pose, watchdog disarm; SDK-independent |
 | `docs/exo-integration.md` | on-device exo modes, config, device identification, and host control |
 | `src/task_timeline.{hpp,cpp}` | host-recorder boundary for immutable task events, loss-aware intervals, and ambiguity labels |
 | `docs/task-state-contract.md` | normative configurable task definition, lifecycle, boundary, and event contract |
@@ -157,9 +157,11 @@ The Synapse API protos and the Science `vcpkg` overlay ports/triplets are vendor
 ```bash
 DEV=192.168.100.157
 
-synapsectl -u $DEV apps deploy apps/scifi2-hub-manager synapsectl -u $DEV start apps/scifi2-hub-manager/config/rhd2132.json
+synapsectl -u $DEV apps deploy apps/scifi2-hub-manager
+synapsectl -u $DEV start apps/scifi2-hub-manager/config/rhd2132.json
 
-synapsectl -u $DEV taps list synapsectl -u $DEV stop ```
+synapsectl -u $DEV taps list synapsectl -u $DEV stop
+```
 
 On Windows run `synapsectl` with `PYTHONUTF8=1` (its check-mark output crashes under cp1252 — see repo `MISTAKES.md`).
 
@@ -180,12 +182,14 @@ python client/set_capture.py --device-ip $DEV --label 0 --off
 python client/fit_mlp.py --device-ip $DEV # uses configured epochs python client/fit_mlp.py --device-ip $DEV --epochs 200
 
 # 4. watch live classifications
-python client/listen_class.py --device-ip $DEV ```
+python client/listen_class.py --device-ip $DEV
+```
 
 To watch the broadband stream itself as live per-channel traces, run the waveform viewer (needs the client `waveform` extra for `pyqtgraph`). It subscribes to `broadband_out` and plots one trace per channel in a grid whose column count and channel selection/order are adjustable live (e.g. a 4x8 grid of 32 channels). The tap read path is read-only, so it can run alongside the dashboard and CLI tools:
 
 ```bash
-python client/run_waveform.py --device-ip $DEV # all channels, one column python client/run_waveform.py --device-ip $DEV --channels 0-31 --columns 8 # 4x8 grid ```
+python client/run_waveform.py --device-ip $DEV # all channels, one column python client/run_waveform.py --device-ip $DEV --channels 0-31 --columns 8 # 4x8 grid
+```
 
 The top **Device** panel adds optional operator `synapsectl` controls, matching the calibration GUI: a **Copy start line** button, **Run: start/stop device**, and **Run: fetch info** (which reports whether the App shows Running: True). The `synapsectl` command is a configurable field (a Windows-native install in the active venv/PATH works unchanged; use `wsl synapsectl` for a WSL install), and the `start` config path is editable (empty restarts an already-configured device). Seed the fields from the CLI with `--device-config` and `--synapsectl`. Running `synapsectl` from this operator-launched GUI is permitted under the AGENTS.md Synapse CLI execution boundary scope (a human launches and watches it, the exact command is shown, and the path is configurable); it never runs from a test or an agent path.
 
@@ -194,7 +198,8 @@ Layout and channel arrangement are documented in [`client/README.md`](client/REA
 For a bounded, read-only producer check, run the broadband probe in each source mode and compare its sequence/timestamp and channel metadata:
 
 ```bash
-python client/broadband_probe.py --device-ip $DEV --duration 5 ```
+python client/broadband_probe.py --device-ip $DEV --duration 5
+```
 
 The report includes valid-frame count and observed rate, sequence gaps and reordering, timestamp regressions and deltas, sample rate, payload channel count, `channel_ranges`, and malformed-payload count. It never sends a device command. A producer subscription can miss frames before the subscriber is ready, so use the probe's sustained count/rate and sequence diagnostics rather than treating the first sequence number as a zero-based stream origin.
 
@@ -205,26 +210,30 @@ Bench note (2026-08-31): after the IntanRHD2132 re-enumerated and the app was fr
 The graphical client owns the device Tap connections through a replaceable transport. The GUI never calls Synapse from the Qt thread; state snapshots are immutable replacements and all target changes use the atomic `prepare_capture` command. The controller reports malformed device messages as a state error, publishes `pipeline.state=disconnected` when a Tap fails, wakes pending commands instead of waiting for their timeout, and provides bounded reconnect backoff. Install the host dependencies from `client/requirements.txt`, then launch the dashboard with:
 
 ```bash
-python client/run_gui.py --device-ip "$DEV" ```
+python client/run_gui.py --device-ip "$DEV"
+```
 
 The dashboard is a control and state view; it does not plot waveforms. For live per-channel traces of the `broadband_out` stream, run the waveform viewer (`python client/run_waveform.py --device-ip "$DEV"`), which needs the client `waveform` extra. Its tap read path is read-only; its Device panel adds optional operator `synapsectl` start/stop/info controls. See [`client/README.md`](client/README.md).
 
 For external tools, the same controller can expose the versioned loopback NDJSON service. It binds only to localhost by default:
 
 ```bash
-python client/run_service.py --device-ip "$DEV" --port 8766 ```
+python client/run_service.py --device-ip "$DEV" --port 8766
+```
 
 The service supports `get_state`, `subscribe_state`, `prepare_capture`, `select_collection`, `select_label`, `set_capture`, `fit`, and `flush`. Remote binding is unauthenticated in v1 and must be an explicit operator choice. Requests are serialized before reaching the controller. State subscribers have a bounded latest-snapshot queue, so a slow client cannot accumulate stale state indefinitely; command timeouts and controller disconnects retain explicit error codes in the NDJSON response.
 
 The controller's hardware-free tests run without a device:
 
 ```bash
-PYTHONPATH=client python -m unittest discover -s client/tests -v ```
+PYTHONPATH=client python -m unittest discover -s client/tests -v
+```
 
 The dependency-light socket client and safe calibration example can be used without importing the Synapse SDK in the calling tool:
 
 ```bash
-python client/calibration_prompter.py --host 127.0.0.1 --port 8765 \ --collection 0 --labels 0 1 2 3 4 ```
+python client/calibration_prompter.py --host 127.0.0.1 --port 8765 --collection 0 --labels 0 1 2 3 4
+```
 
 The prompter first queries a complete state snapshot, then uses one atomic `prepare_capture(..., enabled=false)` per target. It enables capture only for the prompted window and disables it in a `finally` cleanup before the next target is selected. It never connects to device Taps directly.
 
@@ -252,7 +261,7 @@ All parameters have safe defaults. Window/stride are defined in source-clock mil
 | `mlp_epochs` | training epochs per fit | 100 |
 | `synthetic_seed` | spike-LFSR / MLP-init seed | 44257 (0xACE1) |
 | `exo_enabled` | build the optional on-device exo link worker | `false` |
-| `exo_device_path` | exo serial device node (see [`docs/exo-integration.md`](docs/exo-integration.md)) | `/dev/ttyACM0` |
+| `exo_transport` / `exo_motion_enabled` | transport and explicit motor-enable gate | `usb_cdc` / `false` |
 | `exo_baud` / `exo_total_current_ma` / `exo_per_motor_current_ma` / `exo_watchdog_ms` | exo link tuning | 1000000 / 800 / 250 / 1000 |
 | `exo_decode_min_confidence` | min winning-class prob to drive a pose in `decode` mode | 0.6 |
 | `exo_class_poses` | per-class `[[joint,value],...]` table for `decode` mode | none |
@@ -262,3 +271,5 @@ The exo link is off by default and never touches the hand until a client sends `
 ## Verification plan
 
 Staged on the bench (see repo `PLAN.md`): (0) build + republish frames, (1) real↔synthetic toggle, (2) labeled ring buffer counts, (3) MPF feature dim + numerical sanity vs a NumPy recomputation, (4) MLP learns separable synthetic classes end-to-end. Each stage builds/deploys/verifies before the next.
+
+For laptop-to-headstage USB Exo bench commands, use the [wireless bridge workflow](docs/exo-integration.md). The example configuration permits read-only connection checks; motor enable requires `exo_motion_enabled: true`.

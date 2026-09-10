@@ -23,6 +23,7 @@ enum CommandKind {
   COMMAND_RESET_TASK = 13;
   COMMAND_SET_EXO_MODE = 14;
   COMMAND_SET_EXO_POSE = 15;
+  COMMAND_QUERY_EXO = 16;
 }
 
 // Engagement mode for the optional on-device NML_Hand_Exo link. The App owns
@@ -35,6 +36,7 @@ enum ExoMode {
   EXO_MODE_OFF = 1;
   EXO_MODE_EXTERNAL = 2;
   EXO_MODE_DECODE = 3;
+  EXO_MODE_CONNECTED = 4; // USB handshake only; no enable/home/pose commands.
 }
 
 // Fixed set_finger_angles joint order (firmware >= 0.6.4). Matches the SDK's
@@ -131,6 +133,8 @@ message SetExoMode {
   ExoMode mode = 1;
 }
 
+message QueryExo { string query = 1; } // Allowlisted read-only firmware command.
+
 // A pose command for EXO_MODE_EXTERNAL. At least one joint value is required;
 // unlisted joints are held. Rejected unless the exo is engaged (mode != OFF)
 // and armed.
@@ -159,6 +163,7 @@ message ControlCommand {
     ResetTask reset_task = 22;
     SetExoMode set_exo_mode = 23;
     SetExoPose set_exo_pose = 24;
+    QueryExo query_exo = 25;
   }
 }
 
@@ -363,6 +368,9 @@ message ExoStatus {
   string firmware = 6;
   string last_error = 7;
   repeated ExoJointValue last_commanded = 8;
+  bool watchdog_tripped = 9;
+  string last_reply = 10; // Bounded raw firmware text; not measured motion completion.
+  string transport = 11;
 }
 
 message StateSnapshot {

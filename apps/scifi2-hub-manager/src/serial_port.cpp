@@ -1,4 +1,5 @@
 #include "serial_port.hpp"
+#include <chrono>
 
 #include <utility>
 
@@ -101,8 +102,14 @@ class PosixSerialPort : public SerialPort {
       error_ = "write on closed port";
       return false;
     }
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
     std::size_t written = 0;
     while (written < data.size()) {
+      if (std::chrono::steady_clock::now() >= deadline) {
+        error_ = "serial write timeout; outcome unknown"; close(); return false;
+      }
+      pollfd pfd{fd_, POLLOUT, 0};
+      if (::poll(&pfd, 1, 10) <= 0) continue;
       const ssize_t n = ::write(fd_, data.data() + written, data.size() - written);
       if (n < 0) {
         if (errno == EAGAIN || errno == EINTR) continue;

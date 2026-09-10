@@ -12,6 +12,7 @@
 #include <thread>
 
 #include "serial_port.hpp"
+#include "usb_cdc_port.hpp"
 
 namespace scifi2_hub::exo {
 
@@ -57,6 +58,8 @@ struct JointPose {
 bool format_set_finger_angles(const JointPose& pose, std::string& out);
 
 struct ExoLinkConfig {
+  std::string transport = "usb_cdc";
+  UsbCdcConfig usb;
   // Device path/name, supplied from App config as a plain parameter so it is
   // trivially changeable when the OpenRB-150 board is plugged in (see the
   // device-identification procedure in the app README/config docs).
@@ -66,11 +69,11 @@ struct ExoLinkConfig {
   // firmware default). Per-motor nominal current likewise (0 leaves default).
   int total_current_ma = 800;
   int per_motor_current_ma = 250;
-  // Idle milliseconds after the last pose before the watchdog eases the hand to
-  // neutral rest. 0 disables the watchdog.
+  // Idle milliseconds after arming/the last pose before the watchdog sends
+  // disable:all and requires explicit rearming. 0 disables the watchdog.
   int watchdog_ms = 1000;
   // Reply wait budget for a command that expects an acknowledgement.
-  int reply_timeout_ms = 750;
+  int reply_timeout_ms = 1500;
   std::string line_terminator = "\r\n";
 };
 
@@ -84,13 +87,15 @@ struct ExoStatus {
   std::string last_error;
   JointPose last_commanded;
   bool watchdog_tripped = false;
+  std::string last_reply;
+  std::string transport;
 };
 
 // Owns the exo serial link on one dedicated thread. Every device interaction
 // runs on that thread, drained from a job queue, so the App's main loop and tap
 // callbacks never touch the port. The same thread runs the inactivity watchdog
 // between jobs. Mirrors the host-side ExoWorker (Python) contract: connect ->
-// arm(+home) -> set_pose, with a watchdog return to neutral.
+// arm(+home) -> set_pose, with a watchdog disarm (best effort, not a hardware safety interlock).
 //
 // The worker takes an already-built SerialPort so a test can inject a fake with
 // firmware-shaped replies and no hardware is required.
@@ -117,6 +122,7 @@ class ExoLinkWorker {
   bool home(std::string* error_out = nullptr, int timeout_ms = 10000);
   bool set_pose(const JointPose& pose, std::string* error_out = nullptr,
                 int timeout_ms = 5000);
+  bool query(const std::string& command, std::string* error_out = nullptr, int timeout_ms = 5000);
 
   ExoStatus snapshot() const;
 
@@ -126,6 +132,7 @@ class ExoLinkWorker {
     bool done = false;
     bool ok = false;
     std::string error;
+    bool cancelled = false;
   };
 
   void run();

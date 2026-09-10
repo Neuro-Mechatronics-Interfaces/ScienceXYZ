@@ -324,3 +324,7 @@ add_test(
     NAME scifi2-hub-manager-wireless-multisource
     COMMAND scifi2-hub-manager-wireless-multisource-tests
 )
+
+add_executable(scifi2-hub-manager-usb-cdc-tests usb_cdc_test.cpp ../src/usb_cdc_port.cpp)
+target_include_directories(scifi2-hub-manager-usb-cdc-tests PRIVATE ../src)
+add_test(NAME scifi2-hub-manager-usb-cdc COMMAND scifi2-hub-manager-usb-cdc-tests)

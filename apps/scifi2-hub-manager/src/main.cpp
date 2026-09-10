@@ -125,6 +125,7 @@ SciFi2HubManagerApp::~SciFi2HubManagerApp() {
   feature_worker_.stop();
   // Stop the exo worker last: its stop() disarms the hand on the way out, which
   // must not race the feature worker but must still run on every teardown path.
+  if (exo_pending_.valid()) exo_pending_.wait();
   if (exo_worker_) exo_worker_->stop();
 }
 
@@ -308,7 +309,9 @@ bool SciFi2HubManagerApp::setup() {
   if (cfg_.exo_enabled) {
     exo_worker_ = std::make_unique<exo::ExoLinkWorker>(
         cfg_.exo_link,
-        exo::make_platform_serial_port(cfg_.exo_link.device_path, cfg_.exo_link.baud));
+        cfg_.exo_link.transport == "usb_cdc"
+            ? exo::make_libusb_cdc_port(cfg_.exo_link.usb)
+            : exo::make_platform_serial_port(cfg_.exo_link.device_path, cfg_.exo_link.baud));
     exo_worker_->start();
     spdlog::info("exo link enabled: device={} baud={} (mode=OFF until engaged)",
                  cfg_.exo_link.device_path, cfg_.exo_link.baud);
@@ -439,17 +442,36 @@ bool SciFi2HubManagerApp::parse_config(const synapse::ApplicationNodeConfig& con
     }
     cfg_.exo_class_poses.clear();
     if (cfg_.exo_enabled) {
+      cfg_.exo_motion_enabled = p.contains("exo_motion_enabled") && p.at("exo_motion_enabled").bool_value();
+      if (p.contains("exo_transport")) cfg_.exo_link.transport = p.at("exo_transport").string_value();
+      if (cfg_.exo_link.transport != "usb_cdc" && cfg_.exo_link.transport != "tty") return false;
+      if (p.contains("exo_usb_serial")) cfg_.exo_link.usb.serial = p.at("exo_usb_serial").string_value();
+
       if (p.contains("exo_device_path") &&
           p.at("exo_device_path").kind_case() == google::protobuf::Value::kStringValue) {
         cfg_.exo_link.device_path = p.at("exo_device_path").string_value();
       }
-      cfg_.exo_link.baud = static_cast<unsigned int>(num("exo_baud", cfg_.exo_link.baud));
-      cfg_.exo_link.total_current_ma =
-          static_cast<int>(num("exo_total_current_ma", cfg_.exo_link.total_current_ma));
-      cfg_.exo_link.per_motor_current_ma =
-          static_cast<int>(num("exo_per_motor_current_ma", cfg_.exo_link.per_motor_current_ma));
-      cfg_.exo_link.watchdog_ms =
-          static_cast<int>(num("exo_watchdog_ms", cfg_.exo_link.watchdog_ms));
+      auto bounded_integer = [&](const char* key, int fallback, int low, int high) {
+        if (!p.contains(key)) return fallback;
+        const auto& value = p.at(key);
+        const double n = value.number_value();
+        if (value.kind_case() != google::protobuf::Value::kNumberValue ||
+            !std::isfinite(n) || std::floor(n) != n || n < low || n > high)
+          throw std::runtime_error(std::string("invalid exo integer: ") + key);
+        return static_cast<int>(n);
+      };
+      cfg_.exo_link.baud = bounded_integer("exo_baud", cfg_.exo_link.baud, 1, 4000000);
+      cfg_.exo_link.total_current_ma = bounded_integer("exo_total_current_ma", cfg_.exo_link.total_current_ma, 1, 2000);
+      cfg_.exo_link.per_motor_current_ma = bounded_integer("exo_per_motor_current_ma", cfg_.exo_link.per_motor_current_ma, 1, 1000);
+      cfg_.exo_link.watchdog_ms = bounded_integer("exo_watchdog_ms", cfg_.exo_link.watchdog_ms, 100, 5000);
+      cfg_.exo_link.usb.baud = cfg_.exo_link.baud;
+      if (cfg_.exo_link.baud == 0 || cfg_.exo_link.baud > 4000000 ||
+          cfg_.exo_link.total_current_ma <= 0 || cfg_.exo_link.total_current_ma > 2000 ||
+          cfg_.exo_link.per_motor_current_ma <= 0 || cfg_.exo_link.per_motor_current_ma > 1000 ||
+          cfg_.exo_link.watchdog_ms < 100 || cfg_.exo_link.watchdog_ms > 5000) {
+        spdlog::error("invalid exo baud/current/watchdog configuration");
+        return false;
+      }
       cfg_.exo_decode_min_confidence =
           static_cast<float>(num("exo_decode_min_confidence", cfg_.exo_decode_min_confidence));
       // exo_class_poses: a list indexed by class id. Each entry is a list of
@@ -1199,6 +1221,9 @@ void SciFi2HubManagerApp::apply_protocol_command(const protocol::ControlCommand&
       finish(control::success(), RESULT_ACCEPTED);
       return;
     }
+    case COMMAND_QUERY_EXO:
+      launch_exo(command);
+      break;
     case COMMAND_SET_EXO_MODE:
       apply_set_exo_mode(command);
       return;
@@ -1243,67 +1268,61 @@ stateful_decode_and_sync::v1::ExoJoint wire_joint_from_exo(std::size_t index) {
 
 }  // namespace
 
-void SciFi2HubManagerApp::apply_set_exo_mode(const protocol::ControlCommand& command) {
-  using namespace stateful_decode_and_sync::v1;
-  const ExoMode requested = command.set_exo_mode().mode();
-  if (!cfg_.exo_enabled || !exo_worker_) {
-    publish_command_outcome(command, RESULT_FAILED,
-                            control::failure(ERROR_INVALID_ARGUMENT, "set_exo_mode",
-                                             "exo support is not enabled in device config"));
-    return;
-  }
+void SciFi2HubManagerApp::apply_set_exo_mode(const protocol::ControlCommand& command) { launch_exo(command); }
+void SciFi2HubManagerApp::apply_set_exo_pose(const protocol::ControlCommand& command) { launch_exo(command); }
 
-  std::string error;
-  // Opening the link the first time an engaging mode is selected keeps the hand
-  // untouched at OFF (the default) and defers any serial I/O until asked for.
-  if (requested != EXO_MODE_OFF) {
-    if (!exo_worker_->connect(&error) || !exo_worker_->arm(/*home=*/true, &error)) {
-      publish_command_outcome(command, RESULT_FAILED,
-                              control::failure(ERROR_INTERNAL, "set_exo_mode",
-                                               "could not engage exo: " + error));
-      return;
-    }
-  } else {
-    // Leaving engagement: disarm and drop the link so the hand is safe.
-    exo_worker_->disconnect(&error);
+void SciFi2HubManagerApp::launch_exo(const protocol::ControlCommand& command) {
+  using namespace stateful_decode_and_sync::v1;
+  auto reject = [&](ErrorCode code, const std::string& why) {
+    publish_command_outcome(command, RESULT_FAILED, control::failure(code, "exo", why));
+  };
+  if (!cfg_.exo_enabled || !exo_worker_) { reject(ERROR_INVALID_ARGUMENT, "exo is disabled in config"); return; }
+  if (exo_pending_.valid()) { reject(ERROR_BUSY, "exo operation pending; do not retry an uncertain motion"); return; }
+  if (command.command() == COMMAND_SET_EXO_MODE &&
+      (command.set_exo_mode().mode() == EXO_MODE_EXTERNAL || command.set_exo_mode().mode() == EXO_MODE_DECODE) &&
+      !cfg_.exo_motion_enabled) { reject(ERROR_INVALID_ARGUMENT, "exo_motion_enabled must be true to enable motors"); return; }
+  if (command.command() == COMMAND_SET_EXO_POSE && exo_mode_ != EXO_MODE_EXTERNAL) {
+    reject(ERROR_INVALID_ARGUMENT, "select external mode before a pose"); return;
   }
-  exo_mode_ = requested;
-  spdlog::info("exo mode -> {}", static_cast<int>(requested));
-  publish_command_outcome(command, RESULT_SUCCEEDED, control::success());
+  publish_command_outcome(command, RESULT_ACCEPTED, control::success());
+  exo_pending_command_ = command;
+  exo_pending_ = std::async(std::launch::async, [this, command]() {
+    std::string error;
+    bool ok = false;
+    if (command.command() == COMMAND_SET_EXO_MODE) {
+      auto mode = command.set_exo_mode().mode();
+      if (mode == EXO_MODE_OFF) ok = exo_worker_->disconnect(&error);
+      else if (mode == EXO_MODE_CONNECTED) {
+        ok = (!exo_worker_->snapshot().armed || exo_worker_->disarm(&error)) && exo_worker_->connect(&error);
+      } else ok = exo_worker_->connect(&error) && exo_worker_->arm(false, &error);
+    } else if (command.command() == COMMAND_QUERY_EXO) {
+      ok = exo_worker_->query(command.query_exo().query(), &error);
+    } else {
+      exo::JointPose pose;
+      for (const auto& j : command.set_exo_pose().joints()) pose.set(exo_joint_from_wire(j.joint()), j.value());
+      ok = exo_worker_->set_pose(pose, &error);
+    }
+    return std::make_pair(ok, error);
+  });
 }
 
-void SciFi2HubManagerApp::apply_set_exo_pose(const protocol::ControlCommand& command) {
+void SciFi2HubManagerApp::drain_exo_result() {
   using namespace stateful_decode_and_sync::v1;
-  if (!cfg_.exo_enabled || !exo_worker_) {
-    publish_command_outcome(command, RESULT_FAILED,
-                            control::failure(ERROR_INVALID_ARGUMENT, "set_exo_pose",
-                                             "exo support is not enabled in device config"));
-    return;
-  }
-  if (exo_mode_ != EXO_MODE_EXTERNAL) {
-    publish_command_outcome(
-        command, RESULT_FAILED,
-        control::failure(ERROR_INVALID_ARGUMENT, "set_exo_pose",
-                         "exo is not in EXTERNAL mode; set_exo_mode:EXTERNAL first"));
-    return;
-  }
-  exo::JointPose pose;
-  for (const auto& joint_value : command.set_exo_pose().joints()) {
-    pose.set(exo_joint_from_wire(joint_value.joint()), joint_value.value());
-  }
-  std::string error;
-  if (!exo_worker_->set_pose(pose, &error)) {
-    publish_command_outcome(command, RESULT_FAILED,
-                            control::failure(ERROR_INTERNAL, "set_exo_pose",
-                                             "exo pose command failed: " + error));
-    return;
-  }
-  publish_command_outcome(command, RESULT_SUCCEEDED, control::success());
+  if (!exo_pending_.valid() || exo_pending_.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready) return;
+  auto [ok, error] = exo_pending_.get();
+  if (exo_pending_command_) {
+    const auto command = *exo_pending_command_;
+    exo_pending_command_.reset();
+    if (ok && command.command() == COMMAND_SET_EXO_MODE) exo_mode_ = command.set_exo_mode().mode();
+    publish_command_outcome(command, ok ? RESULT_SUCCEEDED : RESULT_FAILED,
+                            ok ? control::success() : control::failure(ERROR_INTERNAL, "exo", error));
+  } else if (!ok) spdlog::warn("exo decode command failed: {}", error);
 }
 
 void SciFi2HubManagerApp::drive_exo_from_decode(const std::vector<float>& probs) {
   using namespace stateful_decode_and_sync::v1;
   if (exo_mode_ != EXO_MODE_DECODE || !exo_worker_ || probs.empty()) return;
+  if (exo_pending_.valid()) { spdlog::debug("exo decode actuation skipped: prior operation pending"); return; }
   const auto best = std::max_element(probs.begin(), probs.end());
   if (best == probs.end() || *best < cfg_.exo_decode_min_confidence) return;  // hold.
   const std::size_t class_id = static_cast<std::size_t>(std::distance(probs.begin(), best));
@@ -1312,10 +1331,11 @@ void SciFi2HubManagerApp::drive_exo_from_decode(const std::vector<float>& probs)
   bool any = false;
   for (bool has : pose.has_value) any = any || has;
   if (!any) return;  // an empty mapped pose means "hold" for this class.
-  std::string error;
-  if (!exo_worker_->set_pose(pose, &error)) {
-    spdlog::warn("exo decode pose failed for class {}: {}", class_id, error);
-  }
+  exo_pending_ = std::async(std::launch::async, [this, pose]() {
+    std::string error;
+    bool ok = exo_worker_->set_pose(pose, &error);
+    return std::make_pair(ok, error);
+  });
 }
 
 void SciFi2HubManagerApp::fill_exo_status(stateful_decode_and_sync::v1::ExoStatus* status) const {
@@ -1328,6 +1348,9 @@ void SciFi2HubManagerApp::fill_exo_status(stateful_decode_and_sync::v1::ExoStatu
   status->set_firmware_ok(snap.firmware_ok);
   status->set_firmware(snap.firmware);
   status->set_last_error(snap.last_error);
+  status->set_watchdog_tripped(snap.watchdog_tripped);
+  status->set_last_reply(snap.last_reply);
+  status->set_transport(snap.transport);
   for (std::size_t j = 0; j < exo::kJointCount; ++j) {
     if (!snap.last_commanded.has_value[j]) continue;
     auto* jv = status->add_last_commanded();
@@ -1348,6 +1371,7 @@ void SciFi2HubManagerApp::main() {
   publish_state_snapshot();
 
   while (node_running_) {
+    drain_exo_result();
     publish_periodic_state_if_due();
     poll_task_source_loss();
 

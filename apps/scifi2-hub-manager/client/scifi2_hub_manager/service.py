@@ -254,6 +254,12 @@ class ControlService:
             return c.fit(self._uint(request, "epochs", 0), request_id)
         if name == "flush":
             return c.flush(request["scope"], self._optional_uint(request, "collection_id"), self._optional_uint(request, "label"), request_id)
+        if name == "set_exo_mode":
+            return c.set_exo_mode(request["mode"], request_id)
+        if name == "set_exo_pose":
+            return c.set_exo_pose(request["joints"], request_id)
+        if name == "query_exo":
+            return c.query_exo(request["query"], request_id)
         preconditions = self._task_preconditions(request)
         if name == "start_task":
             return c.start_task(preconditions=preconditions, request_id=request_id)

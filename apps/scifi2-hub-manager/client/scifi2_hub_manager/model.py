@@ -108,6 +108,21 @@ class TaskTransition:
 
 
 @dataclass(frozen=True)
+class ExoState:
+    configured: bool = False
+    mode: str = "unspecified"
+    link_open: bool = False
+    armed: bool = False
+    firmware_ok: bool = False
+    firmware: str = ""
+    last_error: str = ""
+    watchdog_tripped: bool = False
+    last_reply: str = ""
+    transport: str = ""
+    last_commanded: tuple[tuple[str, int], ...] = ()
+
+
+@dataclass(frozen=True)
 class AppState:
     protocol_version: int = 1
     state_version: int = 0
@@ -118,6 +133,7 @@ class AppState:
     collections: tuple[CollectionState, ...] = ()
     model: ModelState = ModelState()
     task: TaskState = TaskState()
+    exo: ExoState = ExoState()
     last_error: ErrorState | None = None
 
     @property
@@ -277,6 +293,13 @@ def state_from_proto(message) -> AppState:
         collections=collections,
         model=model,
         task=task,
+        exo=ExoState(
+            configured=message.exo.configured, mode=proto.enum_name(message.exo, "mode"),
+            link_open=message.exo.link_open, armed=message.exo.armed,
+            firmware_ok=message.exo.firmware_ok, firmware=message.exo.firmware,
+            last_error=message.exo.last_error, watchdog_tripped=message.exo.watchdog_tripped,
+            last_reply=message.exo.last_reply, transport=message.exo.transport,
+            last_commanded=tuple((proto.enum_name(j, "joint"), j.value) for j in message.exo.last_commanded)),
         last_error=_error(message.last_error) if message.HasField("last_error") else None,
     )
 
@@ -374,6 +397,7 @@ def state_to_json(state: AppState) -> dict[str, Any]:
                 "timestamp_ns": str(state.task.last_effective_frame.timestamp_ns),
             },
         },
+        "exo": {**vars(state.exo), "last_commanded": dict(state.exo.last_commanded)},
         "last_error": err(state.last_error),
     }
 

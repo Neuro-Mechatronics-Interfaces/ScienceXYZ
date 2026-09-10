@@ -12,13 +12,16 @@ instructions before rebuilding/reinstalling or preparing a new recording.
 
 The operator's libusb build failure was reproduced as missing `aclocal`;
 Docker now installs `automake`, and the complete renamed ARM64 App links with
-the pinned vcpkg libusb. Deployment and App-process USB access remain unverified.
+the pinned vcpkg libusb. The operator subsequently deployed and ran the App;
+`scifi-info.log` confirms root App identity, discovery of `2f5d:2202`, successful
+`libusb_open`, and setup completion (evidence supplied 2026-09-10).
 Operator USB notes report no CDC-ACM kernel support/tty for the OpenRB: successful
 libusb enumeration/open does not complete the Exo transport. T-52/T-53 remain
 gated on a supported, tested transport and independent physical-control checks.
 **T-57** owns fresh App-context USB access evidence and the supported OpenRB
-transport implementation; its first step is the operator's renamed App build
-and runtime diagnostic capture.
+transport implementation; the access gate passed under the observed permissions.
+Userspace primary-CDC transport and laptop bridge/GUI are now implemented and
+automatically tested. Next: operator probe/limits and supervised bench acceptance. No CDC transfer or motion acceptance follows from opening a handle.
 
 ## Long-term MCP, voice, and motor-unit integration (2026-09-10)
 
@@ -30,7 +33,7 @@ These are planned capabilities, not implemented or bench-accepted features. See 
 - [ ] **T-54:** Implement and validate online motor-unit decomposition in the loaded SciFi-2 `kApplication`; first establish suitable input bandwidth/rate and bounded compute budgets. Current `broadband_out` is decimated (T-46), not an assumed native raw input.
 - [ ] **T-55:** Add a versioned motor-unit database and read-only interval queries, dependent on T-54, with bounded on-device state and host archival. Answer sustained light index-flexion questions with detected-unit counts, explicit interval/quality/provenance, and unavailable results when evidence is insufficient.
 - [ ] **T-56:** Build an opt-in host voice assistant with configurable lightweight transcription/inference, restricted local MCP dispatch, host-held API credentials, export controls, and measured accuracy/latency/cost. Stage observation before motion; integrate T-52/T-53 and T-55 as they become accepted.
-- [ ] **T-57:** On-device exo link — hardware verification. The `kApplication` now carries an SDK-independent `ExoLinkWorker` (`src/exo_link.{hpp,cpp}`, `src/serial_port.{hpp,cpp}`) driven over the existing `control` tap by `set_exo_mode` (off/external/decode; default off) and `set_exo_pose`, with per-class `exo_class_poses` for decode mode and an `exo` section in the state snapshot. Covered only by the hardware-free `exo_link` unit test; no protobuf/SDK C++ compile or bench run has occurred locally. Remaining, operator-gated: (1) build the App in the SDK Docker image (`synapsectl apps build`) — this is the first real C++ compile of the proto/protocol/main.cpp changes; (2) with the OpenRB-150 plugged into the headstage USB, identify `exo_device_path` via the `ls /dev/tty*` with/without procedure in [`docs/exo-integration.md`](apps/scifi2-hub-manager/docs/exo-integration.md); (3) confirm `set_exo_mode:external` opens the link (`state.exo.link_open`, parsed firmware) and `set_exo_pose` moves the hand; (4) verify decode-mode drive and the watchdog return-to-neutral on hardware. Feeds T-52/T-53.
+- [ ] **T-57:** Validate the implemented laptop ? Synapse control Tap ? App USB CDC ? OpenRB command path on the bench. Userspace primary-CDC discovery, bounded transfers, reply routing, read-only connected mode/queries, asynchronous App dispatch and Python bridge are implemented. ARM64 SDK compile/link and hardware-free tests passed. Operator evidence 2026-09-10 confirms only setup enumeration/open, not command replies. Next: rebuild/deploy, start `rhd2132_with_exo.json`, run `client/exo_via_scifi.py probe` and `limits`; then explicit unloaded motion, watchdog, unplug/reconnect and acquisition-continuity acceptance. See [workflow](apps/scifi2-hub-manager/docs/exo-integration.md). T-52/T-53 remain separate runtime-MCP/safety work.
 
 Existing **T-48** (classifier diagnostics), **T-49** (device identity), and **T-50** (MCP registration/setup) remain canonical and are not replaced. MCP setup/test guidance is now in CONTRIBUTING; T-50 still needs operator registration/launch verification. Acquisition, synchronization, and physical recording acceptance remain with T-22/T-26/T-34 and related existing tasks.
 
