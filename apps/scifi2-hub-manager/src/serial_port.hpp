@@ -41,6 +41,20 @@ class SerialPort {
 
   // Last error string, empty when none.
   virtual const std::string& error() const = 0;
+
+  // Advance to the next candidate physical channel, when the port has more than
+  // one (e.g. a dual-CDC device whose command interface the host cannot know
+  // ahead of time). The worker calls this after a claimed-but-unresponsive
+  // channel so a subsequent open() targets a different one. Returns true if a
+  // next candidate exists (the caller should close(), open(), and retry the
+  // handshake), false when the candidates are exhausted. Default: single-channel
+  // ports have no alternate, so this is always false.
+  virtual bool select_next_candidate() { return false; }
+
+  // Reset candidate selection back to the first channel, so a fresh connect
+  // attempt re-tries every candidate from the start rather than continuing from
+  // wherever a previous failed attempt left off. No-op for single-channel ports.
+  virtual void reset_candidate() {}
 };
 
 // Factory for the platform serial port. On POSIX this opens a termios raw-mode

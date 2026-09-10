@@ -54,8 +54,10 @@ namespace {
 class UsbCdcPort final : public SerialPort {
  public:
   UsbCdcPort(UsbCdcConfig config, std::unique_ptr<UsbBackend> backend)
-      : config_(std::move(config)), backend_(std::move(backend)),
-        name_("libusb CDC control=" + std::to_string(config_.control_interface)) {}
+      : config_(std::move(config)), backend_(std::move(backend)) {
+    if (config_.control_interfaces.empty()) config_.control_interfaces = {0};
+    name_ = "libusb CDC control=" + std::to_string(current_control());
+  }
   ~UsbCdcPort() override { close(); }
   bool open() override {
     if (open_) return true;
@@ -65,7 +67,7 @@ class UsbCdcPort final : public SerialPort {
     }
     std::vector<UsbInterface> interfaces;
     if (!backend_->open(config_, interfaces, error_)) { backend_->close(); return false; }
-    if (!select_cdc_endpoints(interfaces, config_.control_interface, endpoints_, error_)) {
+    if (!select_cdc_endpoints(interfaces, current_control(), endpoints_, error_)) {
       close(); return false;
     }
     for (int iface : {endpoints_.control, endpoints_.data}) {
@@ -140,12 +142,38 @@ class UsbCdcPort final : public SerialPort {
   }
   const std::string& name() const override { return name_; }
   const std::string& error() const override { return error_; }
+  bool select_next_candidate() override {
+    // Advance to the next CDC-ACM control interface, if any remains. The caller
+    // (worker) uses this after a claimed-but-unresponsive channel: the OpenRB
+    // exposes two CDCs and the firmware's command channel is not identifiable
+    // from descriptors, so we try each until one answers the handshake.
+    if (candidate_index_ + 1 >= config_.control_interfaces.size()) return false;
+    if (open_) close();
+    ++candidate_index_;
+    name_ = "libusb CDC control=" + std::to_string(current_control());
+    return true;
+  }
+  void reset_candidate() override {
+    // Start the next connect from the first candidate. Without this, a previous
+    // failed connect leaves candidate_index_ at the last interface, so a
+    // reconnect would only ever try that one -- the "worked once, never
+    // reconnects" failure. Reopen from a clean slate every attempt.
+    if (candidate_index_ != 0) {
+      if (open_) close();
+      candidate_index_ = 0;
+      name_ = "libusb CDC control=" + std::to_string(current_control());
+    }
+  }
  private:
+  int current_control() const {
+    return config_.control_interfaces.empty() ? 0 : config_.control_interfaces[candidate_index_];
+  }
   void fail(const std::string& operation, int rc) { error_ = operation + ": " + backend_->describe(rc); close(); }
   UsbCdcConfig config_;
   std::unique_ptr<UsbBackend> backend_;
   CdcEndpoints endpoints_;
   std::vector<int> claimed_;
+  std::size_t candidate_index_ = 0;
   bool open_ = false, dtr_ = false;
   std::string name_, error_, pending_;
 };

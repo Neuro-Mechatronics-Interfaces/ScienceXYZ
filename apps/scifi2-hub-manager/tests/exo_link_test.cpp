@@ -39,6 +39,7 @@ class FakeSerialPort : public SerialPort {
  public:
   bool suppress_route = false;
   bool suppress_pose = false;
+  int route_acks_to_skip = 0;  // drop the first N reply-route ACKs (DTR-race sim)
   explicit FakeSerialPort(std::string firmware) : firmware_(std::move(firmware)) {}
 
   bool open() override {
@@ -89,6 +90,21 @@ class FakeSerialPort : public SerialPort {
   const std::string& name() const override { return name_; }
   const std::string& error() const override { return error_; }
 
+  // Model a multi-CDC device: candidates_ interfaces, only answer_candidate_ is
+  // the real command channel. select_next_candidate advances; the current one is
+  // "responsive" only when it equals answer_candidate_.
+  int candidates = 1;
+  int answer_candidate = 0;
+  bool select_next_candidate() override {
+    if (candidate_ + 1 >= candidates) return false;
+    if (open_) close();
+    ++candidate_;
+    return true;
+  }
+  void reset_candidate() override {
+    if (candidate_ != 0) { if (open_) close(); candidate_ = 0; }
+  }
+
   std::vector<std::string> sent() {
     std::lock_guard<std::mutex> lock(mutex_);
     return sent_;
@@ -97,7 +113,15 @@ class FakeSerialPort : public SerialPort {
  private:
   std::string reply_for(const std::string& command) {
     const auto head = command.substr(0, command.find(':'));
-    if (command == "set_reply_route:cmd") return suppress_route ? "" : "OK: reply_route cmd;";
+    if (head == "set_reply_route") {
+      // Firmware echoes the requested route; the App requests :both so replies
+      // reach whichever CDC it claimed (enumeration-order-independent).
+      // Only the "real" command channel answers: a wrong candidate is silent.
+      if (candidate_ != answer_candidate) return "";
+      if (route_acks_to_skip > 0) { --route_acks_to_skip; return ""; }
+      const auto route = command.substr(command.find(':') + 1);
+      return suppress_route ? "" : "OK: reply_route " + route + ";";
+    }
     if (command == "check_limits") return "Limit check:\nMotor 1: OK;";
     if (head == "version") return "Exo Device Version: " + firmware_ + ";";
     if (head == "set_finger_angles") return suppress_pose ? "" : "OK: finger_angles " + command + ";";
@@ -112,6 +136,7 @@ class FakeSerialPort : public SerialPort {
   std::string name_ = "FAKE";
   std::string error_;
   std::atomic<bool> open_{false};
+  std::atomic<int> candidate_{0};
   std::mutex mutex_;
   std::string buffer_;
   std::string pending_;
@@ -159,6 +184,7 @@ ExoLinkConfig test_config() {
   ExoLinkConfig config;
   config.watchdog_ms = 0;  // deterministic unless a test opts in.
   config.reply_timeout_ms = 500;
+  config.open_settle_ms = 0;  // no real DTR to wait on; keep tests fast.
   return config;
 }
 
@@ -173,6 +199,10 @@ void test_connect_reports_firmware() {
   expect(status.firmware_ok, "firmware 0.6.4 is accepted");
   expect(status.firmware.find("0.6.4") != std::string::npos, "firmware string parsed");
   expect(sent_contains(raw->sent(), "version"), "version was queried");
+  // The connect handshake requests reply_route:both so replies reach whichever
+  // CDC the App claimed, independent of the firmware's CDC enumeration order.
+  expect(sent_contains(raw->sent(), "set_reply_route:both"), "reply route set to both");
+  expect(!sent_contains(raw->sent(), "set_reply_route:cmd"), "does not request cmd-only route");
   worker.stop();
 }
 
@@ -283,12 +313,87 @@ void test_missing_reply_closes_without_replay() {
 
 void test_missing_route_ack_never_arms() {
   ExoLinkConfig config; config.reply_timeout_ms = 20;
+  config.open_settle_ms = 0; config.connect_handshake_attempts = 2;
   auto port = std::make_unique<FakeSerialPort>("0.6.4");
   auto* raw = port.get(); raw->suppress_route = true;
   ExoLinkWorker worker(config, std::move(port));
   expect(!worker.connect(), "route acknowledgement required");
   expect(!worker.snapshot().link_open, "failed handshake closed");
   expect(!sent_contains(raw->sent(), "enable:all"), "probe cannot enable");
+  // Every handshake attempt was actually made before giving up.
+  int route_sends = 0;
+  for (const auto& line : raw->sent()) if (line == "set_reply_route:both") ++route_sends;
+  expect(route_sends == 2, "handshake retried the configured number of attempts");
+}
+
+// The handshake is retried, so a first reply lost to a DTR race / stale banner
+// still connects on a later attempt.
+void test_route_handshake_retries_then_connects() {
+  ExoLinkConfig config = test_config();
+  config.connect_handshake_attempts = 3;
+  auto port = std::make_unique<FakeSerialPort>("0.6.4");
+  auto* raw = port.get();
+  raw->route_acks_to_skip = 1;  // drop the first ACK only.
+  ExoLinkWorker worker(config, std::move(port));
+  std::string error;
+  expect(worker.connect(&error), "connect succeeds after one dropped reply");
+  expect(worker.snapshot().link_open, "link open after retry");
+  worker.stop();
+}
+
+// A dual-CDC board whose command channel is the SECOND control interface: the
+// first candidate is silent, so the worker must advance and connect on the next.
+void test_connect_falls_back_to_second_cdc() {
+  ExoLinkConfig config = test_config();
+  config.reply_timeout_ms = 20;
+  config.connect_handshake_attempts = 2;  // exhaust attempts on candidate 0 fast
+  auto port = std::make_unique<FakeSerialPort>("0.6.4");
+  auto* raw = port.get();
+  raw->candidates = 2;        // two CDC control interfaces available
+  raw->answer_candidate = 1;  // only the second answers the handshake
+  ExoLinkWorker worker(config, std::move(port));
+  std::string error;
+  expect(worker.connect(&error), "connect succeeds on the second CDC candidate");
+  expect(worker.snapshot().link_open, "link open on fallback candidate");
+  expect(worker.snapshot().firmware_ok, "firmware read on fallback candidate");
+  worker.stop();
+}
+
+// When NO candidate answers, connect fails after trying them all.
+void test_connect_fails_when_no_cdc_answers() {
+  ExoLinkConfig config = test_config();
+  config.reply_timeout_ms = 20;
+  config.connect_handshake_attempts = 1;
+  auto port = std::make_unique<FakeSerialPort>("0.6.4");
+  auto* raw = port.get();
+  raw->candidates = 2;
+  raw->answer_candidate = 99;  // none answer
+  ExoLinkWorker worker(config, std::move(port));
+  expect(!worker.connect(), "connect fails when no CDC candidate answers");
+  expect(!worker.snapshot().link_open, "link closed when all candidates silent");
+}
+
+// The "connected once via fallback, then never reconnects" bug: after a connect
+// that fell back to candidate 1, disconnect, then reconnect must re-probe from
+// candidate 0 (reset_candidate) and succeed again -- not stay stuck on the last
+// candidate.
+void test_reconnect_reprobes_from_first_candidate() {
+  ExoLinkConfig config = test_config();
+  config.reply_timeout_ms = 20;
+  config.connect_handshake_attempts = 2;
+  auto port = std::make_unique<FakeSerialPort>("0.6.4");
+  auto* raw = port.get();
+  raw->candidates = 2;
+  raw->answer_candidate = 1;  // only candidate 1 answers -> first connect falls back
+  ExoLinkWorker worker(config, std::move(port));
+  expect(worker.connect(), "first connect succeeds via fallback candidate 1");
+  expect(worker.disconnect(), "disconnect");
+  expect(!worker.snapshot().link_open, "link closed after disconnect");
+  // Without reset_candidate the port would still be on candidate 1 and, since the
+  // real board's roles can flip, this second connect must start over from 0.
+  expect(worker.connect(), "reconnect succeeds (re-probes from candidate 0)");
+  expect(worker.snapshot().link_open, "link open after reconnect");
+  worker.stop();
 }
 
 void test_disconnect_disarms() {
@@ -317,6 +422,10 @@ int main() {
   test_disconnect_disarms();
   test_missing_reply_closes_without_replay();
   test_missing_route_ack_never_arms();
+  test_route_handshake_retries_then_connects();
+  test_connect_falls_back_to_second_cdc();
+  test_connect_fails_when_no_cdc_answers();
+  test_reconnect_reprobes_from_first_candidate();
   std::cout << "exo_link_test: all tests passed\n";
   return 0;
 }

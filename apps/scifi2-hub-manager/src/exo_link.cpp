@@ -4,6 +4,7 @@
 #include <chrono>
 #include <cctype>
 #include <sstream>
+#include <thread>
 #include <utility>
 
 namespace scifi2_hub::exo {
@@ -232,17 +233,51 @@ bool ExoLinkWorker::do_connect(std::string& error) {
     error = "no serial port";
     return false;
   }
-  if (!port_->open()) {
+  // Start every connect from the first CDC candidate. A previous failed connect
+  // leaves the port on its last-tried candidate; without this reset a reconnect
+  // would only ever probe that one interface (the "connected once, never
+  // reconnects" failure).
+  port_->reset_candidate();
+  // Reply-route handshake, tried on each candidate CDC command interface in turn.
+  //
+  // route:both (not :cmd): the App claims one CDC and reads replies only there,
+  // but which physical CDC is the firmware's command/reply channel is NOT
+  // knowable from the descriptors -- the firmware's two PluggableUSB CDCs
+  // (Serial / SerialTelem) are globals with no defined init order (its
+  // DUAL_CDC_SWAP hazard). route:both mirrors replies to both firmware CDCs, so
+  // whichever the App claimed carries them; it also matches the App serial
+  // layer's single-node "defaults to reply_route:both" assumption and resets a
+  // board another host left decoupled. Sending it every connect keeps the ACK as
+  // a liveness/firmware-present check.
+  //
+  // Even with route:both, a claimed interface that is not one of the firmware's
+  // two CDC endpoints returns nothing, so if the handshake gets no reply the
+  // port advances to the next candidate control interface (0 then 2 on the
+  // OpenRB) and we retry. Within one interface the (side-effect-free) handshake
+  // is also retried, because a first reply can be lost to the DTR-assert race or
+  // a stale startup banner; each attempt settles, drains buffered bytes, and
+  // records what it saw in ExoStatus.last_error so a persistent failure is
+  // diagnosable from state.exo without a device journal.
+  bool handshaken = false;
+  bool opened = port_->open();
+  if (!opened) {
     error = port_->error().empty() ? "serial open failed" : port_->error();
-    set_status([&error](ExoStatus& s) {
-      s.link_open = false;
-      s.last_error = error;
-    });
+    set_status([&error](ExoStatus& s) { s.link_open = false; s.last_error = error; });
     return false;
   }
-  read_buffer_.clear();
-  // Switch even a previously TELEM-only board back to the claimed primary CDC.
-  if (!send_command("set_reply_route:cmd", "OK: reply_route cmd", error)) {
+  for (;;) {
+    if (handshake_reply_route(error)) { handshaken = true; break; }
+    set_status([&error](ExoStatus& s) { s.last_error = error; });
+    // send_command / the last attempt closed the port; try the next CDC.
+    if (!port_->select_next_candidate()) break;  // candidates exhausted
+    if (!port_->open()) {
+      error = "next CDC candidate open failed: " +
+              (port_->error().empty() ? std::string("unknown") : port_->error());
+      set_status([&error](ExoStatus& s) { s.link_open = false; s.last_error = error; });
+      break;
+    }
+  }
+  if (!handshaken) {
     port_->close();
     return false;
   }
@@ -441,6 +476,50 @@ std::optional<std::string> ExoLinkWorker::read_until(const std::string& needle, 
     if (read_buffer_.size() + chunk.size() > 16384) { port_->close(); read_buffer_.clear(); return std::nullopt; }
     if (!chunk.empty()) read_buffer_ += chunk;
   }
+}
+
+std::string ExoLinkWorker::drain_rx(int timeout_ms) {
+  std::string seen;
+  const auto deadline = Clock::now() + std::chrono::milliseconds(std::max(0, timeout_ms));
+  while (Clock::now() < deadline && port_ && port_->is_open()) {
+    const int remaining =
+        static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                             deadline - Clock::now())
+                             .count());
+    const std::string chunk = port_->read(256, std::min(std::max(1, remaining), 50));
+    if (!port_->is_open() || !port_->error().empty()) break;
+    if (chunk.empty()) continue;
+    if (seen.size() < 512) seen += chunk;  // bounded diagnostic capture
+  }
+  return seen;
+}
+
+bool ExoLinkWorker::handshake_reply_route(std::string& error) {
+  const int attempts = std::max(1, config_.connect_handshake_attempts);
+  const std::string name = port_ ? port_->name() : "port";
+  for (int attempt = 1; attempt <= attempts; ++attempt) {
+    if (!port_ || !port_->is_open()) {
+      if (!port_ || !port_->open()) {
+        error = "reply_route on " + name + ": reopen failed";
+        return false;
+      }
+    }
+    // Settle after the DTR assert in open(), then clear any stale bytes so a
+    // leftover partial frame cannot mask the ACK.
+    if (config_.open_settle_ms > 0)
+      std::this_thread::sleep_for(std::chrono::milliseconds(config_.open_settle_ms));
+    const std::string drained = drain_rx(config_.open_settle_ms > 0 ? config_.open_settle_ms : 50);
+    read_buffer_.clear();
+    std::string attempt_error;
+    if (send_command("set_reply_route:both", "OK: reply_route both", attempt_error))
+      return true;
+    // send_command closed the port on failure.
+    error = "reply_route on " + name + " attempt " + std::to_string(attempt) + "/" +
+            std::to_string(attempts) + ": " + attempt_error +
+            (drained.empty() ? " (no bytes seen before write)"
+                             : " (pre-write bytes: " + drained + ")");
+  }
+  return false;
 }
 
 bool ExoLinkWorker::query_firmware(std::string& firmware, bool& firmware_ok, std::string& error) {

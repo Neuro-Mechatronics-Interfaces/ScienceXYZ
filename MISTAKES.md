@@ -1,5 +1,206 @@
 # Mistakes
 
+### 2026-09-10 - Exo probe/limits/angles all failed identically: no reply_route ACK
+
+**Attempt:** First bench run of the wireless Exo path (exo-integration.md): App
+built/deployed, device started with `rhd2132_with_exo.json`, `run_service.py`
+started, then `exo_via_scifi.py probe|limits|angles > exo-*.log`.
+
+**Failure:** All three logs were byte-identical (1143 B). Each raised
+`RemoteCommandError: no 'OK: reply_route cmd' ack for set_reply_route:cmd;
+outcome unknown; link closed` on the FIRST step, `set_exo_mode connected`. The
+`probe`/`limits`/`angles`-specific `query_exo` was never reached; the only
+`succeeded` line in each log is the `set_exo_mode off` the script's `finally`
+runs during cleanup.
+
+**Cause (reconciled against firmware + USB notes; not yet bench-confirmed):**
+Not a host-client or config bug. The device App's `exo_link.cpp do_connect()`
+opened/claimed the USB CDC pair (interface 0) but got no `OK: reply_route cmd`
+reply to `set_reply_route:cmd` within the 1500 ms budget, so it closed the link
+(exo_link.cpp:245, send_command/read_until). The `run_service.py` path is
+correct for this architecture (it drives the on-device App over the Synapse
+Tap; `run_exo_service.py` is the *separate* laptop-attached-exo path and was not
+in play). The firmware on branch `feat/set_finger_angles` DOES implement
+`set_reply_route` and acks the exact string `OK: reply_route cmd` framed with
+`;` (utils.cpp:1066-1084, COMMAND_DELIMITER=";"), and command parsing/framing
+match the App (`getArg` splits on ':', LineReader needs '\n', App sends
+"...\r\n"). So on a correctly-flashed dual-CDC OpenRB the handshake should
+succeed. The two remaining device-side causes, both producing this exact
+timeout, are: (1) the OpenRB is flashed with firmware OLDER than this branch
+(no `set_reply_route`); an unknown command is answered only by `debugPrint`
+(silent unless VERBOSE) with no `ERROR:` (utils.cpp:1712), so the App times out;
+(2) USB enumeration assigned `SerialTelem` to interface 0 (the documented
+"static-init order surprise", config.h:85-91) so the ACK, routed to CMD_SERIAL
+after route=cmd, lands on the physical interface the App does not read
+(the firmware needs `DUAL_CDC_SWAP`).
+
+**Correction:** Diagnosis recorded; no code change to the handshake. Decisive
+next bench step (operator, not agent): confirm the OpenRB firmware version and
+that a direct serial `set_reply_route:cmd` returns `OK: reply_route cmd;` on the
+lower COM port. See T-57 / handoff for the exact checks. Also clarified
+exo-integration.md (run_service.py vs run_exo_service.py; this failure mode).
+
+**Candidate rule:** When every variant of a multi-step device command fails
+identically, read the log for WHICH step fails before theorising per-variant;
+here all three share the `set_exo_mode connected` handshake. For a request/reply
+serial protocol, a silent unknown-command path on the device (no negative ACK)
+is indistinguishable at the host from a wiring/route fault -- verify the device
+firmware version and reply routing directly before suspecting the host client.
+
+**Resolution (2026-09-10, bench):** Operator confirmed Exo Version 0.7.1 (so the
+firmware DOES implement `set_reply_route`; hypothesis 1 ruled out) and that the
+board's COM ports came up swapped (COM11 not COM10) -- the CDC enumeration-order
+swap of hypothesis 2. The OpenRB's two USB CDCs (`Serial`/`SerialTelem`) are C++
+globals with no defined init order, so which one is USB interface 0 is not
+guaranteed. The App always claims interface 0 and read replies only there; the
+old `set_reply_route:cmd` routed replies to `CMD_SERIAL` only, which on the
+swapped board was the interface the App had not claimed, so the ACK (and every
+later current-limit/home/pose ACK) was missed. Fixed order-independently on the
+host: `exo_link.cpp do_connect` now requests `set_reply_route:both` (matching
+`OK: reply_route both`), so replies mirror to both CDCs and reach whichever the
+App claimed -- no firmware `DUAL_CDC_SWAP`/reflash needed. This also matches the
+App serial layer's documented single-node "defaults to reply_route:both"
+assumption. Updated the fake in exo_link_test.cpp and added assertions that the
+handshake requests `both` and never `cmd`; the exo-link C++ suite passes. App
+rebuild/redeploy and a bench re-run of probe/limits/angles remain to confirm.
+**Candidate rule (added):** For a shared-bus device that exposes multiple
+interfaces with host-unpredictable enumeration order, do not pin the reply path
+to one interface the host must guess; request a broadcast/mirrored reply route
+so correctness does not depend on enumeration order.
+
+**Follow-up (2026-09-10, same bench):** With reply_route:both deployed, the
+FIRST probe connected and read version, but the next connect (limits/angles, and
+gui-exo) still failed the handshake with `no 'OK: reply_route both' ack`, even on
+a fresh synapsectl start + fresh run_service.py. Ruled out: host port/relay (the
+cleanup `set_exo_mode off` returned succeeded, so the service reached the device)
+and config-not-loaded (the App journal `exo-startup.log` shows `exo link
+enabled: device=/dev/ttyACM0 baud=1000000` on every start, and the connect
+enumerated all four interfaces: iface0 class2/sub2, iface1 class10 -- the correct
+claimed pair -- before the ~1.5 s timeout). So interface selection is right and
+routing is `both`; the board simply returns no bytes on the claimed pipe for the
+first command after open. Consistent with an OpenRB/SAMD native CDC that gates TX
+on DTR and needs a brief settle after DTR assert, and/or a stale startup banner
+in the TX FIFO -- the first reply is lost. Fix (host, exo_link.cpp do_connect):
+(1) sleep open_settle_ms (default 300) after open before the first write; (2)
+retry the idempotent set_reply_route handshake up to connect_handshake_attempts
+(default 3), draining buffered bytes before each attempt and recording the seen
+pre-write bytes into state.exo.last_error for diagnosis. exo-link C++ suite
+passes incl a new retry-then-connect test. App rebuild/redeploy + bench re-run
+still pending to confirm the settle/retry actually clears it (and, if not, the
+captured pre-write bytes will say whether ANY reply arrives on the claimed CDC).
+**Candidate rule (added):** For a host-driven serial/CDC link, do not treat the
+first command after open as reliable -- settle after asserting DTR, drain stale
+bytes, and retry an idempotent handshake; and instrument the connect path to
+capture received bytes so a "no ack" is diagnosable without device-side logs.
+
+**Second follow-up (2026-09-10):** The settle+retry deployed and its diagnostic
+was decisive: the client showed `reply_route attempt 3/3: ... (no bytes seen
+before write)`. So the App's claimed CDC (interface 0) receives NOTHING from the
+board across all attempts -- not a DTR race (settle+drain didn't help) but the
+wrong interface: the firmware's command channel is the OTHER CDC. The OpenRB
+enumerates two CDC-ACM pairs (interfaces 0/1 and 2/3); the App had always claimed
+0, but `Serial`/`SerialTelem` init order put the command channel on 2. Even
+route:both can't help when the App writes to a CDC the firmware isn't bound to.
+Fix (host): the App now tries each CDC control interface in turn --
+UsbCdcConfig.control_interfaces default {0,2}; SerialPort gained an optional
+select_next_candidate(); UsbCdcPort rotates candidates; exo_link do_connect loops
+open->handshake->select_next_candidate until one answers OK: reply_route both.
+Fully enumeration-order-independent: the App discovers the command CDC instead of
+assuming interface 0. exo-link + usb-cdc C++ suites pass, incl new
+fall-back-to-second-CDC and no-candidate-answers tests. App rebuild/redeploy +
+bench re-run still pending.
+**Candidate rule (revised):** For a multi-interface device whose functional
+channel is not identifiable from descriptors (dual-CDC with host-unpredictable
+role assignment), the host must PROBE each candidate interface with the actual
+handshake and keep the responsive one -- neither pinning one interface nor a
+broadcast reply route is sufficient when the host may be claiming the wrong
+physical endpoint pair entirely.
+
+### 2026-09-10 - gui-exo motion button gating: two wrong theories, then command-driven
+
+After the CDC candidate-fallback fix, gui-exo's `set_exo_mode connected` finally
+succeeded on every click, but the "Enable + send 250 ms test" button never became
+clickable when the motion checkbox was ticked.
+
+Attempt 1 (WRONG): the gate was `self.link_open = value.connected and
+exo.link_open`, where `AppState.connected` is the NEURAL pipeline state
+(`pipeline_state not in {disconnected, unspecified}`), unrelated to the exo. I
+changed it to `exo.configured and exo.link_open` and asserted it fixed the
+problem -- WITHOUT checking the operator's log, which showed the live broadcast
+`state.exo` as `{"configured": false, "link_open": false}` even right after a
+`succeeded` set_exo_mode. So gating on `exo.configured` guaranteed the button
+stayed disabled: strictly worse. Lesson: I claimed a fix worked without
+reconciling it against evidence already in the conversation.
+
+Attempt 2 (CORRECT): the broadcast `state.exo` is unreliable/stale on this bench
+(configured/link_open not reflecting a just-succeeded command), so gating on it
+at all is wrong. Made link readiness COMMAND-DRIVEN: `submit(work, op=...)` posts
+`("op", (op, ok, detail))`; drain_events sets `link_open=True` on a succeeded
+`connect`, `False` on `off` or a failed op whose detail says "link closed"/
+"outcome unknown". State is now display-only. Tests assert a stale
+`configured:false` broadcast does NOT drive the link and a succeeded connect op
+does. Client-only change (reinstall/relaunch; no App redeploy). Candidate rule:
+when a device's broadcast state proves laggy/inconsistent with its own command
+acks, gate UI on the authoritative command results, not the state stream -- and
+never claim a UI fix works without checking it against the actual reported state.
+(Open, separate: WHY the device broadcasts exo.configured=false while
+set_exo_mode succeeds -- configured is set straight from cfg_.exo_enabled which
+exo-startup.log proves true; likely a stale/initial snapshot or a
+fill_exo_status/publish timing bug. Affects exo_via_scifi's printed snapshot too.
+Not yet diagnosed.)
+
+### 2026-09-10 - Exo candidate index not reset: connected once, never reconnected
+
+Operator: connected to the OpenRB once (even saw the Arduino startup banner), but
+after cycling synapsectl stop -> start -> Connect, could never reconnect. Cause
+(host-side, at least in part): the CDC candidate-fallback loop's
+UsbCdcPort::select_next_candidate() only advances forward and nothing reset it.
+When a connect fell back to candidate 1 (interface 2) to succeed, or exhausted
+{0,2} on a failure, candidate_index_ was left at the last interface. The next
+do_connect's port_->open() then used current_control() = that leftover candidate
+and the loop's select_next_candidate() immediately returned false, so a reconnect
+only ever probed ONE interface -- and if the board's CDC role assignment differed
+on the new App instance, that one was wrong. Fix: added SerialPort::reset_candidate()
+(no-op default; UsbCdcPort resets candidate_index_ to 0 and reopens), called at the
+top of ExoLinkWorker::do_connect so every connect re-probes all candidates from the
+start. Regression test test_reconnect_reprobes_from_first_candidate: connect via
+fallback candidate 1, disconnect, reconnect must succeed re-probing from 0.
+CAVEAT: this fixes the host's index-stuck bug, but the operator's symptom may ALSO
+involve board-side wedging (an abrupt synapsectl stop kills the App with the link
+open, leaving DTR asserted / the interface not cleanly released; a SAMD CDC can
+need a physical replug to recover). The failed-Connect detail distinguishes them:
+'no bytes seen' on both candidates = board not answering; 'claim ... BUSY' = stale
+claim; 'open failed'/'no matching USB device' = dropped off the bus. Candidate rule:
+any "try candidates in order" selector must be RESET at the start of each fresh
+attempt, or a prior failure silently pins all future attempts to the last candidate.
+
+### 2026-09-10 - gui-exo hung on close after synapsectl stop
+
+Closing gui-exo after a successful disarm + `synapsectl stop` hung: the window
+would not shut. Cause: closeEvent's cleanup unconditionally called
+`self.controller.set_exo_mode("off")`, a blocking device round-trip. After
+`synapsectl stop` the App is gone but the ZMQ PUB/SUB transport does not detect
+the dead peer, so the call blocked (no reply, no prompt error), the
+`("closed")`/`cleanup_error` event never posted, and `self.closing` stayed True
+making every further close a no-op. Fix: (1) only command the device on close
+when `self.link_open` is believed true (skip it after off/stop); (2) always run
+the bounded `disconnect()` regardless; (3) post a single `cleanup_done` that
+closes the window (warning if disarm failed) instead of trapping it open; (4) a
+second close forces the window shut; (5) an 8 s fallback QTimer closes anyway if
+cleanup hangs. Regression tests: close still closes on a failed disarm, and
+close skips set_exo_mode entirely when link_open is False. Candidate rule: a GUI
+close path must never block on an unbounded device call -- gate the call on
+believed-live state, bound it, and always provide a force-close escape.
+
+Follow-up enforcement: the SAME clean-teardown-before-the-App-dies principle now
+gates the **Run: stop device** button, not just window close. When the link is
+open, stop first runs set_exo_mode("off") off-thread (bounded by the controller
+timeout), posts pre_stop_teardown, then launches synapsectl stop; when the link
+is already closed it stops immediately. So the operator can no longer kill the
+App with the exo link open via the GUI. Tests: stop disarms first then stops;
+stop skips the disarm when the link is closed. The doc also tells operators
+running synapsectl stop by hand to disarm first.
+
 ### 2026-09-10 - libusb dependency build requires automake
 
 The operator's clean App build failed in Docker while building libusb 1.0.27:

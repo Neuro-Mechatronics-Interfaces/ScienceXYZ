@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nml-science-xyz"
-version = "0.4.0"
+version = "0.4.3"
 description = "Headless controller, loopback service, calibration client, and PySide6 dashboard"
 requires-python = ">=3.13"
 dependencies = [

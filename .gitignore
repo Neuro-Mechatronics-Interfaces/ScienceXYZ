@@ -133,7 +133,6 @@ Desktop.ini
 .local
 .env
 
-scifi-errors.log
-scifi-info.log
+*.log
 
 vendor/axon-peripheral-example/nml-diag-report.txt

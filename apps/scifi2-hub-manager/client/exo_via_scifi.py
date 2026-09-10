@@ -10,7 +10,7 @@ from scifi2_hub_manager.client import NdjsonClient
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=["probe", "angles", "limits", "move", "off"])
-    parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument("--port", type=int, default=18765)
     parser.add_argument("--joint", choices=["thumb", "index", "middle", "ring", "pinky", "wrist"], default="index")
     parser.add_argument("--value", type=int, default=10)
     parser.add_argument("--allow-motion", action="store_true")

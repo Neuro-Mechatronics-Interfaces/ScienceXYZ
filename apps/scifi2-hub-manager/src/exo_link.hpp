@@ -75,6 +75,15 @@ struct ExoLinkConfig {
   // Reply wait budget for a command that expects an acknowledgement.
   int reply_timeout_ms = 1500;
   std::string line_terminator = "\r\n";
+  // After opening the CDC (DTR asserted), wait this long before the first write.
+  // An OpenRB/SAMD CDC gates TX on DTR and needs a brief moment before it will
+  // answer; writing immediately loses the first reply. 0 disables the settle.
+  int open_settle_ms = 300;
+  // The reply-route handshake is idempotent and has no motor side effect, so a
+  // lost first reply (DTR race, or a stale startup banner still draining) is
+  // retried up to this many total attempts before the connect fails. Each retry
+  // drains any buffered bytes first. 1 disables retrying.
+  int connect_handshake_attempts = 3;
 };
 
 // Immutable-ish status the worker publishes to the App on every change. Copied
@@ -156,6 +165,16 @@ class ExoLinkWorker {
                     std::string& error);
   // Read frames until one containing `needle` arrives or the timeout elapses.
   std::optional<std::string> read_until(const std::string& needle, int timeout_ms);
+  // Drain and return whatever bytes are already buffered on the link within
+  // `timeout_ms` (best effort). Used before a connect handshake to clear a stale
+  // startup banner and to record what the board emitted for diagnostics.
+  std::string drain_rx(int timeout_ms);
+  // Run the reply_route:both handshake on the currently-open port: settle after
+  // open, then up to connect_handshake_attempts of drain-then-send. Returns true
+  // once the ACK is seen; on false, `error` describes the last attempt (with the
+  // bytes seen) and the port has been closed. Reopens the same interface between
+  // in-interface attempts; the caller advances to a different CDC candidate.
+  bool handshake_reply_route(std::string& error);
   bool query_firmware(std::string& firmware, bool& firmware_ok, std::string& error);
 
   void set_status(const std::function<void(ExoStatus&)>& mutate);

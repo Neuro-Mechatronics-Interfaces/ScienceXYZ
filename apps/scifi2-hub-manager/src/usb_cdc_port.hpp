@@ -10,7 +10,14 @@ struct UsbCdcConfig {
   std::uint16_t vendor = 0x2f5d;
   std::uint16_t product = 0x2202;
   std::string serial;  // Empty permits exactly one matching device, never the first of many.
-  int control_interface = 0;  // Primary command CDC, verified from its Union descriptor.
+  // CDC-ACM control interfaces to try, in order, as the command channel. The
+  // OpenRB exposes two CDCs (interfaces 0 and 2) whose command/telemetry roles
+  // are assigned by unspecified firmware init order, so which one the firmware
+  // reads commands from and replies on is not knowable from the descriptors.
+  // open() claims the first entry; if its handshake gets no reply the worker
+  // calls select_next_candidate() to advance to the next. Each is still verified
+  // from its own Union descriptor. The first entry is tried first.
+  std::vector<int> control_interfaces{0, 2};
   unsigned int baud = 1000000;
   unsigned int timeout_ms = 500;
 };
