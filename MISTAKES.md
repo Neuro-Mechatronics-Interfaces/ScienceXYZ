@@ -814,3 +814,21 @@ Rewrote the guide with numbered WSL terminals, one setup/port convention, fresh
 recording names, expected readiness messages, separate terminal/browser routes,
 and an explicit App Running check. Latest info reports App Running False despite
 overall device Running; old July log output is not current failure evidence.
+
+### 2026-09-10 - science-mcp-install crashed on a float in an existing config.toml
+
+`science-mcp-install --scope both` raised `TypeError: unsupported TOML scalar:
+60.0` while writing the operator's user `~/.codex/config.toml`. Cause: the
+installer's dependency-free `_minimal_toml_dump` fallback (used when `tomli_w`
+was not installed) only handled str/int/bool, but the real config held float
+timeouts (`startup_timeout_sec = 60.0`, etc.) from other MCP servers. The crash
+happened before any write, so no config was corrupted, but the install failed.
+Two-part fix: (1) added `tomli-w>=1.0` as a hard dependency so a proper writer
+is always used; (2) hardened the fallback to emit floats and to REFUSE (with an
+actionable `pip install tomli-w` hint) rather than silently mangle a config it
+cannot round-trip (datetimes, arrays-of-tables). Regression tests cover a float
+scalar surviving the merge, the fallback's float handling, and the refuse path.
+Candidate rule: a config-merge tool must round-trip the file's existing values
+losslessly or fail loudly; never fall back to a writer that can only represent a
+subset of the format. Also: `$(which ...)` is POSIX syntax and fails in cmd.exe;
+document per-shell command forms for operator-run install tooling.

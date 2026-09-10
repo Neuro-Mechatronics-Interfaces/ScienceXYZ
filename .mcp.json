@@ -8,6 +8,14 @@
       "env": {
         "HANDOFF_MCP_PROJECT_ROOT": "C:\\MyRepos\\C\\ScienceXYZ"
       }
+    },
+    "science-mcp": {
+      "command": "science-mcp",
+      "args": [],
+      "env": {
+        "SCIENCE_MCP_REPO_ROOT": "C:\\MyRepos\\C\\ScienceXYZ",
+        "SCIENCE_MCP_SERVICE_PORT": "18765"
+      }
     }
   }
 }

@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "science-mcp"
+version = "0.1.0"
+description = "MCP toolkit for the SciFi-2 stateful-decode-and-sync kApplication: read-only device introspection, task/model diagnostics, and recording analysis"
+requires-python = ">=3.13"
+dependencies = [
+  # The MCP Python SDK. 2.x renamed FastMCP -> MCPServer; the server supports
+  # both. 1.2 is the floor for the decorator API used here.
+  "mcp>=1.2",
+  # The client library this toolkit wraps. Installed editable alongside it in a
+  # normal dev checkout; declared here so a standalone install still resolves it.
+  "nml-science-xyz",
+  # Proper TOML writer for the Codex config installer. Python's stdlib reads
+  # TOML (tomllib) but cannot write it; tomli-w round-trips floats/datetimes/
+  # arrays-of-tables that a real config.toml may already contain.
+  "tomli-w>=1.0",
+]
+
+[project.optional-dependencies]
+# Analysis tools (analyze_recording, HDF5 summaries) pull the recording extras
+# of the client. Kept optional so a control-plane-only install stays light.
+analysis = ["h5py>=3.12", "numpy"]
+test = ["pytest>=8,<9"]
+
+[project.scripts]
+# Launch the stdio MCP server (what an MCP client's `command` points at).
+science-mcp = "science_mcp.server:main"
+# Merge/upsert this server into user- and repo-scoped Codex and Claude configs.
+science-mcp-install = "science_mcp.config_installer:main"
+
+[tool.setuptools]
+package-dir = {"" = "."}
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["science_mcp*"]

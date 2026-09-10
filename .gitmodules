@@ -19,3 +19,6 @@
 [submodule "third_party/intan"]
 	path = third_party/intan
 	url = https://github.com/m053m716/Intan-RHX
+[submodule "third_party/exo"]
+	path = third_party/exo
+	url = https://github.com/Neuro-Mechatronics-Interfaces/NML_Hand_Exo.git

@@ -1,0 +1,7 @@
+[mcp_servers.science-mcp]
+command = "science-mcp"
+args = []
+
+[mcp_servers.science-mcp.env]
+SCIENCE_MCP_REPO_ROOT = "C:\\MyRepos\\C\\ScienceXYZ"
+SCIENCE_MCP_SERVICE_PORT = "18765"
