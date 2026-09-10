@@ -24,7 +24,7 @@ The install exposes these console scripts (equivalent to the `run_*.py` and tool
 | Command | Script | Purpose |
 | --- | --- | --- |
 | `stateful-decode-and-sync-gui` | `run_gui.py` | Control/state dashboard |
-| `stateful-decode-and-sync-waveform` | `run_waveform.py` | Live read-only waveform viewer |
+| `stateful-decode-and-sync-waveform` | `run_waveform.py` | Live waveform viewer (read-only tap; optional operator synapsectl panel) |
 | `stateful-decode-and-sync-service` | `run_service.py` | Localhost NDJSON loopback service |
 | `stateful-decode-and-sync-calibration` | `calibration_prompter.py` | Safe calibration prompter (via the service) |
 | `stateful-decode-and-sync-fake-demo` | `run_fake_demo.py` | Hardware-free controller smoke test |
@@ -73,7 +73,15 @@ The dashboard is a control and state view. It does not plot signal waveforms; us
 
 ### View streaming waveforms
 
-The waveform viewer subscribes read-only to the App's `broadband_out` producer tap and plots one live trace per channel, arranged in a grid you control. Each `BroadbandFrame` is one time sample across all channels, so the trace is the stream of `frame_data[channel]` values over a rolling time window. It sends no device command and can run at the same time as the dashboard.
+The waveform viewer subscribes read-only to the App's `broadband_out` producer tap and plots one live trace per channel, arranged in a grid you control. Each `BroadbandFrame` is one time sample across all channels, so the trace is the stream of `frame_data[channel]` values over a rolling time window. The tap read path issues no device command and can run at the same time as the dashboard.
+
+The top **Device** panel adds optional operator `synapsectl` controls (like the calibration GUI): **Copy start line**, **Run: start/stop device**, and **Run: fetch info** (reports whether the App shows Running: True). The `synapsectl` command and the `start` config path are editable fields, seedable from the CLI with `--synapsectl` and `--device-config` (an empty config restarts an already-configured device). Running `synapsectl` from this operator-launched GUI is permitted under the AGENTS.md Synapse CLI execution boundary scope — a human launches and watches it, the command is shown before it runs, and the path is configurable; it never runs from a test or an agent path.
+
+The window remembers its fields between launches in a per-user INI (`QSettings`, format `NML/WaveformViewer`; on Windows under `%APPDATA%/NML/WaveformViewer.ini`), written on close and reloaded on open, matching the calibration GUI. Persisted: device URI, config path, `synapsectl` command, grid columns, channel spec, full-scale, global and per-channel gains, timescale, and the sync-edges toggle. A field set explicitly on the command line this launch (e.g. `--device-ip`, `--columns`, `--timescale`) overrides the stored value; otherwise the stored value fills in, so a first run with no INI uses the built-in defaults.
+
+The status line reports three sample rates for `broadband_out`: the wire-declared `sample_rate_hz` from each frame, an observed rate estimated from the device timestamps, and (when a `--device-config` is loaded) the expected rate for the selected source. The expected rate is the source's config `sample_rate_hz` **divided by the App's decimation factor** (computed from the `kApplication` `frequency_bands_hz`/guard/window/stride the same way the C++ App does), so it matches the decimated tap; a >5% observed-vs-expected gap shows a ⚠.
+
+When `--device-config` points at a config with one or more `kBroadbandSource` nodes, a **Sources** tab strip lists them (by node id and peripheral id). Selecting a tab shows that source's expected channel metadata (count, types, source rate, and the decimated `broadband_out` rate) and drives the expected-rate comparison. All tabs currently read the single shared `broadband_out` tap; per-source taps are a future App change, so the strip documents each source's expected properties rather than switching between separate live streams. This makes the viewer extensible to multi-peripheral configs without hard-coding channel counts.
 
 ```bash
 stateful-decode-and-sync-waveform --device-ip "$DEV"
@@ -206,8 +214,11 @@ The prompter queries a state snapshot, then uses one atomic `prepare_capture(...
  snapshots on a `QTimer`; device I/O runs on worker threads.
 - The control dashboard changes targets only through the single atomic
  `prepare_capture` command and gates mutating controls while a request is pending.
-- The waveform viewer and `broadband_probe.py` / `listen_class.py` are strictly
- read-only producers: they open a tap, read, and disconnect; they issue no command.
+- `broadband_probe.py` / `listen_class.py` are strictly read-only producers: they
+ open a tap, read, and disconnect; they issue no command. The waveform viewer's
+ tap path is likewise read-only; its Device panel is the one exception, running
+ operator `synapsectl` start/stop/info under the AGENTS.md CLI boundary scope
+ (operator-launched, command shown, path configurable; never from tests/agents).
 - Raw source timestamps and sequence numbers are preserved end to end; nothing
  here substitutes a host receipt time for a source time.
 

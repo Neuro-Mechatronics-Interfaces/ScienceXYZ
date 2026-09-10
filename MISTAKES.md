@@ -4,6 +4,90 @@ This file records concrete mistakes encountered while working in this repository
 
 ## Entry Template
 
+### 2026-09-09 - Passive recorder crashed with QueueFull; per-frame HDF5 writes too slow
+
+First bench run of passive mode showed `asyncio.queues.QueueFull` in calibrate-gui
+and produced only a 16 kB data.hdf5. Cause: PassiveRecorder._drain_broadband
+handed broadband frames from the blocking tap thread to the async drainer via an
+`asyncio.Queue(maxsize=256)` using `loop.call_soon_threadsafe(queue.put_nowait,
+frame)`. `put_nowait` raises QueueFull the instant the queue is full, and it
+filled immediately because the drainer called `writer.append_broadband` once per
+frame -- one HDF5 resize+write per frame -- far slower than the tap delivers, so
+almost no broadband was written before the pump thread died. Two-part fix: (1)
+use a thread-safe `queue.Queue` with a BLOCKING `put`, so a full queue applies
+backpressure (the tap thread waits) instead of raising and dropping; the async
+side pulls via `asyncio.to_thread(q.get)`. (2) batch many frames (200) into one
+`append_broadband` and flush only every ~20 batches, so a high-rate stream is a
+few large writes rather than thousands of tiny resizes. A regression test now
+streams 1000 frames through the real BridgeSession and asserts every row lands
+in order with no QueueFull. Rule candidate: a producer feeding a bounded queue
+from a thread must block (backpressure) rather than put_nowait+drop, and per-item
+HDF5 resize/write does not keep up with a high-rate stream -- batch appends.
+
+### 2026-09-09 - Native Windows recorder build: two CMake/vcpkg blockers
+
+Building host/recording natively on Windows (so the Windows GUI/bridge can spawn
+task-recorder.exe) hit two distinct blockers. (1) Ninja generation: the VS2022
+*bundled* CMake 3.29.5-msvc4 emits a malformed C++20 module scan rule
+(`rule CXX_SCAN__recorder_synapse_$Config` with the literal `$Config`
+unexpanded), so `ninja` fails with `rules.ninja:23: expected newline, got lexing
+error`. The standalone CMake 4.3.3 at `C:\Program Files\CMake\bin\cmake.exe`
+expands it correctly (`..._Release`) and generates valid Ninja; the build script
+now prefers it. Setting `CMAKE_CXX_SCAN_FOR_MODULES=OFF` did NOT remove the rule
+on either CMake and was a red herring. (2) Compile: with vcpkg's dynamic
+protobuf 25.1 (`x64-windows`, which defines `PROTOBUF_USE_DLLS`), synapse-cpp
+sources that use protobuf maps (tap.cpp, device.cpp, spike_detector.cpp) fail
+with `map_field.h(682): error C2370: kVTable: redefinition; different storage
+class` -- a known protobuf-25/MSVC-DLL header issue. Candidate fix: build the
+deps with the `x64-windows-static` triplet (no PROTOBUF_USE_DLLS) and configure
+with `-DVCPKG_TARGET_TRIPLET=x64-windows-static`; not yet done. Note: passive
+mode does not need this recorder at all (the bridge reads broadband in Python),
+so the Cognescent workflow is unblocked regardless. Rule candidate: on Windows,
+prefer a standalone modern CMake over the VS-bundled one for Ninja C++20 builds,
+and prefer static vcpkg triplets for protobuf-heavy C++ to avoid the DLL
+map_field ABI break.
+
+### 2026-09-09 - "Connected but no data": Windows bridge cannot spawn the Linux-ELF recorder
+
+The Reactions page connected to the bridge and started/stopped recording, but no
+`raw.h5` appeared. First theory was a port-9999 collision between the recorder
+and the WebSocket; that was wrong. The recorder does not use port 9999 at all --
+the bridge spawns it as a subprocess pointed at the device *tap*
+(`--device <ip:port>`). The bridge journal (`browser-events.ndjson` in the
+`reactions-<uuid>` session folder) showed the actual cause: right after
+`recording_requested`, a `request_failed` with `[WinError 193] %1 is not a valid
+Win32 application`. The recorder at `build/raw-recorder/task-recorder` is a Linux
+ELF (built in WSL), but `calibrate-gui` / the bridge were running as Windows
+processes, so `asyncio.create_subprocess_exec` could not launch it (ELF is not a
+PE). No `raw.h5`/`recorder.log` was ever created because the subprocess never
+started. The browser then sent `enabled:false` ~145 ms later, consistent with a
+failed start. Diagnosis rule: the bridge journal is the source of truth --
+inspect `request_failed` records before theorising. Structural rule: the bridge,
+GUI, and C++ recorder must all run on the same OS; either run the whole host
+stack in WSL (where the ELF runs) or build a native Windows `task-recorder.exe`.
+The bridge's single-controller guard (code 1013) was also confirmed real -- a GUI
+stage-4 client and the browser compete for one slot -- so the GUI's manual
+recording panel is now hidden behind an advanced checkbox to avoid stealing it.
+
+### 2026-09-09 - Reactions bridge bound only IPv4, so the browser (localhost) could not connect
+
+The GUI console connected to the bridge fine (`ws://127.0.0.1:9999`), but the
+Reaction-Task page at chr.nml.wtf failed to open its WebSocket to the same
+port. Cause: `serve_bridge` bound only the literal IPv4 `"127.0.0.1"`, while the
+page's `CtrlrSocketClient.connect()` always dials `ws://localhost:<port>`. On
+this Windows host `localhost` resolves to IPv6 `::1` **before** `127.0.0.1`
+(verified: `socket.getaddrinfo('localhost', 9999)` returned `::1` first), so the
+browser hit `::1:9999` where nothing was listening and got connection-refused.
+The GUI's own client used the literal `127.0.0.1`, bypassing `localhost`
+resolution, which is why it worked and masked the problem. Corrected by binding
+both loopback families: `serve(handler, ["127.0.0.1", "::1"], port, ...)` (a host
+sequence is passed through to `loop.create_server`, which listens on each),
+staying loopback-only. Added tests/test_reactions_bridge_bind.py connecting over
+`127.0.0.1`, `[::1]` and `localhost`. Candidate rule: a loopback server a browser
+reaches by name must bind both `127.0.0.1` and `::1` (or resolve the name), never
+a single hard-coded IPv4 literal; "a client connected" is not proof the server is
+reachable by the name the browser actually uses.
+
 ### 2026-09-09 - calibrate-session two-pass flow could never reach pass two
 
 The documented calibration launcher workflow (README "Run a Calibration

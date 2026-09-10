@@ -2,8 +2,22 @@
 """Live read-only waveform viewer for the broadband_out producer tap."""
 
 import argparse
+import sys
 
 from stateful_decode_and_sync.waveform import run_waveform
+
+# CLI flag -> QSettings field key. A flag present in argv this launch means the
+# operator explicitly chose that value, so it overrides the stored one; absent
+# flags fall back to whatever the per-user INI holds.
+_FLAG_TO_SETTING = {
+    "--device-ip": "device_uri",
+    "--device-config": "device_config",
+    "--synapsectl": "synapsectl",
+    "--channels": "channels",
+    "--columns": "columns",
+    "--full-scale": "full_scale",
+    "--timescale": "timescale",
+}
 
 
 def main() -> None:
@@ -16,8 +30,11 @@ def main() -> None:
                         help="producer tap to plot")
     parser.add_argument("--duration", type=float, default=2.0,
                         help="seconds of history shown per trace (default: 2)")
-    parser.add_argument("--sample-rate", type=int, default=20000,
-                        help="expected upstream sample rate for the time axis and buffer size")
+    parser.add_argument("--sample-rate", type=int, default=2000,
+                        help="expected broadband_out sample rate (Hz) for the initial time "
+                             "axis and buffer size. Default 2000 matches the decimated "
+                             "broadband_out; the per-frame sample_rate_hz overrides it live. "
+                             "Use 20000 only for an undecimated (full-Nyquist) build.")
     parser.add_argument("--max-channels", type=int, default=32,
                         help="maximum channels the buffer retains (default: 32)")
     parser.add_argument("--columns", type=int, default=1,
@@ -31,7 +48,21 @@ def main() -> None:
     parser.add_argument("--timescale", type=float, default=0.0,
                         help="initial shared x-window in seconds (0 = full --duration). "
                              "Editable live in the Scale panel.")
+    parser.add_argument("--device-config", default="",
+                        help="device-config.json for the operator 'Run: start device' button "
+                             "(empty = restart an already-configured device). Editable in the "
+                             "Device panel.")
+    parser.add_argument("--synapsectl", default="synapsectl",
+                        help="command for the Device-panel synapsectl buttons (e.g. "
+                             "'wsl synapsectl' to reach a WSL install). Editable in the panel.")
     args = parser.parse_args()
+    # Which persisted fields the operator set explicitly this launch (so the CLI
+    # value wins over the stored INI value). A flag with either "--flag value" or
+    # "--flag=value" spelling counts.
+    explicit = {
+        key for flag, key in _FLAG_TO_SETTING.items()
+        if any(tok == flag or tok.startswith(flag + "=") for tok in sys.argv[1:])
+    }
     run_waveform(
         args.device_ip,
         duration_s=args.duration,
@@ -42,6 +73,9 @@ def main() -> None:
         tap_name=args.tap_name,
         y_full_scale=args.full_scale,
         timescale_s=args.timescale,
+        device_config=args.device_config,
+        synapsectl_command=args.synapsectl,
+        explicit_settings=explicit,
     )
 
 

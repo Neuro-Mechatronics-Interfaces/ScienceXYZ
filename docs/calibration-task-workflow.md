@@ -176,7 +176,9 @@ python apps/stateful-decode-and-sync/client/run_reactions_bridge.py \
   --origin "$REACTIONS_ORIGIN"
 ```
 
-Expected: **`Reactions bridge ws://127.0.0.1:9999; origins=...`**. Leave Terminal 3 running. At this point the bridge is waiting for Chrome; it has not started recording. Port **9999 is the browser WebSocket**, while **18765 is the bridge-to-control-service NDJSON connection**. They are different protocols.
+Expected: **`Reactions bridge ws://localhost:9999 (127.0.0.1 + ::1); origins=...`**. Leave Terminal 3 running. At this point the bridge is waiting for Chrome; it has not started recording. Port **9999 is the browser WebSocket**, while **18765 is the bridge-to-control-service NDJSON connection**. They are different protocols.
+
+The bridge binds **both** loopback families (`127.0.0.1` and `::1`) on purpose: the Reactions page's `connect()` always dials `ws://localhost:<port>`, and on Windows `localhost` commonly resolves to IPv6 `::1` before IPv4. Binding only `127.0.0.1` refused the browser's `::1` attempt even though a `127.0.0.1` client (e.g. the GUI console) connected — the classic "GUI connects but the browser can't". No action is needed; this note records why the bind is dual-family.
 
 This workflow supplies plain `ws://` for an HTTP local page. An HTTPS-hosted site requires checking its browser transport requirements and potentially a secure WebSocket endpoint; this guide does not provide one. Do not proceed assuming an HTTPS site can use this endpoint. The bridge is loopback-only with an exact-origin allowlist and one controlling connection. Windows Chrome must reach WSL localhost.
 

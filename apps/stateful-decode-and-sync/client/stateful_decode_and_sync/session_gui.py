@@ -116,10 +116,11 @@ class _AsyncClient:
 
 def create_session_window():
     """Create the calibration-session console window."""
-    from PySide6.QtCore import QProcess, QTimer
+    from PySide6.QtCore import QProcess, QSettings, QTimer
     from PySide6.QtWidgets import (
-        QFileDialog, QFormLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit,
-        QMainWindow, QPlainTextEdit, QPushButton, QVBoxLayout, QWidget,
+        QCheckBox, QFileDialog, QFormLayout, QGroupBox, QHBoxLayout, QLabel,
+        QLineEdit, QMainWindow, QPlainTextEdit, QPushButton, QSpinBox, QVBoxLayout,
+        QWidget,
     )
 
     class SessionWindow(QMainWindow):
@@ -136,12 +137,20 @@ def create_session_window():
             self.service: QProcess | None = None
             self.bridge: QProcess | None = None
             self.synapsectl_process: QProcess | None = None
+            self.device_started = False  # start succeeded -> the button offers stop
             self.client: _AsyncClient | None = None
             self.session_dir: Path | None = None
             self.app_running = False
             self.bridge_ready = False
             self.recording = False
+            # Persisted field defaults live in a per-user INI (QSettings). It is
+            # read here if present, so string fields (IPs, origin, paths) carry
+            # over between launches; absent keys keep the hard-coded defaults, so
+            # a first run is unchanged. INI format keeps the file human-readable.
+            self.settings = QSettings(QSettings.IniFormat, QSettings.UserScope,
+                                      "NML", "CalibrationSessionConsole")
             self._build_ui()
+            self._load_settings()
             self.timer = QTimer(self)
             self.timer.timeout.connect(self._drain_events)
             self.timer.start(50)
@@ -178,6 +187,19 @@ def create_session_window():
                 ("Recorder path", self.recorder), ("Service port", self.service_port),
                 ("Bridge port", self.bridge_port), ("synapsectl command", self.synapsectl)]:
                 form.addRow(label, widget)
+            self.passive_mode = QCheckBox(
+                "Passive mode: record broadband + host-clock browser annotations into a Cognescent "
+                "data.hdf5 (no C++ recorder, no device task round trip)")
+            form.addRow(self.passive_mode)
+            # Passive block counter: starting @block for the Cognescent folder name
+            # (<date>-<unix>-<shortid>v-<protocol>@<block>). Increments on each stop;
+            # reconciled to max(this, browser @N) on the 'session' stream.
+            self.block = QSpinBox()
+            self.block.setRange(1, 100000)
+            self.block.setValue(1)
+            self.block.setToolTip("Starting block index for passive recordings; increments on each stop "
+                                  "and is reconciled with the browser's block over the session stream.")
+            form.addRow("Block (passive)", self.block)
             self.generate_button = QPushButton("Generate / reuse session")
             self.generate_button.clicked.connect(self._generate)
             form.addRow(self.generate_button)
@@ -226,8 +248,19 @@ def create_session_window():
             v3.addWidget(self.hosts_label)
             layout.addWidget(box3)
 
-            # (4) recording + task control
-            box4 = QGroupBox("4. Recording and task control")
+            # (4) recording + task control -- an OPTIONAL manual test path,
+            # hidden by default. The normal flow is browser-driven: the Reactions
+            # page is the recording controller. The bridge admits ONE controller
+            # at a time (a second connection is refused with code 1013), so a GUI
+            # client here would take that single slot and block the browser.
+            self.show_manual = QCheckBox(
+                "Show manual recording test (advanced) - competes with the browser for the "
+                "bridge's single controller slot; leave off for browser-driven runs")
+            self.show_manual.toggled.connect(self._toggle_manual_panel)
+            layout.addWidget(self.show_manual)
+
+            box4 = QGroupBox("4. Recording and task control (manual test)")
+            self.manual_panel = box4
             v4 = QVBoxLayout(box4)
             self.connect_button = QPushButton("Connect to bridge")
             self.connect_button.clicked.connect(self._connect_bridge)
@@ -247,6 +280,7 @@ def create_session_window():
             v4.addLayout(row4b)
             v4.addWidget(self.record_label)
             layout.addWidget(box4)
+            box4.setHidden(True)  # revealed only by the advanced checkbox
 
             # log pane
             self.log = QPlainTextEdit()
@@ -274,7 +308,9 @@ def create_session_window():
                 output_root=self.output_root.text().strip(),
                 service_port=int(self.service_port.text()),
                 bridge_port=int(self.bridge_port.text()),
-                origin=self._origins())
+                origin=self._origins(),
+                passive=self.passive_mode.isChecked(),
+                block=self.block.value())
 
         def _refresh_enabled(self) -> None:
             generated = self.session_dir is not None
@@ -333,6 +369,13 @@ def create_session_window():
             if self.app_running:
                 self.gate_label.setText(f"App Running gate: PASSED ({source})")
                 self._log(f"info shows {launcher._APP_NAME} Running: True -- host launch enabled")
+                # The App is already Running (e.g. the device was left started with
+                # the right config), so the device IS started: the button offers
+                # stop, matching a start we would have driven ourselves.
+                if not self.device_started:
+                    self.device_started = True
+                    self.run_start_button.setText("Run: stop device")
+                    self._log("device already Running per info -- 'Run: start device' now offers stop")
             else:
                 self.gate_label.setText(f"App Running gate: FAILED ({source})")
                 self._log(f"info does NOT show {launcher._APP_NAME} Running: True -- resolve the device App start")
@@ -370,8 +413,14 @@ def create_session_window():
             process.start()
 
         def _run_start_device(self) -> None:
-            config = self.session_dir / "device-config.json"
-            self._run_synapsectl(["start", str(config)], None, "start")
+            # Toggles: after a successful start this button offers stop, sending
+            # `synapsectl -u <uri> stop` to the same device (device-level stop,
+            # the analogue of the argumentless start form).
+            if self.device_started:
+                self._run_synapsectl(["stop"], None, "stop")
+            else:
+                config = self.session_dir / "device-config.json"
+                self._run_synapsectl(["start", str(config)], None, "start")
 
         def _run_fetch_info(self) -> None:
             capture = self.session_dir / "info.txt"
@@ -421,6 +470,18 @@ def create_session_window():
             self._refresh_enabled()
 
         # -- (4) recording + task via the bridge WebSocket -------------------
+        def _toggle_manual_panel(self, shown: bool) -> None:
+            self.manual_panel.setHidden(not shown)
+            if not shown and self.client is not None:
+                # Hiding the panel releases the bridge's single controller slot so
+                # the browser can take it; a lingering GUI client would block it.
+                self._log("hiding manual test: disconnecting the GUI's bridge client")
+                self.client.close()
+                self.client = None
+                self.recording = False
+                self.record_button.setText("Start recording")
+                self._refresh_enabled()
+
         def _connect_bridge(self) -> None:
             origins = self._origins()
             if not origins:
@@ -491,6 +552,18 @@ def create_session_window():
                         except OSError as error:
                             self._log(f"could not save info capture: {error}")
                         self._apply_gate(output, "synapsectl info")
+                    elif label == "start" and code == 0:
+                        self.device_started = True
+                        self.run_start_button.setText("Run: stop device")
+                        self._log("device start succeeded -- this button now stops the device")
+                    elif label == "stop" and code == 0:
+                        self.device_started = False
+                        self.run_start_button.setText("Run: start device")
+                        # The App is no longer running; the stale gate must not
+                        # keep the host-launch path enabled.
+                        self.app_running = False
+                        self.gate_label.setText("App Running gate: device stopped")
+                        self._log("device stop succeeded -- re-run start + info to record again")
                     self._refresh_enabled()
                 elif kind == "ws_connected":
                     self._log(f"connected to bridge at {payload}")
@@ -510,7 +583,32 @@ def create_session_window():
                         self.record_label.setText("Recording: stopped")
                     self._refresh_enabled()
 
+        # -- persisted field defaults ----------------------------------------
+        def _persisted_fields(self):
+            """Stable settings-key -> QLineEdit map, shared by load and save."""
+            return {
+                "device_uri": self.device_uri, "device_tap": self.device_tap,
+                "origin": self.origin, "gestures": self.gestures,
+                "session_dir": self.session_input, "output_root": self.output_root,
+                "recorder": self.recorder, "service_port": self.service_port,
+                "bridge_port": self.bridge_port, "synapsectl": self.synapsectl,
+            }
+
+        def _load_settings(self) -> None:
+            for key, widget in self._persisted_fields().items():
+                stored = self.settings.value(f"fields/{key}")
+                # Only override the built-in default when a value was saved;
+                # QSettings returns None for an absent key.
+                if isinstance(stored, str) and stored:
+                    widget.setText(stored)
+
+        def _save_settings(self) -> None:
+            for key, widget in self._persisted_fields().items():
+                self.settings.setValue(f"fields/{key}", widget.text())
+            self.settings.sync()
+
         def closeEvent(self, event):  # noqa: N802 (Qt override)
+            self._save_settings()
             self._stop_hosts()
             super().closeEvent(event)
 

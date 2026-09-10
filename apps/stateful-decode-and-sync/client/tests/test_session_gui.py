@@ -14,6 +14,7 @@ from pathlib import Path
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 try:
+    from PySide6.QtCore import QSettings
     from PySide6.QtWidgets import QApplication
     import stateful_decode_and_sync.session_gui as sg
     _APP = QApplication.instance() or QApplication([])
@@ -75,12 +76,95 @@ class SessionGuiLogicTests(unittest.TestCase):
         window.synapsectl.setText("   ")
         self.assertEqual(window._synapsectl_argv("info")[0], "synapsectl")
 
+    def test_start_stop_button_toggles_on_success(self):
+        with tempfile.TemporaryDirectory() as temp:
+            session = Path(temp) / "session"
+            window = self._window()
+            window.session_input.setText(str(session))
+            window._generate()
+            self.assertEqual(window.run_start_button.text(), "Run: start device")
+            self.assertFalse(window.device_started)
+
+            # A successful start flips the button to offer stop.
+            window.synapsectl_process = object()
+            window.events.put(("synapsectl_done", ("start", 0, "ok\n", None)))
+            window._drain_events()
+            self.assertTrue(window.device_started)
+            self.assertEqual(window.run_start_button.text(), "Run: stop device")
+
+            # A successful stop flips it back and clears the App-Running gate.
+            window.app_running = True
+            window.synapsectl_process = object()
+            window.events.put(("synapsectl_done", ("stop", 0, "stopped\n", None)))
+            window._drain_events()
+            self.assertFalse(window.device_started)
+            self.assertEqual(window.run_start_button.text(), "Run: start device")
+            self.assertFalse(window.app_running)
+
+            # A failed start does NOT toggle.
+            window.synapsectl_process = object()
+            window.events.put(("synapsectl_done", ("start", 1, "boom\n", None)))
+            window._drain_events()
+            self.assertFalse(window.device_started)
+            self.assertEqual(window.run_start_button.text(), "Run: start device")
+
+    def test_gate_passing_marks_device_started(self):
+        # If info shows the App already Running, the device IS started, so the
+        # Run button flips to offer stop (device was left running with the config).
+        window = self._window()
+        self.assertFalse(window.device_started)
+        self.assertEqual(window.run_start_button.text(), "Run: start device")
+        window._apply_gate("Applications\n  stateful-decode-and-sync\n    Running: True\n", "info")
+        self.assertTrue(window.app_running)
+        self.assertTrue(window.device_started)
+        self.assertEqual(window.run_start_button.text(), "Run: stop device")
+
+    def test_block_spinbox_flows_into_launcher_args(self):
+        window = self._window()
+        self.assertEqual(window.block.value(), 1)  # default
+        window.block.setValue(7)
+        self.assertEqual(window._launcher_args().block, 7)
+
     def test_apply_gate_reads_running_from_captured_info(self):
         window = self._window()
         window._apply_gate("Applications\n  stateful-decode-and-sync\n    Running: True\n", "synapsectl info")
         self.assertTrue(window.app_running)
         window._apply_gate("Applications\n  stateful-decode-and-sync\n    Running: False\n", "synapsectl info")
         self.assertFalse(window.app_running)
+
+    def test_field_defaults_persist_across_launches(self):
+        # Redirect the user-scope INI into a temp dir so the real settings file
+        # is never touched.
+        with tempfile.TemporaryDirectory() as temp:
+            QSettings.setPath(QSettings.IniFormat, QSettings.UserScope, temp)
+            first = self._window()
+            self.assertEqual(first.device_uri.text(), "192.168.100.157")  # built-in default
+            first.device_uri.setText("10.0.0.42")
+            first.origin.setText("http://localhost:8080")
+            first.gestures.setText("Fist Paper")
+            first._save_settings()
+
+            # A fresh window loads the saved values, not the hard-coded defaults.
+            second = self._window()
+            self.assertEqual(second.device_uri.text(), "10.0.0.42")
+            self.assertEqual(second.origin.text(), "http://localhost:8080")
+            self.assertEqual(second.gestures.text(), "Fist Paper")
+
+    def test_manual_recording_panel_hidden_by_default(self):
+        window = self._window()
+        self.assertTrue(window.manual_panel.isHidden())
+        self.assertFalse(window.show_manual.isChecked())
+        window.show_manual.setChecked(True)
+        self.assertFalse(window.manual_panel.isHidden())
+        window.show_manual.setChecked(False)
+        self.assertTrue(window.manual_panel.isHidden())
+
+    def test_absent_settings_keep_builtin_defaults(self):
+        with tempfile.TemporaryDirectory() as temp:
+            QSettings.setPath(QSettings.IniFormat, QSettings.UserScope, temp)
+            window = self._window()  # no file written yet
+            self.assertEqual(window.device_uri.text(), "192.168.100.157")
+            self.assertEqual(window.bridge_port.text(), "9999")
 
     def test_hub_spoke_gestures_embed_in_generated_profile(self):
         with tempfile.TemporaryDirectory() as temp:

@@ -104,4 +104,112 @@ inline FeatureDecimationPlan make_feature_decimation_plan(
   return plan;
 }
 
+// Streaming integer-rate FIR decimator for multi-channel BroadbandFrame data.
+//
+// This is the "oscilloscope average" stage: raw source samples are pushed in one
+// at a time, anti-alias filtered by the plan's windowed-sinc FIR, and one
+// decimated sample is emitted every `factor` raw samples once the filter has
+// filled. Emitted metadata (sequence number, timestamp) is taken from the raw
+// sample at the FIR group-delay center so the decimated stream carries the true
+// mid-window time rather than the newest edge. The decimated payload is rounded
+// back to int32 counts so a single averaged stream feeds both broadband_out and
+// the decoder identically (no separate raw/decimated quantizations to reconcile).
+//
+// A factor==1 plan is a pass-through: every pushed sample is emitted unchanged
+// with its own metadata. The filter runs in double precision; a channel count is
+// bound on the first push and must stay constant.
+class StreamingDecimator {
+ public:
+  struct Sample {
+    std::vector<std::int32_t> values;
+    std::uint64_t source_sequence_number = 0;
+    std::uint64_t timestamp_ns = 0;
+  };
+
+  StreamingDecimator() = default;
+  explicit StreamingDecimator(FeatureDecimationPlan plan) { reset(std::move(plan)); }
+
+  const FeatureDecimationPlan& plan() const { return plan_; }
+  std::size_t factor() const { return plan_.factor; }
+  double feature_sample_rate_hz() const { return plan_.feature_sample_rate_hz; }
+
+  // Rebind the plan and drop all filter state.
+  void reset(FeatureDecimationPlan plan) {
+    plan_ = std::move(plan);
+    if (plan_.factor == 0) plan_.factor = 1;
+    channels_ = 0;
+    history_.clear();
+    metadata_.clear();
+    history_pos_ = 0;
+    raw_samples_ = 0;
+  }
+
+  // Push one raw multi-channel sample. When a decimated sample is ready, write
+  // it into `out` and return true; otherwise return false. For a factor==1 plan
+  // this always returns true and copies the input through unchanged.
+  bool push(const std::int32_t* values, std::size_t channel_count,
+            std::uint64_t source_sequence_number, std::uint64_t timestamp_ns,
+            Sample& out) {
+    if (channels_ == 0) bind_channels(channel_count);
+    if (plan_.factor == 1) {
+      out.values.assign(values, values + channel_count);
+      out.source_sequence_number = source_sequence_number;
+      out.timestamp_ns = timestamp_ns;
+      return true;
+    }
+
+    const auto taps = plan_.coefficients.size();
+    for (std::size_t ch = 0; ch < channels_; ++ch) {
+      history_[ch][history_pos_] =
+          ch < channel_count ? static_cast<double>(values[ch]) : 0.0;
+    }
+    metadata_[history_pos_] = {source_sequence_number, timestamp_ns};
+    ++raw_samples_;
+
+    const bool filter_ready = raw_samples_ >= taps;
+    const bool emit =
+        filter_ready && (raw_samples_ - taps) % plan_.factor == 0;
+    if (emit) {
+      out.values.assign(channels_, 0);
+      for (std::size_t ch = 0; ch < channels_; ++ch) {
+        double acc = 0.0;
+        for (std::size_t lag = 0; lag < taps; ++lag) {
+          const auto index = (history_pos_ + taps - lag) % taps;
+          acc += plan_.coefficients[lag] * history_[ch][index];
+        }
+        out.values[ch] = static_cast<std::int32_t>(std::llround(acc));
+      }
+      const auto center_index =
+          (history_pos_ + taps - plan_.group_delay_source_samples) % taps;
+      out.source_sequence_number = metadata_[center_index].source_sequence_number;
+      out.timestamp_ns = metadata_[center_index].timestamp_ns;
+    }
+    history_pos_ = (history_pos_ + 1) % taps;
+    return emit;
+  }
+
+ private:
+  struct Metadata {
+    std::uint64_t source_sequence_number = 0;
+    std::uint64_t timestamp_ns = 0;
+  };
+
+  void bind_channels(std::size_t channel_count) {
+    channels_ = channel_count;
+    if (plan_.factor <= 1) return;
+    const auto taps = plan_.coefficients.size();
+    history_.assign(channels_, std::vector<double>(taps, 0.0));
+    metadata_.assign(taps, {});
+    history_pos_ = 0;
+    raw_samples_ = 0;
+  }
+
+  FeatureDecimationPlan plan_;
+  std::size_t channels_ = 0;
+  std::vector<std::vector<double>> history_;
+  std::vector<Metadata> metadata_;
+  std::size_t history_pos_ = 0;
+  std::size_t raw_samples_ = 0;
+};
+
 }  // namespace app

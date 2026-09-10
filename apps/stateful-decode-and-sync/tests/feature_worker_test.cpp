@@ -1,5 +1,7 @@
 #include "feature_worker.hpp"
 
+#include "feature_decimator.hpp"
+
 #include <chrono>
 #include <cmath>
 #include <iostream>
@@ -213,56 +215,59 @@ void test_batches_are_windowed_off_thread() {
          "inference service time is measured separately");
 }
 
-void test_decimator_centers_result_metadata() {
-  app::MpfFeaturizer::Config featurizer_config;
-  featurizer_config.num_channels = 1;
-  featurizer_config.sample_rate_hz = 1000.0;
-  featurizer_config.stft_size = 2;
-  featurizer_config.stft_hop = 1;
-  featurizer_config.num_bands = 1;
-
-  app::FeatureWorker worker;
-  app::FeatureWorker::Config config;
-  config.channel_map = {0};
-  config.window_samples = 2;
-  config.stride_samples = 1;
-  config.featurizer = std::make_shared<app::MpfFeaturizer>(featurizer_config);
-  config.decimation.factor = 2;
-  config.decimation.group_delay_source_samples = 1;
-  config.decimation.coefficients = {0.0, 1.0, 0.0};
-  expect(worker.start(config), "decimating feature worker starts");
-
-  app::FeatureWorker::SampleBatch batch;
-  batch.route.capture_enabled = true;
-  for (std::int32_t i = 0; i < 7; ++i) {
-    batch.samples.push_back(
-        {{i}, static_cast<std::uint64_t>(2000 + i),
-         static_cast<std::uint64_t>(1000 + i)});
-  }
-  expect(worker.try_enqueue(std::move(batch)), "decimator batch is accepted");
+void test_streaming_decimator_centers_metadata_and_averages() {
+  // A factor-2 identity-center FIR ({0,1,0}) emits every other input starting
+  // once the filter has filled, tagged with the FIR-center source metadata.
+  app::FeatureDecimationPlan plan;
+  plan.factor = 2;
+  plan.group_delay_source_samples = 1;
+  plan.coefficients = {0.0, 1.0, 0.0};
+  app::StreamingDecimator decimator(plan);
 
   std::vector<std::uint64_t> sequences;
-  app::FeatureWorker::Result result;
-  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
-  while (std::chrono::steady_clock::now() < deadline && sequences.size() < 2) {
-    if (worker.poll(result)) {
-      sequences.push_back(result.source_sequence_number);
-    } else {
-      std::this_thread::yield();
+  std::vector<std::int32_t> values;
+  app::StreamingDecimator::Sample out;
+  for (std::int32_t i = 0; i < 7; ++i) {
+    const std::int32_t v = i;
+    if (decimator.push(&v, 1, static_cast<std::uint64_t>(2000 + i),
+                       static_cast<std::uint64_t>(1000 + i), out)) {
+      sequences.push_back(out.source_sequence_number);
+      values.push_back(out.values.front());
     }
   }
-  auto stats = worker.stats();
-  while (std::chrono::steady_clock::now() < deadline &&
-         stats.ingest_samples_processed < 7) {
-    std::this_thread::yield();
-    stats = worker.stats();
-  }
-  worker.stop();
+  // taps=3, factor=2: emits at raw index 2,4,6 -> center index 1,3,5.
+  expect(sequences == std::vector<std::uint64_t>({2001, 2003, 2005}),
+         "streaming decimator retains FIR-center source metadata");
+  expect(values == std::vector<std::int32_t>({1, 3, 5}),
+         "identity-center FIR passes the center sample through");
 
-  expect(sequences == std::vector<std::uint64_t>({2003, 2005}),
-         "decimated window results retain FIR-center source metadata");
-  expect(stats.ingest_samples_processed == 7 && stats.feature_samples_emitted == 3,
-         "raw and decimated sample counts remain distinguishable");
+  // A true 3-tap averaging FIR reduces to the mean of the window; verify the
+  // rounding path produces the averaged value at the emit phase.
+  app::FeatureDecimationPlan avg_plan;
+  avg_plan.factor = 2;
+  avg_plan.group_delay_source_samples = 1;
+  avg_plan.coefficients = {1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0};
+  app::StreamingDecimator averager(avg_plan);
+  std::vector<std::int32_t> averaged;
+  const std::int32_t ramp[] = {0, 30, 60, 90, 120, 150, 180};
+  for (int i = 0; i < 7; ++i) {
+    if (averager.push(&ramp[i], 1, 0, 0, out)) averaged.push_back(out.values.front());
+  }
+  // Emit at raw index 2 -> mean(0,30,60)=30; index 4 -> mean(60,90,120)=90;
+  // index 6 -> mean(120,150,180)=150.
+  expect(averaged == std::vector<std::int32_t>({30, 90, 150}),
+         "averaging FIR emits the rounded window mean at each emit phase");
+}
+
+void test_streaming_decimator_passthrough_when_factor_one() {
+  app::FeatureDecimationPlan plan;  // factor defaults to 1
+  app::StreamingDecimator decimator(plan);
+  app::StreamingDecimator::Sample out;
+  const std::int32_t values[] = {5, 6};
+  expect(decimator.push(values, 2, 42, 99, out), "factor-1 decimator always emits");
+  expect(out.values == std::vector<std::int32_t>({5, 6}) &&
+             out.source_sequence_number == 42 && out.timestamp_ns == 99,
+         "factor-1 decimator passes samples and metadata through unchanged");
 }
 
 }  // namespace
@@ -275,7 +280,8 @@ int main() {
     test_power_of_two_fft_matches_impulse_spectrum();
     test_short_decimated_window_is_zero_padded();
     test_batches_are_windowed_off_thread();
-    test_decimator_centers_result_metadata();
+    test_streaming_decimator_centers_metadata_and_averages();
+    test_streaming_decimator_passthrough_when_factor_one();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;

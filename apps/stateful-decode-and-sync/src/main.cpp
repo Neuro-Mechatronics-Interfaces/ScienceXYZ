@@ -1,4 +1,4 @@
-#include "mode_switch_app.hpp"
+#include "main.hpp"
 
 #include "feature_decimator.hpp"
 
@@ -740,14 +740,18 @@ void ModeSwitchApp::publish_task_failures(
   }
 }
 
-void ModeSwitchApp::process_task_frame(const synapse::BroadbandFrame& frame) {
+void ModeSwitchApp::process_task_frame(const synapse::BroadbandFrame& frame,
+                                       std::uint64_t reference_sequence) {
   if (!task_runtime_) return;
+  // The reference-stream sequence is the dense feature-timebase counter, not the
+  // frame's FIR-center source sequence; the FIR-center timestamp is still the
+  // source clock the timeline is anchored to.
   const auto result = task_runtime_->on_frame(
-      {cfg_.task_reference_source_id, frame.sequence_number(), frame.timestamp_ns(),
+      {cfg_.task_reference_source_id, reference_sequence, frame.timestamp_ns(),
        static_cast<std::uint64_t>(synapse::get_steady_clock_now().count())});
   if (result.entered_fault) {
-    spdlog::error("task authority faulted at source frame {}: {}", frame.sequence_number(),
-                  result.fault_message);
+    spdlog::error("task authority faulted at reference frame {} (source seq {}): {}",
+                  reference_sequence, frame.sequence_number(), result.fault_message);
   }
   if (result.event) {
     // A successful external request is terminal only after this immutable
@@ -1116,25 +1120,25 @@ void ModeSwitchApp::main() {
 
       synthetic_->next_frame(synth_data);
 
-      // Build a BroadbandFrame with our own monotonic sequence + derived stamp.
+      // Build a raw-rate BroadbandFrame with our own monotonic sequence +
+      // derived stamp, then route it through the shared decimator exactly like a
+      // real source frame so synthetic broadband_out is also the feature-rate
+      // decimated stream.
       const double ns_per_sample = 1e9 / static_cast<double>(cfg_.sample_rate_hz);
       const uint64_t ts = synthetic_start_ns_ +
                           static_cast<uint64_t>(synthetic_seq_ * ns_per_sample);
-      synapse::BroadbandFrame out;
-      out.set_timestamp_ns(ts);
-      const auto source_sequence_number = synthetic_seq_;
-      out.set_sequence_number(source_sequence_number);
-      out.set_sample_rate_hz(cfg_.sample_rate_hz);
-      out.set_unix_timestamp_ns(synapse::get_steady_clock_now().count());
-      for (int32_t s : synth_data) out.add_frame_data(s);
+      synapse::BroadbandFrame raw;
+      raw.set_timestamp_ns(ts);
+      raw.set_sequence_number(synthetic_seq_);
+      raw.set_sample_rate_hz(cfg_.sample_rate_hz);
+      raw.set_unix_timestamp_ns(synapse::get_steady_clock_now().count());
+      for (int32_t s : synth_data) raw.add_frame_data(s);
       ++synthetic_seq_;
 
-      process_task_frame(out);
-      publish_tap("broadband_out", out);
       initialize_pipeline(synth_data.size());
-      enqueue_feature_batch(
-          {FeatureWorker::Sample{std::move(synth_data), source_sequence_number, ts}},
-          feature_route());
+      std::vector<FeatureWorker::Sample> samples;
+      route_source_frame(raw, samples);
+      enqueue_feature_batch(std::move(samples), feature_route());
       synth_data.clear();
 
       // Pace roughly to the sample rate so we don't free-run the CPU. This is a
@@ -1155,20 +1159,14 @@ void ModeSwitchApp::main() {
     std::vector<FeatureWorker::Sample> samples;
     samples.reserve(batch.frames.size());
     for (const auto& in_frame : batch.frames) {
-      // Every individual frame is an independent authoritative task boundary.
-      // Keep this before forwarding so the named frame is the first one routed
-      // under a newly committed state even within one multipart receive.
-      process_task_frame(in_frame);
-      publish_tap("broadband_out", in_frame);
-
-      const int n = in_frame.frame_data_size();
-      FeatureWorker::Sample sample;
-      sample.values.resize(n);
-      for (int i = 0; i < n; ++i) sample.values[i] = in_frame.frame_data(i);
-      sample.source_sequence_number = in_frame.sequence_number();
-      sample.timestamp_ns = in_frame.timestamp_ns();
-      samples.push_back(std::move(sample));
-      initialize_pipeline(static_cast<std::size_t>(n));
+      // Configure the pipeline (and decimator) from the first frame's channel
+      // count before routing any samples through it.
+      initialize_pipeline(static_cast<std::size_t>(in_frame.frame_data_size()));
+      // Push the raw frame through the shared decimator. Task authority, the
+      // published broadband_out frame, and the feature-worker samples are all
+      // the decimated (feature-rate) stream. A frame emits 0 or 1 decimated
+      // samples depending on the decimation phase.
+      route_source_frame(in_frame, samples);
     }
     enqueue_feature_batch(std::move(samples), feature_route());
   }
@@ -1302,6 +1300,9 @@ void ModeSwitchApp::initialize_pipeline(std::size_t upstream_channels) {
   }
   window_samples_ = raw_window_samples / decimation.factor;
   stride_samples_ = raw_stride_samples / decimation.factor;
+  decimation_factor_ = decimation.factor;
+  feature_sample_rate_hz_ = decimation.feature_sample_rate_hz;
+  decimator_.reset(decimation);
   std::size_t fft_samples = 0;
   try {
     fft_samples = next_power_of_two(window_samples_);
@@ -1362,7 +1363,6 @@ void ModeSwitchApp::initialize_pipeline(std::size_t upstream_channels) {
   worker_config.window_samples = window_samples_;
   worker_config.stride_samples = stride_samples_;
   worker_config.featurizer = featurizer_;
-  worker_config.decimation = decimation;
   worker_config.classifier = [this](const std::vector<float>& feature) {
     std::lock_guard<std::mutex> lock(model_mutex_);
     return mlp_.infer(feature);
@@ -1397,6 +1397,50 @@ FeatureWorker::Route ModeSwitchApp::feature_route() const {
   route.label = active_target_.label;
   route.classify = model_ready_;
   return route;
+}
+
+void ModeSwitchApp::route_source_frame(const synapse::BroadbandFrame& raw_frame,
+                                       std::vector<FeatureWorker::Sample>& out_samples) {
+  // Routing requires a configured decimator/feature rate. If the pipeline failed
+  // to initialize, drop the frame rather than publish a zero-rate broadband
+  // stream; the pipeline error is already surfaced via state/last_error.
+  if (!pipeline_ready_) return;
+  const int n = raw_frame.frame_data_size();
+  scratch_raw_values_.resize(static_cast<std::size_t>(n));
+  for (int i = 0; i < n; ++i) scratch_raw_values_[i] = raw_frame.frame_data(i);
+
+  StreamingDecimator::Sample decimated;
+  if (!decimator_.push(scratch_raw_values_.data(), static_cast<std::size_t>(n),
+                       raw_frame.sequence_number(), raw_frame.timestamp_ns(),
+                       decimated)) {
+    // Filter is still filling (only for factor > 1); no decimated sample yet.
+    return;
+  }
+
+  // Build the decimated broadband frame. Sample values, sequence and timestamp
+  // come from the decimator (FIR-center metadata for factor > 1); the channel
+  // layout and wall-clock stamp are inherited from the raw frame. sample_rate_hz
+  // is the decimated feature rate so downstream consumers time-align correctly.
+  synapse::BroadbandFrame out;
+  out.set_timestamp_ns(decimated.timestamp_ns);
+  out.set_sequence_number(decimated.source_sequence_number);
+  out.set_sample_rate_hz(static_cast<uint32_t>(std::llround(feature_sample_rate_hz_)));
+  out.set_unix_timestamp_ns(raw_frame.unix_timestamp_ns());
+  for (const auto& range : raw_frame.channel_ranges()) *out.add_channel_ranges() = range;
+  for (std::int32_t s : decimated.values) out.add_frame_data(s);
+
+  // The decimated frame is the authoritative task boundary and the published
+  // broadband sample. Evaluate task authority before forwarding so the named
+  // frame is routed first, matching the previous raw-frame ordering. The task
+  // reference sequence is a dense +1 counter over emitted decimated frames.
+  process_task_frame(out, ++task_reference_sequence_);
+  publish_tap("broadband_out", out);
+
+  FeatureWorker::Sample sample;
+  sample.values = std::move(decimated.values);
+  sample.source_sequence_number = decimated.source_sequence_number;
+  sample.timestamp_ns = decimated.timestamp_ns;
+  out_samples.push_back(std::move(sample));
 }
 
 void ModeSwitchApp::enqueue_feature_batch(std::vector<FeatureWorker::Sample> samples,

@@ -24,9 +24,11 @@ ordered channel selection). Hiding or reordering channels never drops data.
 from __future__ import annotations
 
 import os
+import re
 import threading
 import time
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 from synapse.api.datatype_pb2 import BroadbandFrame
@@ -38,6 +40,109 @@ from synapse.api.channel_pb2 import GPIO
 # assignment, not setdefault, because the client is committed to PySide6; it
 # runs at module import time, before the lazy pyqtgraph import below.
 os.environ["PYQTGRAPH_QT_LIB"] = "PySide6"
+
+
+def observed_sample_rate_hz(timestamps: np.ndarray) -> float | None:
+    """Estimate the actual sample rate from per-sample device timestamps (ns).
+
+    Returns samples/second over the span of the buffered timestamps, or None when
+    fewer than two samples, a non-positive span, or a non-monotone span makes the
+    estimate meaningless (e.g. a source-clock regression across a reconnect). This
+    is a cross-check against the wire-declared ``sample_rate_hz`` and the config's
+    expected rate, not a replacement for either.
+    """
+    if timestamps is None or len(timestamps) < 2:
+        return None
+    span_ns = float(timestamps[-1]) - float(timestamps[0])
+    if span_ns <= 0.0:
+        return None
+    return (len(timestamps) - 1) * 1e9 / span_ns
+
+
+def _kapplication_params(config):
+    """The first kApplication node's parameters dict, or {} if none."""
+    if not isinstance(config, dict):
+        return {}
+    for node in config.get("nodes") or []:
+        if isinstance(node, dict) and node.get("type") == "kApplication":
+            app = node.get("application") or {}
+            return app.get("parameters") or {}
+    return {}
+
+
+def decimation_factor_from_params(params, source_rate_hz):
+    """Replicate the C++ App's integer decimation-factor choice for a source.
+
+    Mirrors make_feature_decimation_plan (feature_decimator.hpp): the largest
+    integer factor that (1) keeps a guard band above the highest configured MPF
+    edge and (2) divides both the raw window and stride exactly. Returns 1 when
+    frequency_bands_hz is absent (the App disables decimation) or the params are
+    unusable. Lets the viewer predict broadband_out's decimated rate from the same
+    config the operator deploys, instead of assuming the raw source rate.
+    """
+    try:
+        bands = params.get("frequency_bands_hz")
+        if not bands:
+            return 1  # legacy full-Nyquist split => no decimation
+        highest = float(bands[-1][1])
+        guard = float(params.get("decimation_guard_ratio", 1.25))
+        window_ms = float(params.get("window_ms", 0.0))
+        stride_ms = float(params.get("stride_ms", 0.0))
+        source = float(source_rate_hz)
+        if not (highest > 0 and guard > 1.0 and window_ms > 0 and stride_ms > 0 and source > 0):
+            return 1
+        raw_window = round(window_ms * source / 1000.0)
+        raw_stride = max(1, round(stride_ms * source / 1000.0))
+        guarded_nyquist = highest * guard
+        import math
+        band_limited = int(math.floor(source / (2.0 * guarded_nyquist)))
+        limit = max(1, min(band_limited, raw_window))
+        for candidate in range(limit, 1, -1):
+            if raw_window % candidate == 0 and raw_stride % candidate == 0:
+                return candidate
+        return 1
+    except (TypeError, ValueError, IndexError, KeyError):
+        return 1
+
+
+def broadband_layouts_from_config_path(path):
+    """Parse kBroadbandSource layouts from a device-config JSON path.
+
+    Returns a list of BroadbandLayout (possibly empty). Any read/parse error
+    yields an empty list; the viewer then falls back to wire inference and shows
+    no per-source metadata. Kept tolerant so a bad/blank path never blocks the
+    viewer from opening.
+    """
+    if not path:
+        return []
+    try:
+        import json as _json
+        from .broadband_layout import layouts_from_config
+        with open(path, "r", encoding="utf-8") as handle:
+            return layouts_from_config(_json.load(handle))
+    except (OSError, ValueError):
+        return []
+
+
+def _info_shows_app_running(info_text: str, app_name: str = "stateful-decode-and-sync") -> bool:
+    """True when a ``synapsectl info`` capture shows the App reporting Running: True.
+
+    Same parse as the calibration launcher's ``app_running``: match the App
+    section by name, then the first ``Running: <bool>`` line before the next
+    entry. Kept local so the waveform viewer needs no launcher import; the
+    device gate here is advisory (a status label), not a hard start gate.
+    """
+    lines = info_text.splitlines()
+    for index, line in enumerate(lines):
+        if app_name not in line:
+            continue
+        for follow in lines[index + 1:]:
+            match = re.search(r"Running\s*:\s*(True|False)", follow, re.IGNORECASE)
+            if match:
+                return match.group(1).lower() == "true"
+            if not follow.strip():
+                break
+    return False
 
 
 @dataclass(frozen=True)
@@ -217,6 +322,13 @@ class WaveformBuffer:
         self.missing_sequences = 0
         self.sequence_last: int | None = None
         self.timestamp_last: int | None = None
+        # Per-frame sequence-number stride of the stream. broadband_out carries
+        # the FIR-center *source* sequence, which advances by the decimation
+        # factor (e.g. 10 for 20 kHz -> 2 kHz), not by 1. Learn the stride as the
+        # smallest positive delta observed so a uniform decimated stream reads as
+        # contiguous and a genuine drop (a delta that is a larger multiple of the
+        # stride) is still counted. None until the first positive delta is seen.
+        self._sequence_stride: int | None = None
         self._lock = threading.Lock()
 
     @property
@@ -273,14 +385,25 @@ class WaveformBuffer:
             sequence = int(frame.sequence_number)
             timestamp = int(frame.timestamp_ns)
             rate = int(frame.sample_rate_hz) or self._sample_rate_hz
-            delta = sequence - self.sequence_last if self.sequence_last is not None else 1
+            delta = sequence - self.sequence_last if self.sequence_last is not None else 0
+            # Learn the stream's per-frame sequence stride (the decimation factor
+            # for broadband_out; 1 for an undecimated stream) as the smallest
+            # positive delta seen. Until learned, treat the frame as a fresh line.
+            if delta > 0 and (self._sequence_stride is None or delta < self._sequence_stride):
+                self._sequence_stride = delta
+            stride = self._sequence_stride or 1
+            # A stride-sized step is contiguous; an integer multiple of the stride
+            # is a real gap of (delta/stride) frames. Non-multiples imply a stride
+            # change (e.g. reconfiguration) and break the line.
+            on_grid = delta > 0 and delta % stride == 0
+            frame_gap = delta // stride if on_grid else 1
             contiguous = (self.sequence_last is not None
-                          and delta == 1 and rate == self._sample_rate_hz
+                          and delta == stride and rate == self._sample_rate_hz
                           and not self._break_pending)
             # Reconstruct display spacing from sample identity, never arrival/source
-            # timestamp jitter. Positive gaps retain missing-sample duration. A
-            # reset/reconnect/rate change breaks the line; elapsed time is unknown.
-            self._steps[self._write] = (delta if delta > 0 and rate == self._sample_rate_hz else 1) / rate
+            # timestamp jitter. Positive gaps retain missing-frame duration measured
+            # in stride units. A reset/reconnect/rate change breaks the line.
+            self._steps[self._write] = (frame_gap if rate == self._sample_rate_hz else 1) / rate
             self._continuous[self._write] = contiguous
             self._break_pending = False
             current = {}
@@ -303,9 +426,10 @@ class WaveformBuffer:
             self._write = (self._write + 1) % self._capacity
             self._filled = min(self._filled + 1, self._capacity)
 
-            sequence = int(frame.sequence_number)
-            if self.sequence_last is not None and sequence > self.sequence_last + 1:
-                self.missing_sequences += sequence - self.sequence_last - 1
+            # Count dropped frames in stride units: a stride-sized step is zero
+            # missing; an N*stride step is (N-1) missing decimated frames.
+            if self.sequence_last is not None and on_grid and frame_gap > 1:
+                self.missing_sequences += frame_gap - 1
             self.sequence_last = sequence
             self.timestamp_last = int(frame.timestamp_ns)
             if frame.sample_rate_hz:
@@ -430,6 +554,10 @@ def create_waveform_window(
     tap_name: str = "broadband_out",
     y_full_scale: float = 1000.0,
     timescale_s: float = 0.0,
+    device_config: str = "",
+    synapsectl_command: str = "synapsectl",
+    explicit_settings=None,
+    settings_path=None,
     reader_factory=None,
 ):
     """Build the live waveform window. Qt/pyqtgraph imports stay local.
@@ -445,10 +573,10 @@ def create_waveform_window(
     shared timescale (the x-window duration). ``timescale_s`` seeds that
     timescale; ``0`` uses the full buffer ``duration_s``.
     """
-    from PySide6.QtCore import QTimer
+    from PySide6.QtCore import QProcess, QSettings, QTimer
     from PySide6.QtWidgets import (
-        QDoubleSpinBox, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QMainWindow,
-        QPushButton, QSpinBox, QVBoxLayout, QWidget, QCheckBox,
+        QDoubleSpinBox, QFileDialog, QGroupBox, QHBoxLayout, QLabel, QLineEdit,
+        QMainWindow, QPushButton, QSpinBox, QTabBar, QVBoxLayout, QWidget, QCheckBox,
     )
 
     try:
@@ -458,6 +586,28 @@ def create_waveform_window(
             "pyqtgraph is required for the waveform viewer. Install the client's "
             "'waveform' extra: pip install -e 'apps/stateful-decode-and-sync/client[waveform]'"
         ) from exc
+
+    # Expected per-source layouts from the device config (empty if none/bad path).
+    # Drives the source-metadata selector; all sources currently read the single
+    # broadband_out tap (per-source taps are a future App change). Alongside each
+    # layout, precompute the rate broadband_out actually emits for that source:
+    # the source rate divided by the App's integer decimation factor (from the
+    # kApplication params), so the expected-rate check matches the decimated tap
+    # rather than the raw source rate.
+    source_layouts = broadband_layouts_from_config_path(device_config)
+    _app_params = {}
+    if device_config:
+        try:
+            import json as _json
+            with open(device_config, "r", encoding="utf-8") as _handle:
+                _app_params = _kapplication_params(_json.load(_handle))
+        except (OSError, ValueError):
+            _app_params = {}
+    expected_broadband_rate = {}
+    for _lay in source_layouts:
+        if _lay.sample_rate_hz:
+            factor = decimation_factor_from_params(_app_params, _lay.sample_rate_hz)
+            expected_broadband_rate[_lay.node_id] = float(_lay.sample_rate_hz) / factor
 
     class WaveformWindow(QMainWindow):
         def __init__(self):
@@ -511,9 +661,41 @@ def create_waveform_window(
             self._wheel_gain_step: float = 1.2
             self._wheel_time_step: float = 1.2
 
+            # Operator device-control state. Running synapsectl from this
+            # operator-launched GUI is permitted under the AGENTS.md Synapse CLI
+            # Execution Boundary scope (a human launches and watches it, the exact
+            # command is shown, and the path is configurable); it never runs from
+            # a test or an agent path. self._synapsectl_process is the single
+            # in-flight child, or None when idle.
+            self._synapsectl_process: "QProcess | None" = None
+            self._device_started = False
+
+            # Persisted field defaults live in a per-user INI (QSettings), mirroring
+            # the calibration GUI. Device fields, the grid layout, and the scale/
+            # timescale/gains carry over between launches; absent keys keep the
+            # seeded defaults so a first run is unchanged. A field named in
+            # `explicit_settings` was set on the command line this launch, so its
+            # CLI value wins over any stored value. INI format keeps it readable.
+            # settings_path isolates the INI for tests; production uses the
+            # per-user NML/WaveformViewer scope.
+            if settings_path is not None:
+                self._settings = QSettings(str(settings_path), QSettings.IniFormat)
+            else:
+                self._settings = QSettings(QSettings.IniFormat, QSettings.UserScope,
+                                           "NML", "WaveformViewer")
+            self._explicit = set(explicit_settings or ())
+            # A stored channel spec is applied once the stream's channel count is
+            # known (parse_channel_spec needs it); consumed in _refresh.
+            self._pending_channel_spec = False
+
             root = QWidget()
             self.setCentralWidget(root)
             layout = QVBoxLayout(root)
+            layout.addWidget(self._build_device_panel(
+                QGroupBox, QHBoxLayout, QLabel, QLineEdit, QPushButton, QFileDialog, QProcess))
+            source_strip = self._build_source_strip(QGroupBox, QVBoxLayout, QLabel, QTabBar)
+            if source_strip is not None:
+                layout.addWidget(source_strip)
             layout.addLayout(self._build_controls(QHBoxLayout, QLabel, QLineEdit, QPushButton, QSpinBox))
             layout.addWidget(self._build_scale_panel(
                 QGroupBox, QHBoxLayout, QLabel, QLineEdit, QDoubleSpinBox, QPushButton))
@@ -534,6 +716,228 @@ def create_waveform_window(
             self.timer = QTimer(self)
             self.timer.timeout.connect(self._refresh)
             self.timer.start(50)
+
+            # Restore persisted device fields, layout and scale. Done after the
+            # timer exists because _load_settings applies the scale (which calls
+            # _refresh). A restored channel spec is applied on the first frame.
+            self._load_settings()
+
+        def _build_device_panel(self, QGroupBox, QHBoxLayout, QLabel, QLineEdit,
+                                QPushButton, QFileDialog, QProcess):
+            """Operator device controls: start/stop the device App and fetch info.
+
+            Mirrors the calibration GUI's synapsectl panel. The exact command is
+            shown before it runs (Copy start line), the synapsectl path is
+            configurable (supporting e.g. 'wsl synapsectl'), and every button is
+            operator-driven. Permitted under the AGENTS.md CLI boundary scope for
+            an operator-run GUI; never invoked from tests or an agent path.
+            """
+            self._QFileDialog = QFileDialog
+            self._QProcess = QProcess
+            box = QGroupBox("Device (operator runs synapsectl; shown before it runs)")
+            bar = QHBoxLayout(box)
+
+            bar.addWidget(QLabel("Device URI"))
+            self.device_uri_edit = QLineEdit(device_ip)
+            self.device_uri_edit.setToolTip("synapsectl -u <this> ...")
+            bar.addWidget(self.device_uri_edit)
+
+            bar.addWidget(QLabel("Config"))
+            self.device_config_edit = QLineEdit(device_config)
+            self.device_config_edit.setPlaceholderText(
+                "device-config.json for 'start' (empty = restart already-configured device)")
+            self.device_config_edit.setToolTip(
+                "Config JSON uploaded+started by 'Run: start device'. Empty starts the "
+                "device without reconfiguring it.")
+            bar.addWidget(self.device_config_edit, 1)
+            self.device_config_browse = QPushButton("…")
+            self.device_config_browse.setFixedWidth(28)
+            self.device_config_browse.clicked.connect(self._browse_device_config)
+            bar.addWidget(self.device_config_browse)
+
+            bar.addWidget(QLabel("synapsectl"))
+            self.synapsectl_edit = QLineEdit(synapsectl_command)
+            self.synapsectl_edit.setToolTip(
+                "Command for the synapsectl buttons. Default resolves from PATH/venv; "
+                "use 'wsl synapsectl' only if your install lives elsewhere.")
+            bar.addWidget(self.synapsectl_edit)
+
+            self.copy_start_button = QPushButton("Copy start line")
+            self.copy_start_button.clicked.connect(self._copy_start_line)
+            bar.addWidget(self.copy_start_button)
+            self.run_start_button = QPushButton("Run: start device")
+            self.run_start_button.clicked.connect(self._run_start_device)
+            bar.addWidget(self.run_start_button)
+            self.run_info_button = QPushButton("Run: fetch info")
+            self.run_info_button.clicked.connect(self._run_fetch_info)
+            bar.addWidget(self.run_info_button)
+
+            self.device_status_label = QLabel("idle")
+            bar.addWidget(self.device_status_label)
+            return box
+
+        def _build_source_strip(self, QGroupBox, QVBoxLayout, QLabel, QTabBar):
+            """Per-source tab strip driven by the device config's kBroadbandSource
+            nodes. Each tab names one source; selecting it shows that source's
+            expected channel metadata and its config sample rate, against which the
+            observed broadband_out rate is compared. Returns None when the config
+            declares no sources (single implicit source; no strip shown).
+
+            All tabs currently read the one broadband_out tap; per-source taps are
+            a future App change, so the strip documents expectations and drives the
+            expected-rate comparison rather than switching live streams.
+            """
+            if not source_layouts:
+                return None
+            box = QGroupBox("Sources (from device config; all read broadband_out for now)")
+            col = QVBoxLayout(box)
+            self.source_tabs = QTabBar()
+            for lay in source_layouts:
+                label = f"device {lay.node_id}"
+                if lay.peripheral_id is not None:
+                    label += f" (periph {lay.peripheral_id})"
+                self.source_tabs.addTab(label)
+            self.source_tabs.currentChanged.connect(lambda _=0: self._on_source_changed())
+            col.addWidget(self.source_tabs)
+            self.source_meta_label = QLabel("")
+            self.source_meta_label.setWordWrap(True)
+            col.addWidget(self.source_meta_label)
+            self._update_source_meta_label()
+            return box
+
+        def _selected_layout(self):
+            """The BroadbandLayout for the active source tab, or None if no config
+            sources were parsed."""
+            if not source_layouts:
+                return None
+            index = self.source_tabs.currentIndex() if hasattr(self, "source_tabs") else 0
+            if index < 0 or index >= len(source_layouts):
+                return None
+            return source_layouts[index]
+
+        def _expected_rate_hz(self):
+            """Expected broadband_out rate for the active source (source rate /
+            decimation factor), or None. This matches the decimated tap, so the
+            observed-rate check does not falsely flag decimation as a mismatch."""
+            lay = self._selected_layout()
+            if lay is None:
+                return None
+            return expected_broadband_rate.get(lay.node_id)
+
+        def _update_source_meta_label(self):
+            lay = self._selected_layout()
+            if lay is None:
+                return
+            types = ", ".join(sorted(set(lay.channel_types))) or "unknown"
+            src = f"{lay.sample_rate_hz:g} Hz" if lay.sample_rate_hz else "unknown"
+            decimated = expected_broadband_rate.get(lay.node_id)
+            tap_rate = f"{decimated:g} Hz" if decimated is not None else "unknown"
+            self.source_meta_label.setText(
+                f"node id {lay.node_id} | peripheral {lay.peripheral_id} | "
+                f"{lay.n_ch} channels ({types}) | source {src} → broadband_out {tap_rate} "
+                "(decimated, shared tap)")
+
+        def _on_source_changed(self):
+            self._update_source_meta_label()
+            self._refresh()
+
+        def _synapsectl_argv(self, *tail):
+            """Build the synapsectl argv from the configurable command field.
+
+            The field may carry more than one token (e.g. 'wsl synapsectl') so a
+            Windows GUI can reach a WSL install; each token becomes an argv
+            element. Operator-machine only, per the AGENTS.md boundary scope.
+            """
+            base = [t for t in self.synapsectl_edit.text().split() if t] or ["synapsectl"]
+            return [*base, "-u", self.device_uri_edit.text().strip(), *tail]
+
+        def _synapsectl_busy(self):
+            return self._synapsectl_process is not None
+
+        def _refresh_device_buttons(self):
+            idle = not self._synapsectl_busy()
+            for button in (self.run_start_button, self.run_info_button,
+                           self.copy_start_button, self.device_config_browse):
+                button.setEnabled(idle)
+
+        def _copy_start_line(self):
+            config = self.device_config_edit.text().strip()
+            argv = self._synapsectl_argv("start", *([config] if config else []))
+            from PySide6.QtWidgets import QApplication
+            QApplication.clipboard().setText(" ".join(argv))
+            self.device_status_label.setText("copied start line — run it yourself if you prefer")
+
+        def _browse_device_config(self):
+            start = self.device_config_edit.text().strip() or str(Path.cwd())
+            path, _ = self._QFileDialog.getOpenFileName(
+                self, "Select device-config.json", start, "JSON (*.json);;All files (*)")
+            if path:
+                self.device_config_edit.setText(path)
+
+        def _run_synapsectl(self, tail, capture_to, label):
+            """Spawn one operator synapsectl child. QProcess signals fire on the
+            Qt thread, so the finished/error slots update widgets directly."""
+            if self._synapsectl_busy():
+                return
+            argv = self._synapsectl_argv(*tail)
+            self.device_status_label.setText(f"running: {' '.join(argv)}")
+            process = self._QProcess(self)
+            process.setProgram(argv[0])
+            process.setArguments(argv[1:])
+            process.setProcessChannelMode(self._QProcess.MergedChannels)
+            buffer: list[str] = []
+            process.readyReadStandardOutput.connect(
+                lambda p=process, b=buffer: b.append(
+                    bytes(p.readAllStandardOutput()).decode("utf-8", "replace")))
+            process.errorOccurred.connect(
+                lambda err, l=label: self._on_synapsectl_error(l, err))
+            process.finished.connect(
+                lambda code, status, b=buffer, c=capture_to, l=label:
+                    self._on_synapsectl_done(l, code, "".join(b), c))
+            self._synapsectl_process = process
+            self._refresh_device_buttons()
+            process.start()
+
+        def _run_start_device(self):
+            # After a successful start this button offers stop, sending
+            # `synapsectl -u <uri> stop` (device-level stop, the analogue of the
+            # argumentless start form).
+            if self._device_started:
+                self._run_synapsectl(["stop"], None, "stop")
+            else:
+                config = self.device_config_edit.text().strip()
+                self._run_synapsectl(["start", *([config] if config else [])], None, "start")
+
+        def _run_fetch_info(self):
+            self._run_synapsectl(["info"], None, "info")
+
+        def _on_synapsectl_error(self, label, err):
+            self._synapsectl_process = None
+            self.device_status_label.setText(
+                f"[{label}] could not run (check the synapsectl field or Copy + run it yourself)")
+            self._refresh_device_buttons()
+
+        def _on_synapsectl_done(self, label, code, output, capture):
+            self._synapsectl_process = None
+            tail = output.strip().splitlines()[-1] if output.strip() else ""
+            if label == "start" and code == 0:
+                self._device_started = True
+                self.run_start_button.setText("Run: stop device")
+                self.device_status_label.setText("device start succeeded — this button now stops it")
+            elif label == "stop" and code == 0:
+                self._device_started = False
+                self.run_start_button.setText("Run: start device")
+                self.device_status_label.setText("device stop succeeded")
+            elif label == "info":
+                if code == 0:
+                    running = _info_shows_app_running(output)
+                    self.device_status_label.setText(
+                        f"info: App stateful-decode-and-sync Running={running}")
+                else:
+                    self.device_status_label.setText(f"info exited code {code}: {tail}")
+            else:
+                self.device_status_label.setText(f"[{label}] exited code {code}: {tail}")
+            self._refresh_device_buttons()
 
         def _build_controls(self, QHBoxLayout, QLabel, QLineEdit, QPushButton, QSpinBox):
             bar = QHBoxLayout()
@@ -634,6 +1038,73 @@ def create_waveform_window(
             # Re-apply fixed ranges to existing plots and redraw immediately.
             self._apply_axis_ranges()
             self._refresh()
+
+        # -- persistence (QSettings) -----------------------------------------
+        def _persisted_line_edits(self):
+            """settings-key -> QLineEdit map. A key in self._explicit is CLI-set
+            this launch, so its seeded value wins over the stored one."""
+            return {
+                "device_uri": self.device_uri_edit,
+                "device_config": self.device_config_edit,
+                "synapsectl": self.synapsectl_edit,
+                "channels": self.channel_edit,
+                "per_channel_gain": self.gain_edit,
+            }
+
+        def _load_settings(self) -> None:
+            s = self._settings
+            for key, widget in self._persisted_line_edits().items():
+                if key in self._explicit:
+                    continue  # an explicit CLI value overrides the stored one
+                stored = s.value(f"fields/{key}")
+                if isinstance(stored, str) and stored:
+                    widget.setText(stored)
+            # Numeric layout/scale state. QSettings stores strings; coerce and
+            # clamp to each widget's range, ignoring anything unparseable.
+            def _num(key, caster):
+                raw = s.value(f"fields/{key}")
+                if raw is None:
+                    return None
+                try:
+                    return caster(raw)
+                except (TypeError, ValueError):
+                    return None
+            columns = _num("columns", int)
+            if columns is not None and "columns" not in self._explicit:
+                self.columns_spin.setValue(max(1, min(columns, self.columns_spin.maximum())))
+            full_scale = _num("full_scale", float)
+            if full_scale is not None and "full_scale" not in self._explicit:
+                self.full_scale_spin.setValue(full_scale)
+            gain = _num("global_gain", float)
+            if gain is not None:
+                self.gain_spin.setValue(gain)
+            timescale = _num("timescale", float)
+            if timescale is not None and "timescale" not in self._explicit:
+                # Clamp into the buffered-history range the spin enforces.
+                self.timescale_spin.setValue(
+                    max(self.timescale_spin.minimum(), min(timescale, self.timescale_spin.maximum())))
+            sync = s.value("fields/sync_edges")
+            if isinstance(sync, str):
+                self.sync_toggle.setChecked(sync.lower() in ("1", "true", "yes"))
+            # Push the restored scale/gain/timescale into internal state and the
+            # active column count so the first auto-built layout honors them
+            # (frame-independent). _apply_scale re-parses the per-channel gains.
+            self._active_columns = self.columns_spin.value()
+            self._apply_scale()
+            # A restored channel spec needs the channel count to resolve; apply it
+            # once the first frame arrives (see _refresh).
+            self._pending_channel_spec = bool(self.channel_edit.text().strip())
+
+        def _save_settings(self) -> None:
+            s = self._settings
+            for key, widget in self._persisted_line_edits().items():
+                s.setValue(f"fields/{key}", widget.text())
+            s.setValue("fields/columns", str(self.columns_spin.value()))
+            s.setValue("fields/full_scale", str(self.full_scale_spin.value()))
+            s.setValue("fields/global_gain", str(self.gain_spin.value()))
+            s.setValue("fields/timescale", str(self.timescale_spin.value()))
+            s.setValue("fields/sync_edges", "true" if self.sync_toggle.isChecked() else "false")
+            s.sync()
 
         def _gain_for(self, channel_id: int) -> float:
             """Effective vertical gain for one channel (override else global)."""
@@ -864,6 +1335,13 @@ def create_waveform_window(
             snapshot = self.buffer.snapshot()
             available = len(snapshot.channel_ids)
 
+            # Apply a restored channel spec the first time the channel count is
+            # known (parse_channel_spec needs it). _apply_layout resolves the spec,
+            # sets _active_columns from the spin, and rebuilds the plots.
+            if available and self._pending_channel_spec:
+                self._pending_channel_spec = False
+                self._apply_layout()
+
             # Build (or rebuild) plots once the channel count is known, and again
             # if the stream's channel count changed under a running layout.
             if available and (not self._placements or available != self._resolved_available):
@@ -894,12 +1372,26 @@ def create_waveform_window(
             gain_txt = f"{self._global_gain:g}×"
             if self._channel_gains:
                 gain_txt += f" (+{len(self._channel_gains)} per-ch)"
+            # Rate reporting: the wire-declared sample_rate_hz from the frame, an
+            # observed rate estimated from the device timestamps, and (when a
+            # config was loaded) the selected source's expected rate for a check.
+            observed = observed_sample_rate_hz(snapshot.timestamps)
+            rate_txt = f"rate={snapshot.sample_rate_hz} Hz (wire)"
+            if observed is not None:
+                rate_txt += f", ~{observed:.1f} Hz observed"
+            expected = self._expected_rate_hz()
+            if expected is not None:
+                rate_txt += f", expect {expected:g} Hz"
+                # Flag a >5% observed-vs-expected mismatch as a quick sanity signal.
+                if observed is not None and expected > 0 and abs(observed - expected) / expected > 0.05:
+                    rate_txt += " ⚠"
             self.status.setText(
                 f"{tap_name} @ {device_ip}: {state} | frames={snapshot.frames} "
                 f"missing={snapshot.missing_sequences} parse_errors={snapshot.parse_errors} "
-                f"rate={snapshot.sample_rate_hz} Hz | showing {shown}/{available} ch "
+                f"| {rate_txt} | showing {shown}/{available} ch "
                 f"in {self._active_columns} col(s) | ±{self._full_scale:g} gain {gain_txt} "
-                f"t={self._timescale_s:g}s | nominal sample time | read-only (no device commands)"
+                f"t={self._timescale_s:g}s | nominal sample time | tap read-only "
+                "(device start/stop via the operator synapsectl panel)"
             )
 
         def resizeEvent(self, event):
@@ -910,8 +1402,13 @@ def create_waveform_window(
             self._relayout_plots()
 
         def closeEvent(self, event):
+            self._save_settings()
             self.timer.stop()
             self.reader.stop()
+            process = self._synapsectl_process
+            if process is not None and process.state() != self._QProcess.NotRunning:
+                process.kill()
+                process.waitForFinished(1000)
             event.accept()
 
     return WaveformWindow()
@@ -928,6 +1425,9 @@ def run_waveform(
     tap_name: str = "broadband_out",
     y_full_scale: float = 1000.0,
     timescale_s: float = 0.0,
+    device_config: str = "",
+    synapsectl_command: str = "synapsectl",
+    explicit_settings=None,
 ) -> None:
     from PySide6.QtWidgets import QApplication
 
@@ -948,6 +1448,9 @@ def run_waveform(
         tap_name=tap_name,
         y_full_scale=y_full_scale,
         timescale_s=timescale_s,
+        device_config=device_config,
+        synapsectl_command=synapsectl_command,
+        explicit_settings=explicit_settings,
     )
     window.show()
     app.exec()

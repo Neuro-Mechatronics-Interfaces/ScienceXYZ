@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nml-science-xyz"
-version = "0.2.0"
+version = "0.3.5"
 description = "Headless controller, loopback service, calibration client, and PySide6 dashboard"
 requires-python = ">=3.13"
 dependencies = [
@@ -23,13 +23,13 @@ recording = ["h5py>=3.12", "matplotlib>=3.9", "websockets>=14,<17"]
 service-main = "run_service:main"
 gui-device = "run_gui:main"
 gui-waveforms = "run_waveform:main"
+gui-calibrate = "run_calibration_gui:main"
 calibrate-prompter = "calibration_prompter:main"
 demo = "run_fake_demo:main"
 calibrate-gestures = "calibration_task:main"
 task-reactions = "run_reactions_bridge:main"
 analyze-recording = "analyze_recording:main"
 calibrate-session = "run_calibration_session:main"
-calibrate-gui = "run_calibration_gui:main"
 
 [tool.setuptools]
 package-dir = {"" = "."}

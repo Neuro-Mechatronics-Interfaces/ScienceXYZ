@@ -13,6 +13,10 @@ from stateful_decode_and_sync.waveform import (
     grid_placements,
     parse_channel_spec,
     parse_gain_spec,
+    observed_sample_rate_hz,
+    broadband_layouts_from_config_path,
+    decimation_factor_from_params,
+    _info_shows_app_running,
 )
 
 try:
@@ -115,14 +119,35 @@ class WaveformBufferTests(unittest.TestCase):
 
     def test_missing_sequences_and_malformed(self):
         buf = WaveformBuffer(duration_s=1.0, expected_sample_rate_hz=10, max_channels=1)
+        # Establish a +1 stride first, then a delta of 3 is a real gap of 2.
         buf.add_frame(frame(100, 0, (1,)))
-        buf.add_frame(frame(103, 1, (2,)))  # gap of 2
+        buf.add_frame(frame(101, 1, (2,)))  # +1: learns stride 1
+        buf.add_frame(frame(104, 2, (3,)))  # gap of 2 (delta 3 at stride 1)
         self.assertFalse(buf.add_raw(b"not-a-frame"))
-        self.assertFalse(buf.add_frame(frame(104, 2, ())))  # empty payload
+        self.assertFalse(buf.add_frame(frame(105, 3, ())))  # empty payload
         snap = buf.snapshot()
         self.assertEqual(snap.missing_sequences, 2)
         self.assertEqual(snap.parse_errors, 2)
-        self.assertEqual(snap.sequence_last, 103)
+        self.assertEqual(snap.sequence_last, 104)
+
+    def test_decimated_stream_stride_is_contiguous(self):
+        # broadband_out carries the FIR-center source sequence, which advances by
+        # the decimation factor (10). A uniform stride-10 stream must read as
+        # contiguous with no missing frames; a stride-20 step is one dropped frame.
+        buf = WaveformBuffer(duration_s=1.0, expected_sample_rate_hz=2000, max_channels=1)
+        for seq in (165, 175, 185, 195):
+            buf.add_frame(frame(seq, seq, (seq,), sample_rate=2000))
+        snap = buf.snapshot()
+        self.assertEqual(snap.missing_sequences, 0)
+        # Every step is one decimated frame apart at 2 kHz.
+        np.testing.assert_allclose(np.diff(snap.nominal_times), 1 / 2000)
+        # Each sample connects to its successor; the newest has none after it.
+        self.assertEqual(snap.connections.tolist(), [True, True, True, False])
+        # A single dropped decimated frame: 195 -> 215 skips 205.
+        buf.add_frame(frame(215, 215, (215,), sample_rate=2000))
+        snap = buf.snapshot()
+        self.assertEqual(snap.missing_sequences, 1)
+        self.assertFalse(snap.connections.tolist()[-1])
 
 
 class LayoutSpecTests(unittest.TestCase):
@@ -177,6 +202,81 @@ class GainSpecTests(unittest.TestCase):
         for bad in ("5", "x:2", "0:y", "-1:2", "0:0", "0:-3", "0:inf"):
             with self.assertRaises(ValueError):
                 parse_gain_spec(bad)
+
+
+class InfoGateParseTests(unittest.TestCase):
+    def test_matches_app_section_running_true(self):
+        info = ("Applications:\n  stateful-decode-and-sync\n    Running: True\n"
+                "  other-app\n    Running: False\n")
+        self.assertTrue(_info_shows_app_running(info))
+
+    def test_stopped_app_is_false_even_if_another_app_runs(self):
+        info = ("stateful-decode-and-sync\n    Running: False\n"
+                "  other-app\n    Running: True\n")
+        self.assertFalse(_info_shows_app_running(info))
+
+    def test_absent_app_is_false(self):
+        self.assertFalse(_info_shows_app_running("Status: Running\n"))
+
+
+class ObservedRateTests(unittest.TestCase):
+    def test_estimates_rate_from_timestamps(self):
+        # 2 kHz -> 500000 ns between samples.
+        ts = np.arange(5, dtype=np.int64) * 500_000
+        self.assertAlmostEqual(observed_sample_rate_hz(ts), 2000.0, places=3)
+
+    def test_degenerate_spans_return_none(self):
+        self.assertIsNone(observed_sample_rate_hz(np.array([], dtype=np.int64)))
+        self.assertIsNone(observed_sample_rate_hz(np.array([5], dtype=np.int64)))
+        self.assertIsNone(observed_sample_rate_hz(np.array([10, 10], dtype=np.int64)))
+        self.assertIsNone(observed_sample_rate_hz(np.array([10, 5], dtype=np.int64)))
+
+
+class ConfigLayoutTests(unittest.TestCase):
+    def _write(self, obj):
+        import json, tempfile, os
+        path = os.path.join(tempfile.mkdtemp(prefix="wf-cfg-"), "device.json")
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump(obj, handle)
+        return path
+
+    def test_parses_multiple_sources(self):
+        cfg = {"nodes": [
+            {"type": "kBroadbandSource", "id": 1, "broadbandSource": {
+                "peripheral_id": 200, "sample_rate_hz": 20000,
+                "signal": {"electrode": {"channels": [{"id": i} for i in range(4)]}}}},
+            {"type": "kBroadbandSource", "id": 5, "broadbandSource": {
+                "peripheral_id": 201, "sample_rate_hz": 2000,
+                "signal": {"electrode": {"channels": [{"id": i} for i in range(2)]}}}},
+            {"type": "kApplication", "id": 2},
+        ]}
+        layouts = broadband_layouts_from_config_path(self._write(cfg))
+        self.assertEqual([l.node_id for l in layouts], [1, 5])
+        self.assertEqual([l.n_ch for l in layouts], [4, 2])
+        self.assertEqual([l.peripheral_id for l in layouts], [200, 201])
+        self.assertEqual([l.sample_rate_hz for l in layouts], [20000, 2000])
+
+    def test_missing_or_bad_path_is_empty(self):
+        self.assertEqual(broadband_layouts_from_config_path(""), [])
+        self.assertEqual(broadband_layouts_from_config_path("/no/such/file.json"), [])
+
+
+class DecimationFactorTests(unittest.TestCase):
+    def test_shipped_params_pick_factor_10(self):
+        # 20 kHz, 200 ms window, 20 ms stride, top band 800 Hz, guard 1.25 -> 10.
+        params = {"window_ms": 200.0, "stride_ms": 20.0, "decimation_guard_ratio": 1.25,
+                  "frequency_bands_hz": [[0.0, 400.0], [400.0, 800.0]]}
+        self.assertEqual(decimation_factor_from_params(params, 20000), 10)
+
+    def test_top_band_1000_needs_smaller_factor(self):
+        # top 1000 Hz, guard 1.25 -> guarded nyquist 1250 -> factor 8 (2.5 kHz).
+        params = {"window_ms": 200.0, "stride_ms": 20.0, "decimation_guard_ratio": 1.25,
+                  "frequency_bands_hz": [[0.0, 1000.0]]}
+        self.assertEqual(decimation_factor_from_params(params, 20000), 8)
+
+    def test_no_bands_disables_decimation(self):
+        self.assertEqual(decimation_factor_from_params({"window_ms": 200.0, "stride_ms": 20.0}, 20000), 1)
+        self.assertEqual(decimation_factor_from_params({}, 20000), 1)
 
 
 class FakeTap:
@@ -283,10 +383,173 @@ class WaveformWindowTests(unittest.TestCase):
         finally:
             window.close()
 
+    def test_device_panel_builds_argv_from_configurable_command(self):
+        window = create_waveform_window(
+            "10.0.0.9", device_config="config/dev.json",
+            synapsectl_command="wsl synapsectl",
+            reader_factory=self._prefilled_reader(2))
+        try:
+            # Multi-token command reaches a WSL install; each token is one argv entry.
+            self.assertEqual(
+                window._synapsectl_argv("start", "config/dev.json"),
+                ["wsl", "synapsectl", "-u", "10.0.0.9", "start", "config/dev.json"])
+            # Empty config -> argumentless start (restart already-configured device).
+            window.device_config_edit.setText("")
+            window._copy_start_line()
+            self.assertEqual(QApplication.clipboard().text(),
+                             "wsl synapsectl -u 10.0.0.9 start")
+        finally:
+            window.close()
+
+    def test_device_start_button_toggles_to_stop_on_success(self):
+        window = create_waveform_window(
+            "10.0.0.9", reader_factory=self._prefilled_reader(2))
+        try:
+            self.assertEqual(window.run_start_button.text(), "Run: start device")
+            # Simulate a successful start completion (no real synapsectl spawned).
+            window._on_synapsectl_done("start", 0, "installed successfully", None)
+            self.assertTrue(window._device_started)
+            self.assertEqual(window.run_start_button.text(), "Run: stop device")
+            window._on_synapsectl_done("stop", 0, "stopped", None)
+            self.assertFalse(window._device_started)
+            self.assertEqual(window.run_start_button.text(), "Run: start device")
+        finally:
+            window.close()
+
+    def test_settings_round_trip_persists_layout_scale_and_device(self):
+        import tempfile
+        ini = os.path.join(tempfile.mkdtemp(prefix="waveform-rt-"), "s.ini")
+        # First window: change fields, then close to save.
+        w1 = create_waveform_window(
+            "192.0.2.1", settings_path=ini, reader_factory=self._prefilled_reader(4))
+        try:
+            w1.device_uri_edit.setText("10.1.2.3")
+            w1.device_config_edit.setText("config/persist.json")
+            w1.synapsectl_edit.setText("wsl synapsectl")
+            w1.columns_spin.setValue(2)
+            w1.channel_edit.setText("0-3")
+            w1.full_scale_spin.setValue(250.0)
+            w1.gain_spin.setValue(3.0)
+            w1.gain_edit.setText("0:2")
+            w1.timescale_spin.setValue(0.5)
+            w1.sync_toggle.setChecked(True)
+        finally:
+            w1.close()  # triggers _save_settings
+
+        # Second window with no CLI overrides restores every stored field.
+        w2 = create_waveform_window(
+            "192.0.2.9", settings_path=ini, reader_factory=self._prefilled_reader(4))
+        try:
+            self.assertEqual(w2.device_uri_edit.text(), "10.1.2.3")
+            self.assertEqual(w2.device_config_edit.text(), "config/persist.json")
+            self.assertEqual(w2.synapsectl_edit.text(), "wsl synapsectl")
+            self.assertEqual(w2.columns_spin.value(), 2)
+            self.assertEqual(w2.channel_edit.text(), "0-3")
+            self.assertEqual(w2.full_scale_spin.value(), 250.0)
+            self.assertEqual(w2.gain_spin.value(), 3.0)
+            self.assertEqual(w2.gain_edit.text(), "0:2")
+            self.assertAlmostEqual(w2.timescale_spin.value(), 0.5, places=4)
+            self.assertTrue(w2.sync_toggle.isChecked())
+            # Internal state reflects the restored scale (frame-independent).
+            self.assertEqual(w2._full_scale, 250.0)
+            self.assertEqual(w2._global_gain, 3.0)
+            self.assertEqual(w2._channel_gains, {0: 2.0})
+            self.assertEqual(w2._active_columns, 2)
+        finally:
+            w2.close()
+
+    def test_source_strip_builds_tabs_and_reports_expected_rate(self):
+        import json, tempfile, os
+        cfg = {"nodes": [
+            {"type": "kBroadbandSource", "id": 1, "broadbandSource": {
+                "peripheral_id": 200, "sample_rate_hz": 2000,
+                "signal": {"electrode": {"channels": [{"id": i} for i in range(4)]}}}},
+            {"type": "kBroadbandSource", "id": 5, "broadbandSource": {
+                "peripheral_id": 201, "sample_rate_hz": 500,
+                "signal": {"electrode": {"channels": [{"id": i} for i in range(4)]}}}},
+        ]}
+        path = os.path.join(tempfile.mkdtemp(prefix="wf-strip-"), "device.json")
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump(cfg, handle)
+        window = create_waveform_window(
+            "192.0.2.1", device_config=path, reader_factory=self._prefilled_reader(4))
+        try:
+            self.assertEqual(window.source_tabs.count(), 2)
+            self.assertEqual(window._selected_layout().node_id, 1)
+            self.assertEqual(window._expected_rate_hz(), 2000.0)
+            window.source_tabs.setCurrentIndex(1)
+            self.assertEqual(window._selected_layout().node_id, 5)
+            self.assertEqual(window._expected_rate_hz(), 500.0)
+            self.assertIn("peripheral 201", window.source_meta_label.text())
+        finally:
+            window.close()
+
+    def test_expected_rate_is_decimated_when_app_params_present(self):
+        import json, tempfile, os
+        cfg = {"nodes": [
+            {"type": "kBroadbandSource", "id": 1, "broadbandSource": {
+                "peripheral_id": 200, "sample_rate_hz": 20000,
+                "signal": {"electrode": {"channels": [{"id": i} for i in range(4)]}}}},
+            {"type": "kApplication", "id": 2, "application": {"parameters": {
+                "window_ms": 200.0, "stride_ms": 20.0, "decimation_guard_ratio": 1.25,
+                "frequency_bands_hz": [[0.0, 400.0], [400.0, 800.0]]}}},
+        ]}
+        path = os.path.join(tempfile.mkdtemp(prefix="wf-dec-"), "device.json")
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump(cfg, handle)
+        window = create_waveform_window(
+            "192.0.2.1", device_config=path, reader_factory=self._prefilled_reader(4))
+        try:
+            # Source is 20 kHz but broadband_out is decimated by 10 -> expect 2 kHz.
+            self.assertEqual(window._expected_rate_hz(), 2000.0)
+            self.assertIn("broadband_out 2000 Hz", window.source_meta_label.text())
+        finally:
+            window.close()
+
+    def test_no_config_has_no_source_strip(self):
+        window = create_waveform_window(
+            "192.0.2.1", reader_factory=self._prefilled_reader(2))
+        try:
+            self.assertFalse(hasattr(window, "source_tabs"))
+            self.assertIsNone(window._selected_layout())
+            self.assertIsNone(window._expected_rate_hz())
+        finally:
+            window.close()
+
+    def test_explicit_cli_field_overrides_stored_value(self):
+        import tempfile
+        ini = os.path.join(tempfile.mkdtemp(prefix="waveform-ovr-"), "s.ini")
+        w1 = create_waveform_window(
+            "192.0.2.1", settings_path=ini, reader_factory=self._prefilled_reader(2))
+        w1.device_uri_edit.setText("10.9.9.9")
+        w1.close()
+        # device_ip is explicit this launch: the CLI value wins over the stored one.
+        w2 = create_waveform_window(
+            "10.0.0.5", settings_path=ini, explicit_settings={"device_uri"},
+            reader_factory=self._prefilled_reader(2))
+        try:
+            self.assertEqual(w2.device_uri_edit.text(), "10.0.0.5")
+        finally:
+            w2.close()
+
     @classmethod
     def setUpClass(cls):
         os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
         cls.app = QApplication.instance() or QApplication([])
+
+    def setUp(self):
+        # A fresh per-test QSettings dir so _save_settings on window close neither
+        # touches a developer's real INI nor leaks state into the next test. Each
+        # test starts from an empty INI, so constructor-seeded values stand unless
+        # the test itself saves and reopens (the round-trip tests use their own).
+        import tempfile
+        from PySide6.QtCore import QSettings
+        self._settings_dir = tempfile.mkdtemp(prefix="waveform-settings-")
+        QSettings.setPath(QSettings.IniFormat, QSettings.UserScope, self._settings_dir)
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self._settings_dir, ignore_errors=True)
 
     @staticmethod
     def _prefilled_reader(num_channels, samples=20):

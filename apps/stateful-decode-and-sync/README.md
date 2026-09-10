@@ -22,17 +22,17 @@ kApplication(id=2, name="stateful-decode-and-sync")
         ├─ consumer  set_source_mode  [mode]            0=SAMPLING 1=SYNTHETIC
         ├─ consumer  set_capture      [label, enable]
         ├─ consumer  fit_mlp          [epochs?]         (trigger)
-        ├─ producer  broadband_out    BroadbandFrame    (real forwarded | synthetic)
+        ├─ producer  broadband_out    BroadbandFrame    (decimated to feature rate)
         └─ producer  class_out        Tensor[num_classes]  softmax
 ```
 
-For the config-only recording path, `config/rhd2132_mode_switch.json` also connects the App's `BroadbandFrame` output to a `kDiskWriter` node. The writer uses its supported static `filename` setting and writes the stream to on-device HDF5 while the configured device chain is running. Use the normal Synapse device lifecycle to define the recording epoch: stop, configure/start the JSON, then stop before retrieving the file. The writer records the App output, so in `SAMPLING` mode this is the forwarded RHD2132 stream and in `SYNTHETIC` mode it is the App's generated stream.
+For the config-only recording path, `config/rhd2132_mode_switch.json` also connects the App's `BroadbandFrame` output to a `kDiskWriter` node. The writer uses its supported static `filename` setting and writes the stream to on-device HDF5 while the configured device chain is running. Use the normal Synapse device lifecycle to define the recording epoch: stop, configure/start the JSON, then stop before retrieving the file. The writer records the App output. Because `broadband_out` is now the anti-alias-decimated feature-rate stream (see below), the on-device HDF5 recording is at the feature rate (2 kHz with the shipped config), not the raw 20 kHz source rate; in `SAMPLING` mode this is the decimated RHD2132 stream and in `SYNTHETIC` mode it is the App's generated stream after the same decimation.
 
 The current Disk Writer contract does not provide an App runtime recording toggle or a filename control command. A separate writer or a documented multi-input/fan-in capability would be needed before treating independent wireless streams as one HDF5 series; this config does not invent that behavior.
 
 <!-- graphviz:apps/stateful-decode-and-sync/docs/disk-writer-recording-flow.dot --> ![Configured BroadbandFrame recording flow](disk-writer-recording-flow.svg) <!-- /graphviz:apps/stateful-decode-and-sync/docs/disk-writer-recording-flow.dot -->
 
-In SAMPLING mode the App forwards each upstream `BroadbandFrame` **unchanged** on `broadband_out` (source timestamps are preserved, per repo policy). In SYNTHETIC mode it emits its own deterministic frames with a monotonic sequence number and a derived timestamp. The typed `control` tap and all legacy control shims enqueue bounded requests; the main loop applies them serially before the next source batch is routed. Raw sample batches are transferred through a bounded, thread-safe queue to `FeatureWorker`. Its ingestion thread selects channels, applies the streaming anti-alias FIR, decimates, maintains the feature-rate window, and queues immutable completed windows to a FIFO compute thread, which performs MPF and optional model inference in order. The main loop only drains bounded feature results for capture and SDK publication.
+The acquisition loop pushes every raw source sample through one shared anti-alias/decimation stage (`StreamingDecimator`) that reduces the 20 kHz source to the feature rate (2 kHz with the shipped config). Each emitted decimated sample is both published on `broadband_out` **and** fed to the decoder, so the broadband tap and the model observe an identical feature-rate ("oscilloscope average") stream. The decimated frame carries the FIR-center source sequence and timestamp, so a source clock is preserved (not a host receipt time) — it is the mid-window source sample time, sampled at the feature rate, rather than the raw 20 kHz edge time. In SAMPLING mode this decimates the upstream RHD2132 stream; in SYNTHETIC mode the App generates raw-rate deterministic frames and passes them through the same decimator. The typed `control` tap and all legacy control shims enqueue bounded requests; the main loop applies them serially before the next source batch is routed. Decimated sample batches are transferred through a bounded, thread-safe queue to `FeatureWorker`, whose ingestion thread selects channels, maintains the feature-rate window, and queues immutable completed windows to a FIFO compute thread that performs MPF and optional model inference in order. The main loop only drains bounded feature results for capture and SDK publication.
 
 The editable source for the acquisition/compute flow is [`docs/feature-worker-pipeline.dot`](docs/feature-worker-pipeline.dot).
 
@@ -42,11 +42,11 @@ The editable source for the acquisition/compute flow is [`docs/feature-worker-pi
 
 | File | Role |
 | --- | --- |
-| `src/mode_switch_app.{hpp,cpp}` | App subclass: typed/legacy taps, serial command application, mode FSM, windowing |
+| `src/main.{hpp,cpp}` | App subclass: typed/legacy taps, serial command application, mode FSM, decimation + windowing |
 | `src/synthetic_source.{hpp,cpp}` | ported gateware synthetic neural source |
 | `src/mpf_features.{hpp,cpp}` | STFT + CSD + band-average + Hermitian matrix-log |
-| `src/feature_decimator.hpp` | guarded integer-decimation plan + anti-alias FIR design |
-| `src/feature_worker.hpp` | staged ingestion/decimation, windowing, ordered compute, and diagnostics |
+| `src/feature_decimator.hpp` | guarded integer-decimation plan, anti-alias FIR design, and the streaming `StreamingDecimator` |
+| `src/feature_worker.hpp` | staged ingestion (channel select + windowing), ordered compute, and diagnostics |
 | `src/clock_estimator.{hpp,cpp}` | bounded affine source-clock mapping, epochs, and uncertainty intervals |
 | `src/wireless_source_adapter.{hpp,cpp}` | reusable `AcceptedBatch` normalizer; `MultiSourceAdapter` owns one to four instances (`FourSourceAdapter` is a compatibility alias) |
 | `src/wireless_simulator.{hpp,cpp}` | deterministic one-to-four-source simulator with drift, jitter, loss, reorder, reset, and channel-metadata controls |
@@ -93,9 +93,9 @@ The synthetic source is a faithful port of `vendor/axon-peripherals/src/gateware
 
 The MPF matrix logarithm uses a hand-rolled cyclic-Jacobi Hermitian eigensolver (`mpf_features.cpp`), so **no `eigen3`/BLAS dependency is added** to `vcpkg.json`.
 
-When `frequency_bands_hz` is present, its ordered `[low_hz, high_hz]` pairs select the physical half-open frequency bands used by MPF. The feature worker chooses the largest integer decimation that preserves an anti-alias transition band above the highest configured edge and exactly divides both the source-rate window and stride. Thus the ring still represents 200 ms and advances every 20 ms without clock drift. The temporal ring contains exactly `round(feature_sample_rate_hz * window_ms / 1000)` real samples; each immutable compute window is then zero-padded to the next power of two for one radix-2 transform. Padding never lengthens the live ring or its represented time span. The FIR-center source sequence and timestamp are retained on each decimated sample. Omitting `frequency_bands_hz` preserves the legacy full-Nyquist split and disables automatic decimation.
+When `frequency_bands_hz` is present, its ordered `[low_hz, high_hz]` pairs select the physical half-open frequency bands used by MPF. The acquisition loop chooses the largest integer decimation that preserves an anti-alias transition band above the highest configured edge and exactly divides both the source-rate window and stride, then applies it in the shared `StreamingDecimator` before both `broadband_out` publication and the feature worker. Thus the ring still represents 200 ms and advances every 20 ms without clock drift. The temporal ring contains exactly `round(feature_sample_rate_hz * window_ms / 1000)` real samples; each immutable compute window is then zero-padded to the next power of two for one radix-2 transform. Padding never lengthens the live ring or its represented time span. The FIR-center source sequence and timestamp are retained on each decimated sample. Omitting `frequency_bands_hz` preserves the legacy full-Nyquist split and disables automatic decimation (`broadband_out` then carries the raw source rate unchanged).
 
-The shipped configuration uses `[0, 62.5)`, `[62.5, 125)`, `[125, 250)`, `[250, 375)`, `[375, 687.5)`, and `[687.5, 1000)` Hz. With the 20 kHz source, 200 ms window, 20 ms stride, and 1.25 guard ratio, the exact-clock constraints select decimation by 8: the feature rate is 2.5 kHz, its Nyquist frequency is 1.25 kHz, and the 500-sample temporal window is zero-padded to 512 points for the FFT.
+The shipped configuration uses `[0, 62.5)`, `[62.5, 125)`, `[125, 250)`, `[250, 375)`, `[375, 562.5)`, and `[562.5, 800)` Hz. With the 20 kHz source, 200 ms window, 20 ms stride, and 1.25 guard ratio, the exact-clock constraints select decimation by 10: the feature rate is 2 kHz, its Nyquist frequency is 1 kHz (leaving the 800 Hz top edge a 200 Hz anti-alias transition band under the 1.25 guard), and the 400-sample temporal window is zero-padded to 512 points for the FFT. The 20-to-2 kHz averaging is the noise-floor benefit: each feature-rate sample is a weighted anti-alias average of ~10 source samples, lowering the in-band contribution of ADC quantization noise while the FIR (unlike a plain 10-sample boxcar) still rejects the 800 Hz-to-Nyquist content the analog front end passes.
 
 The dynamically sized transform uses a preplanned radix-2 FFT. MPF accumulates only one CSD triangle, stops Jacobi sweeps on a scale-relative tolerance, and reconstructs only the configured matrix-log entries. The eigendecomposition still uses the complete CSD: retained matrix-log entries depend on every selected-channel covariance, so truncating the CSD itself would change the MPF operator. Feature-worker diagnostics report cumulative average and maximum MPF and inference service times separately (`mpf_*_us`, `inference_*_us`) alongside the queue/drop counters.
 
@@ -170,12 +170,14 @@ python client/fit_mlp.py --device-ip $DEV --epochs 200
 python client/listen_class.py --device-ip $DEV
 ```
 
-To watch the broadband stream itself as live per-channel traces, run the read-only waveform viewer (needs the client `waveform` extra for `pyqtgraph`). It subscribes to `broadband_out`, plots one trace per channel in a grid whose column count and channel selection/order are adjustable live (e.g. a 4x8 grid of 32 channels), and sends no device command, so it can run alongside the dashboard and CLI tools:
+To watch the broadband stream itself as live per-channel traces, run the waveform viewer (needs the client `waveform` extra for `pyqtgraph`). It subscribes to `broadband_out` and plots one trace per channel in a grid whose column count and channel selection/order are adjustable live (e.g. a 4x8 grid of 32 channels). The tap read path is read-only, so it can run alongside the dashboard and CLI tools:
 
 ```bash
 python client/run_waveform.py --device-ip $DEV # all channels, one column
 python client/run_waveform.py --device-ip $DEV --channels 0-31 --columns 8 # 4x8 grid
 ```
+
+The top **Device** panel adds optional operator `synapsectl` controls, matching the calibration GUI: a **Copy start line** button, **Run: start/stop device**, and **Run: fetch info** (which reports whether the App shows Running: True). The `synapsectl` command is a configurable field (a Windows-native install in the active venv/PATH works unchanged; use `wsl synapsectl` for a WSL install), and the `start` config path is editable (empty restarts an already-configured device). Seed the fields from the CLI with `--device-config` and `--synapsectl`. Running `synapsectl` from this operator-launched GUI is permitted under the AGENTS.md Synapse CLI execution boundary scope (a human launches and watches it, the exact command is shown, and the path is configurable); it never runs from a test or an agent path.
 
 Layout and channel arrangement are documented in [`client/README.md`](client/README.md).
 
@@ -197,7 +199,7 @@ The graphical client owns the device Tap connections through a replaceable trans
 python client/run_gui.py --device-ip "$DEV"
 ```
 
-The dashboard is a control and state view; it does not plot waveforms. For live per-channel traces of the `broadband_out` stream, run the read-only waveform viewer (`python client/run_waveform.py --device-ip "$DEV"`), which needs the client `waveform` extra. See [`client/README.md`](client/README.md).
+The dashboard is a control and state view; it does not plot waveforms. For live per-channel traces of the `broadband_out` stream, run the waveform viewer (`python client/run_waveform.py --device-ip "$DEV"`), which needs the client `waveform` extra. Its tap read path is read-only; its Device panel adds optional operator `synapsectl` start/stop/info controls. See [`client/README.md`](client/README.md).
 
 For external tools, the same controller can expose the versioned loopback NDJSON service. It binds only to localhost by default:
 
@@ -234,7 +236,7 @@ All parameters have safe defaults. Window/stride are defined in source-clock mil
 | `num_classes` | ring-buffer categories / MLP outputs | 5 |
 | `window_ms` | feature window length (ms) → one MPF vector | 200 |
 | `stride_ms` | decoder stride / hop (ms) | 20 |
-| `frequency_bands_hz` | ordered, non-overlapping `[low_hz, high_hz]` MPF bands; enables guarded decimation | `[0,62.5), [62.5,125), [125,250), [250,375), [375,687.5), [687.5,1000)` |
+| `frequency_bands_hz` | ordered, non-overlapping `[low_hz, high_hz]` MPF bands; enables guarded decimation | `[0,62.5), [62.5,125), [125,250), [250,375), [375,562.5), [562.5,800)` |
 | `decimation_guard_ratio` | required post-decimation Nyquist / highest configured edge | 1.25 |
 | `num_bands` | legacy even full-Nyquist split used only when explicit Hz bands are absent | 8 |
 | `num_off_diag_bands` | upper matrix offsets retained in addition to the diagonal | 2 |

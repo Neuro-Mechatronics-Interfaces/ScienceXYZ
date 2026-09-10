@@ -13,19 +13,20 @@
 #include <utility>
 #include <vector>
 
-#include "feature_decimator.hpp"
 #include "mpf_features.hpp"
 
 namespace app {
 
 // Moves stride-triggered work off the acquisition loop. The ingestion thread
-// owns channel selection, streaming anti-alias/decimation, and feature-rate
-// window state while continuously draining value-owned sample batches. Each
-// completed window is copied into a FIFO compute queue; the compute thread
-// performs MPF and optional classification in order. The App thread only
-// forwards raw frames, enqueues samples, and consumes completed results.
-// Route metadata is captured at the source-frame boundary so delayed feature
-// results cannot be relabelled by a later control command.
+// owns channel selection and feature-rate window state while continuously
+// draining value-owned sample batches. Each completed window is copied into a
+// FIFO compute queue; the compute thread performs MPF and optional
+// classification in order. The App thread decimates raw frames to the feature
+// rate (see StreamingDecimator), forwards them, enqueues the decimated samples,
+// and consumes completed results. Samples reaching this worker are therefore
+// already at the feature rate; no decimation happens here. Route metadata is
+// captured at the source-frame boundary so delayed feature results cannot be
+// relabelled by a later control command.
 class FeatureWorker {
  public:
   struct Route {
@@ -59,7 +60,6 @@ class FeatureWorker {
     std::size_t window_samples = 0;
     std::size_t stride_samples = 1;
     std::shared_ptr<const MpfFeaturizer> featurizer;
-    FeatureDecimationPlan decimation;
     // Called only by the compute thread, after MPF has completed. The app
     // supplies a mutex-protected snapshot/inference callback for the live
     // model; leaving it empty disables classification work.
@@ -73,6 +73,8 @@ class FeatureWorker {
     std::uint64_t input_batches = 0;
     std::uint64_t input_samples = 0;
     std::uint64_t ingest_samples_processed = 0;
+    // Equal to ingest_samples_processed now that decimation is upstream; kept
+    // for diagnostic-log/stat compatibility.
     std::uint64_t feature_samples_emitted = 0;
     std::uint64_t ingest_service_ns_total = 0;
     std::uint64_t ingest_service_ns_max_batch = 0;
@@ -104,11 +106,7 @@ class FeatureWorker {
   bool start(Config config) {
     if (config.channel_map.empty() || config.window_samples == 0 ||
         config.stride_samples == 0 || !config.featurizer || config.input_capacity == 0 ||
-        config.compute_capacity == 0 || config.result_capacity == 0 ||
-        config.decimation.factor == 0 ||
-        (config.decimation.factor > 1 &&
-         (config.decimation.coefficients.empty() ||
-          config.decimation.coefficients.size() % 2 == 0))) {
+        config.compute_capacity == 0 || config.result_capacity == 0) {
       return false;
     }
 
@@ -205,12 +203,6 @@ class FeatureWorker {
     Route route;
   };
 
-  struct FilterMetadata {
-    std::uint64_t source_sequence_number = 0;
-    std::uint64_t timestamp_ns = 0;
-    Route route;
-  };
-
   void reset_window_state() {
     window_ring_.assign(config_.channel_map.size(),
                         std::vector<float>(config_.window_samples, 0.0f));
@@ -218,17 +210,6 @@ class FeatureWorker {
     samples_seen_ = 0;
     samples_since_stride_ = 0;
     selected_scratch_.assign(config_.channel_map.size(), 0.0f);
-    filtered_scratch_.assign(config_.channel_map.size(), 0.0f);
-    filter_history_pos_ = 0;
-    raw_filter_samples_ = 0;
-    if (config_.decimation.factor > 1) {
-      const auto taps = config_.decimation.coefficients.size();
-      filter_history_.assign(config_.channel_map.size(), std::vector<float>(taps, 0.0f));
-      filter_metadata_.assign(taps, {});
-    } else {
-      filter_history_.clear();
-      filter_metadata_.clear();
-    }
   }
 
   void run_ingest() {
@@ -318,6 +299,9 @@ class FeatureWorker {
             .count());
   }
 
+  // Samples arrive already at the feature rate (decimation happens upstream in
+  // the acquisition loop). Select the featurized channels and feed one
+  // feature-rate sample into the window state.
   bool ingest(Sample sample, const Route& route) {
     for (std::size_t fc = 0; fc < config_.channel_map.size(); ++fc) {
       const auto upstream = config_.channel_map[fc];
@@ -325,43 +309,9 @@ class FeatureWorker {
                                   ? static_cast<float>(sample.values[upstream])
                                   : 0.0f;
     }
-
-    if (config_.decimation.factor == 1) {
-      ingest_feature_sample(selected_scratch_, sample.source_sequence_number,
-                            sample.timestamp_ns, route);
-      return true;
-    }
-
-    const auto taps = config_.decimation.coefficients.size();
-    for (std::size_t fc = 0; fc < selected_scratch_.size(); ++fc) {
-      filter_history_[fc][filter_history_pos_] = selected_scratch_[fc];
-    }
-    filter_metadata_[filter_history_pos_] =
-        {sample.source_sequence_number, sample.timestamp_ns, route};
-    ++raw_filter_samples_;
-
-    const bool filter_ready = raw_filter_samples_ >= taps;
-    const bool emit = filter_ready && (raw_filter_samples_ - taps) %
-                                             config_.decimation.factor ==
-                                         0;
-    if (emit) {
-      std::fill(filtered_scratch_.begin(), filtered_scratch_.end(), 0.0f);
-      for (std::size_t fc = 0; fc < selected_scratch_.size(); ++fc) {
-        double value = 0.0;
-        for (std::size_t lag = 0; lag < taps; ++lag) {
-          const auto index = (filter_history_pos_ + taps - lag) % taps;
-          value += config_.decimation.coefficients[lag] * filter_history_[fc][index];
-        }
-        filtered_scratch_[fc] = static_cast<float>(value);
-      }
-      const auto center_index =
-          (filter_history_pos_ + taps - config_.decimation.group_delay_source_samples) % taps;
-      const auto metadata = filter_metadata_[center_index];
-      ingest_feature_sample(filtered_scratch_, metadata.source_sequence_number,
-                            metadata.timestamp_ns, metadata.route);
-    }
-    filter_history_pos_ = (filter_history_pos_ + 1) % taps;
-    return emit;
+    ingest_feature_sample(selected_scratch_, sample.source_sequence_number,
+                          sample.timestamp_ns, route);
+    return true;
   }
 
   void ingest_feature_sample(const std::vector<float>& values,
@@ -413,15 +363,10 @@ class FeatureWorker {
   std::deque<ComputeJob> compute_jobs_;
   std::deque<Result> results_;
   std::vector<std::vector<float>> window_ring_;
-  std::vector<std::vector<float>> filter_history_;
-  std::vector<FilterMetadata> filter_metadata_;
   std::vector<float> selected_scratch_;
-  std::vector<float> filtered_scratch_;
   std::size_t ring_pos_ = 0;
   std::size_t samples_seen_ = 0;
   std::size_t samples_since_stride_ = 0;
-  std::size_t filter_history_pos_ = 0;
-  std::size_t raw_filter_samples_ = 0;
   Stats stats_;
   bool stopping_ = false;
   bool running_ = false;

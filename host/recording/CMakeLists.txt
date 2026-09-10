@@ -2,12 +2,47 @@ cmake_minimum_required(VERSION 3.23)
 project(sciencexyz_raw_recorder LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+# This project uses no C++20 modules. Some CMake+Ninja+MSVC combinations emit a
+# malformed C++20 module dependency-scan rule ("CXX_SCAN__..._$Config: expected
+# newline"); the recorder has no modules to scan, so disable scanning outright.
+# Set here (before any target) so generation honours it regardless of a buggy
+# cache default. Harmless on toolchains that never emitted the scan rule.
+set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 include(CTest)
-find_package(Protobuf REQUIRED)
+# Protobuf: the Linux distribution ships only module-mode FindProtobuf; a vcpkg
+# protobuf on Windows (especially the *-static triplet) ships CONFIG files and
+# module mode cannot locate its libs (Could NOT find Protobuf: missing
+# Protobuf_LIBRARIES). Prefer CONFIG on Windows, keep module mode on Linux. Both
+# provide the protobuf::libprotobuf / protobuf::protoc targets used below.
+if(WIN32)
+  find_package(Protobuf CONFIG REQUIRED)
+else()
+  find_package(Protobuf REQUIRED)
+endif()
 find_package(gRPC CONFIG REQUIRED)
 find_package(cppzmq CONFIG REQUIRED)
-set(HDF5_NO_FIND_PACKAGE_CONFIG_FILE TRUE)
-find_package(HDF5 REQUIRED COMPONENTS C)
+# The Linux distribution build discovers HDF5 in module mode (its -dev package
+# ships only FindHDF5.cmake). A vcpkg HDF5 on Windows ships CONFIG files and
+# pulls in zlib/szip that module mode misses, so prefer CONFIG there. Keep the
+# Linux path exactly as before.
+if(WIN32)
+  find_package(HDF5 CONFIG REQUIRED COMPONENTS C)
+  # vcpkg's config exposes imported targets (hdf5::hdf5-shared/-static) but does
+  # not always populate HDF5_C_LIBRARIES/HDF5_INCLUDE_DIRS the way module mode
+  # does. Normalize to the variables the targets below already consume.
+  if(NOT HDF5_C_LIBRARIES)
+    if(TARGET hdf5::hdf5-shared)
+      set(HDF5_C_LIBRARIES hdf5::hdf5-shared)
+    elseif(TARGET hdf5::hdf5-static)
+      set(HDF5_C_LIBRARIES hdf5::hdf5-static)
+    elseif(TARGET hdf5::hdf5)
+      set(HDF5_C_LIBRARIES hdf5::hdf5)
+    endif()
+  endif()
+else()
+  set(HDF5_NO_FIND_PACKAGE_CONFIG_FILE TRUE)
+  find_package(HDF5 REQUIRED COMPONENTS C)
+endif()
 find_package(Threads REQUIRED)
 get_filename_component(ROOT "../.." ABSOLUTE)
 set(APP "${ROOT}/apps/stateful-decode-and-sync")

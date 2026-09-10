@@ -118,7 +118,9 @@ def bridge_command(python, args, session_dir):
             "--provenance", str(session_dir / "provenance.json"),
             "--output-root", str(Path(args.output_root).resolve()),
             "--service-port", str(args.service_port), "--port", str(args.bridge_port),
-            *sum((["--origin", origin] for origin in args.origin), [])]
+            *sum((["--origin", origin] for origin in args.origin), []),
+            *(["--passive"] if getattr(args, "passive", False) else []),
+            *(["--block", str(args.block)] if getattr(args, "block", None) else [])]
 
 
 def _print_lines(header, commands):
@@ -159,6 +161,13 @@ def main(argv=None, *, spawn=subprocess.Popen):
     parser.add_argument("--dry-run", action="store_true",
                         help="print the operator synapsectl line and child commands, then exit; "
                              "generates no session and starts nothing")
+    parser.add_argument("--passive", action="store_true",
+                        help="passive mode: the bridge records broadband + host-clock browser "
+                             "annotations into a Cognescent data.hdf5 (no C++ recorder, no device "
+                             "task round trip). The device App is still started for the broadband tap.")
+    parser.add_argument("--block", type=int, default=1,
+                        help="passive mode: starting block index for the Cognescent folder name; "
+                             "increments on each stop and reconciles with the browser block")
     args = parser.parse_args(argv)
 
     start_line = synapsectl_start_line(args.device_uri, Path(args.session_dir) / "device-config.json")

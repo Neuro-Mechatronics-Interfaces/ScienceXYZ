@@ -60,7 +60,7 @@ routing.
 
 ## T-7 state and result publication
 
-`src/mode_switch_app.cpp` creates producer taps `state` (`StateSnapshot`) and
+`src/main.cpp` creates producer taps `state` (`StateSnapshot`) and
 `command_result` (`CommandResult`). The app publishes a complete baseline before
 the first source frame, immediately after every canonical command (state first,
 then the correlated result), and periodically at 2 Hz. The result's

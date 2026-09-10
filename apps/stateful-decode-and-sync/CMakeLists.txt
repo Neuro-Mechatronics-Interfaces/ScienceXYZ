@@ -46,7 +46,7 @@ endif()
 message(STATUS "SYNAPSE_APP_SDK_LIB: ${SYNAPSE_APP_SDK_LIB}")
 
 add_executable(stateful-decode-and-sync
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/mode_switch_app.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/synthetic_source.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/mpf_features.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/mlp.cpp

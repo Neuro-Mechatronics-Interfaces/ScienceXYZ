@@ -24,6 +24,7 @@
 #include "control_state.hpp"
 #include "synthetic_source.hpp"
 #include "multipart_drain.hpp"
+#include "feature_decimator.hpp"
 #include "feature_worker.hpp"
 #include "task_state.hpp"
 
@@ -107,7 +108,13 @@ class ModeSwitchApp : public synapse::App {
                                const protocol::FitProgress* progress = nullptr);
   void publish_state_snapshot();
   void publish_periodic_state_if_due();
-  void process_task_frame(const synapse::BroadbandFrame& frame);
+  // Feed one reference-stream boundary to task authority. `reference_sequence`
+  // is a dense, monotonic +1 counter of emitted decimated frames (the feature
+  // timebase), decoupled from the frame's FIR-center source sequence number so a
+  // sequence_gap_action="fault" policy still detects a dropped decimated frame
+  // even though the raw source sequence advances by the decimation factor.
+  void process_task_frame(const synapse::BroadbandFrame& frame,
+                          std::uint64_t reference_sequence);
   void poll_task_source_loss();
   bool publish_task_transition(const task::TransitionEvent& event);
   void publish_task_failures(const std::vector<task::ProposalResolution>& failures);
@@ -125,6 +132,13 @@ class ModeSwitchApp : public synapse::App {
   bool read_frames(ReadBatch& batch);
   void maybe_log_reader_diagnostics(const ReadBatch& batch);
   FeatureWorker::Route feature_route() const;
+  // Push one raw source frame through the shared decimator. Every emitted
+  // decimated frame is published on broadband_out (with the feature-rate
+  // sample_rate_hz and FIR-center source metadata) and appended to `out_samples`
+  // for the feature worker. Task-frame authority is evaluated on the emitted
+  // decimated frame, which carries the FIR-center source timestamp.
+  void route_source_frame(const synapse::BroadbandFrame& raw_frame,
+                          std::vector<FeatureWorker::Sample>& out_samples);
   void enqueue_feature_batch(std::vector<FeatureWorker::Sample> samples,
                              const FeatureWorker::Route& route);
   void drain_feature_results();
@@ -167,6 +181,12 @@ class ModeSwitchApp : public synapse::App {
   std::string task_app_session_id_;
   std::unordered_map<std::string, stateful_decode_and_sync::v1::CommandKind>
       pending_task_commands_;
+  // Dense +1 reference-stream counter in the decimated (feature) timebase. Task
+  // authority requires a strictly increasing, gap-free, nonzero reference
+  // sequence; the raw FIR-center source sequence would advance by the
+  // decimation factor and trip a gap-fault policy. Pre-incremented, so the first
+  // emitted decimated frame is reference sequence 1.
+  std::uint64_t task_reference_sequence_ = 0;
 
   // ---- pipeline state (main-thread owned unless noted) ----
   bool pipeline_ready_ = false;
@@ -184,6 +204,15 @@ class ModeSwitchApp : public synapse::App {
   std::vector<std::size_t> channel_map_;  // featurized index -> upstream index
   std::size_t window_samples_ = 0;
   std::size_t stride_samples_ = 0;
+
+  // Shared anti-alias/decimation stage. The main loop pushes every raw source
+  // sample through this; each emitted decimated sample is published on
+  // broadband_out AND fed to the feature worker, so the broadband tap and the
+  // decoder observe an identical feature-rate ("oscilloscope average") stream.
+  StreamingDecimator decimator_;
+  std::size_t decimation_factor_ = 1;
+  double feature_sample_rate_hz_ = 0.0;
+  std::vector<std::int32_t> scratch_raw_values_;  // main-loop reuse buffer
 
   std::shared_ptr<const MpfFeaturizer> featurizer_;
   FeatureWorker feature_worker_;

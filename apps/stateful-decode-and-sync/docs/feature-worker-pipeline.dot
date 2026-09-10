@@ -6,14 +6,16 @@ digraph feature_worker_pipeline {
   edge [color="#40566f", fontname=" sans", fontsize=9];
 
   source [label="BroadbandSource\n20 kHz frames"];
-  acquisition [label="App acquisition loop\nforward raw frame first"];
-  ingest [label="FeatureWorker ingestion\nchannel select + anti-alias FIR\ninteger decimation\nfeature-rate window/ring"];
+  acquisition [label="App acquisition loop\nanti-alias FIR + integer decimation\n(StreamingDecimator, 20 -> 2 kHz)"];
+  broadband_out [label="broadband_out tap\ndecimated 2 kHz frames\nFIR-center source metadata", fillcolor="#eafaef"];
+  ingest [label="FeatureWorker ingestion\nchannel select\nfeature-rate window/ring"];
   compute [label="FeatureWorker compute\nnextpow2 zero-pad + FFT\nexplicit-Hz MPF + inference\none worker, in order"];
   results [label="Feature results\nbounded FIFO\ncapture + class publication"];
 
   source -> acquisition [label="receive_multipart()"];
-  acquisition -> ingest [label="value-owned raw samples"];
-  ingest -> compute [label="decimated 200 ms window\nevery 20 ms"];
+  acquisition -> broadband_out [label="publish_tap()\ndecimated frame"];
+  acquisition -> ingest [label="value-owned decimated samples"];
+  ingest -> compute [label="200 ms window\nevery 20 ms (feature rate)"];
   compute -> results [label="FeatureResult"];
   results -> acquisition [label="bounded drain"];
 }
