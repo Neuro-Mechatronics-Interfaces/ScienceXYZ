@@ -4,9 +4,9 @@
 
 ScienceXYZ is experimental acquisition and control infrastructure. This document sets contribution and deployment requirements; it does not certify that the WIP implementation already enforces them. Physical acceptance must be documented separately from automated tests.
 
-Reviewed 2026-09-10: [science-mcp](apps/stateful-decode-and-sync/mcp/science_mcp/server.py) exposes nine tools and two repository resources over stdio. Device access is read-only through the operator's NDJSON service (default `127.0.0.1:18765`). `synapsectl_command` only formats commands. Offline `analyze_recording` writes derived reports and can fit a baseline; it is not free of filesystem or compute side effects. Operator captures are historical evidence, not live identity checks.
+Reviewed 2026-09-10: [science-mcp](apps/scifi2-hub-manager/mcp/science_mcp/server.py) exposes nine tools and two repository resources over stdio. Device access is read-only through the operator's NDJSON service (default `127.0.0.1:18765`). `synapsectl_command` only formats commands. Offline `analyze_recording` writes derived reports and can fit a baseline; it is not free of filesystem or compute side effects. Operator captures are historical evidence, not live identity checks.
 
-The WIP [Exo service](apps/stateful-decode-and-sync/client/stateful_decode_and_sync/exo_service.py) has a separate NDJSON interface (default `127.0.0.1:18766`) and a single serial-owning worker. It is not yet an MCP suite. Its arm/home/pose commands can move hardware; signed joint values are not degrees. Its host watchdog returns toward rest, which itself causes movement and is not a certified emergency stop. Online motor-unit decomposition, its database, and voice-command integration are planned, not implemented.
+The WIP [Exo service](apps/scifi2-hub-manager/client/scifi2_hub_manager/exo_service.py) has a separate NDJSON interface (default `127.0.0.1:18766`) and a single serial-owning worker. It is not yet an MCP suite. Its arm/home/pose commands can move hardware; signed joint values are not degrees. Its host watchdog returns toward rest, which itself causes movement and is not a certified emergency stop. Online motor-unit decomposition, its database, and voice-command integration are planned, not implemented.
 
 ## Trust and permissions
 

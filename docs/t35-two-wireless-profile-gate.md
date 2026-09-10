@@ -3,7 +3,7 @@
 T-35's runtime support is ready for a bounded two-source host configuration,
 but the deployable profile is intentionally gated on field confirmation. The
 external sources remain host-side; the SciFi-2 device start input remains
-`apps/stateful-decode-and-sync/config/rhd2132_mode_switch.json`.
+`apps/scifi2-hub-manager/config/rhd2132.json`.
 
 Before creating `config/host/rhd2132_plus_two_wireless.json`, record these
 facts from the actual gateway/source pair and the live SciFi-2 inventory:

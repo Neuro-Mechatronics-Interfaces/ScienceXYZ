@@ -1,0 +1,420 @@
+#include "exo_link.hpp"
+
+#include <algorithm>
+#include <chrono>
+#include <cctype>
+#include <sstream>
+#include <utility>
+
+namespace scifi2_hub::exo {
+
+namespace {
+
+using Clock = std::chrono::steady_clock;
+
+// Parse a firmware version string ("0.6.4", "Exo Device Version: 0.6.4;", ...)
+// into a comparable {major, minor, patch}. Missing components are 0; an
+// unparseable string yields {0,0,0}, which compares below every real version so
+// a feature gate fails closed.
+std::array<int, 3> parse_firmware(const std::string& text) {
+  std::array<int, 3> out{0, 0, 0};
+  std::size_t i = 0;
+  while (i < text.size() && !std::isdigit(static_cast<unsigned char>(text[i]))) ++i;
+  int component = 0;
+  int have = 0;
+  bool in_number = false;
+  for (; i < text.size() && have < 3; ++i) {
+    const char c = text[i];
+    if (std::isdigit(static_cast<unsigned char>(c))) {
+      component = component * 10 + (c - '0');
+      in_number = true;
+    } else if (c == '.') {
+      out[static_cast<std::size_t>(have++)] = component;
+      component = 0;
+      in_number = false;
+    } else {
+      break;
+    }
+  }
+  if (in_number && have < 3) out[static_cast<std::size_t>(have++)] = component;
+  return out;
+}
+
+bool firmware_at_least(const std::array<int, 3>& have, const std::array<int, 3>& want) {
+  return have >= want;
+}
+
+}  // namespace
+
+bool format_set_finger_angles(const JointPose& pose, std::string& out) {
+  bool any = false;
+  std::array<std::string, kJointCount> fields;
+  for (std::size_t j = 0; j < kJointCount; ++j) {
+    if (!pose.has_value[j]) {
+      fields[j].clear();
+      continue;
+    }
+    const int value = pose.values[j];
+    if (value < -kJointValueMax || value > kJointValueMax) return false;
+    fields[j] = std::to_string(value);
+    any = true;
+  }
+  if (!any) return false;
+  // Drop trailing empty (held) fields: an omitted field holds like an empty one.
+  std::size_t last = kJointCount;
+  while (last > 0 && fields[last - 1].empty()) --last;
+  std::string command = "set_finger_angles";
+  for (std::size_t j = 0; j < last; ++j) {
+    command += ':';
+    command += fields[j];
+  }
+  out = std::move(command);
+  return true;
+}
+
+ExoLinkWorker::ExoLinkWorker(ExoLinkConfig config, std::unique_ptr<SerialPort> port)
+    : config_(std::move(config)), port_(std::move(port)) {}
+
+ExoLinkWorker::~ExoLinkWorker() { stop(); }
+
+void ExoLinkWorker::start() {
+  std::lock_guard<std::mutex> lock(jobs_mutex_);
+  if (thread_.joinable()) return;
+  stopping_ = false;
+  thread_ = std::thread([this] { run(); });
+}
+
+void ExoLinkWorker::stop() {
+  {
+    std::lock_guard<std::mutex> lock(jobs_mutex_);
+    if (!thread_.joinable()) return;
+  }
+  // Best-effort disarm/close while the worker still runs.
+  std::string ignored;
+  submit([this](std::string& error) { return do_disconnect(error); }, &ignored, 5000);
+  {
+    std::lock_guard<std::mutex> lock(jobs_mutex_);
+    stopping_ = true;
+  }
+  jobs_cv_.notify_all();
+  if (thread_.joinable()) thread_.join();
+}
+
+bool ExoLinkWorker::connect(std::string* error_out, int timeout_ms) {
+  start();
+  return submit([this](std::string& error) { return do_connect(error); }, error_out, timeout_ms);
+}
+
+bool ExoLinkWorker::disconnect(std::string* error_out, int timeout_ms) {
+  return submit([this](std::string& error) { return do_disconnect(error); }, error_out, timeout_ms);
+}
+
+bool ExoLinkWorker::arm(bool home, std::string* error_out, int timeout_ms) {
+  return submit([this, home](std::string& error) { return do_arm(home, error); }, error_out,
+                timeout_ms);
+}
+
+bool ExoLinkWorker::disarm(std::string* error_out, int timeout_ms) {
+  return submit([this](std::string& error) { return do_disarm(error); }, error_out, timeout_ms);
+}
+
+bool ExoLinkWorker::home(std::string* error_out, int timeout_ms) {
+  return submit([this](std::string& error) { return do_home(error); }, error_out, timeout_ms);
+}
+
+bool ExoLinkWorker::set_pose(const JointPose& pose, std::string* error_out, int timeout_ms) {
+  return submit([this, pose](std::string& error) { return do_set_pose(pose, error); }, error_out,
+                timeout_ms);
+}
+
+ExoStatus ExoLinkWorker::snapshot() const {
+  std::lock_guard<std::mutex> lock(status_mutex_);
+  return status_;
+}
+
+void ExoLinkWorker::run() {
+  for (;;) {
+    std::shared_ptr<Job> job;
+    {
+      std::unique_lock<std::mutex> lock(jobs_mutex_);
+      const auto idle_ms = config_.watchdog_ms > 0 ? config_.watchdog_ms : 100;
+      jobs_cv_.wait_for(lock, std::chrono::milliseconds(idle_ms),
+                        [this] { return stopping_ || !jobs_.empty(); });
+      if (stopping_ && jobs_.empty()) return;
+      if (!jobs_.empty()) {
+        job = jobs_.front();
+        jobs_.pop_front();
+      }
+    }
+    if (job) {
+      std::string error;
+      job->ok = job->fn(error);
+      job->error = std::move(error);
+      {
+        std::lock_guard<std::mutex> lock(jobs_mutex_);
+        job->done = true;
+      }
+      jobs_cv_.notify_all();
+      continue;
+    }
+    service_idle();
+  }
+}
+
+bool ExoLinkWorker::submit(std::function<bool(std::string&)> fn, std::string* error_out,
+                           int timeout_ms) {
+  auto job = std::make_shared<Job>();
+  job->fn = std::move(fn);
+  {
+    std::lock_guard<std::mutex> lock(jobs_mutex_);
+    if (stopping_ || !thread_.joinable()) {
+      if (error_out) *error_out = "exo worker is not running";
+      return false;
+    }
+    jobs_.push_back(job);
+  }
+  jobs_cv_.notify_all();
+  std::unique_lock<std::mutex> lock(jobs_mutex_);
+  const bool completed = jobs_cv_.wait_for(
+      lock, std::chrono::milliseconds(timeout_ms), [&job] { return job->done; });
+  if (!completed) {
+    if (error_out) *error_out = "exo command timed out";
+    return false;
+  }
+  if (error_out) *error_out = job->error;
+  return job->ok;
+}
+
+void ExoLinkWorker::service_idle() {
+  if (!port_ || !port_->is_open()) return;
+  const auto snap = snapshot();
+  if (config_.watchdog_ms > 0 && snap.armed && last_command_time_ && !snap.watchdog_tripped) {
+    const auto idle = Clock::now() - *last_command_time_;
+    if (idle >= std::chrono::milliseconds(config_.watchdog_ms)) {
+      JointPose neutral;
+      for (std::size_t j = 0; j < kJointCount; ++j) neutral.set(static_cast<Joint>(j), 0);
+      std::string command;
+      std::string error;
+      if (format_set_finger_angles(neutral, command) &&
+          send_command(command, "finger_angles", error)) {
+        set_status([&neutral](ExoStatus& s) {
+          s.last_commanded = neutral;
+          s.watchdog_tripped = true;
+        });
+      } else {
+        set_status([&error](ExoStatus& s) { s.last_error = "watchdog neutral failed: " + error; });
+      }
+    }
+  }
+}
+
+bool ExoLinkWorker::do_connect(std::string& error) {
+  if (port_ && port_->is_open()) return true;
+  if (!port_) {
+    error = "no serial port";
+    return false;
+  }
+  if (!port_->open()) {
+    error = port_->error().empty() ? "serial open failed" : port_->error();
+    set_status([&error](ExoStatus& s) {
+      s.link_open = false;
+      s.last_error = error;
+    });
+    return false;
+  }
+  std::string firmware;
+  bool firmware_ok = false;
+  std::string fw_error;
+  query_firmware(firmware, firmware_ok, fw_error);  // best-effort; non-fatal.
+  last_command_time_.reset();
+  set_status([&](ExoStatus& s) {
+    s.link_open = true;
+    s.armed = false;
+    s.firmware = firmware;
+    s.firmware_ok = firmware_ok;
+    s.watchdog_tripped = false;
+    s.last_commanded = JointPose{};
+    s.last_error.clear();
+  });
+  return true;
+}
+
+bool ExoLinkWorker::do_disconnect(std::string&) {
+  if (port_ && port_->is_open()) {
+    std::string ignored;
+    do_disarm(ignored);
+    port_->close();
+  }
+  last_command_time_.reset();
+  set_status([](ExoStatus& s) {
+    s.link_open = false;
+    s.armed = false;
+    s.watchdog_tripped = false;
+    s.last_commanded = JointPose{};
+  });
+  return true;
+}
+
+bool ExoLinkWorker::do_arm(bool home, std::string& error) {
+  if (!port_ || !port_->is_open()) {
+    error = "exo link is not open";
+    return false;
+  }
+  if (!snapshot().firmware_ok) {
+    error = "device firmware does not support set_finger_angles (needs >= 0.6.4)";
+    return false;
+  }
+  // Current settings before torque: combined budget first (it constrains the
+  // per-motor value), then per-motor, then enable, so nothing energizes at the
+  // firmware's booted budget.
+  if (config_.total_current_ma > 0) {
+    if (!send_command("set_total_current_lim:" + std::to_string(config_.total_current_ma),
+                      "current_lim", error))
+      return false;
+  }
+  if (config_.per_motor_current_ma > 0) {
+    if (!send_command("set_current_lim:all:" + std::to_string(config_.per_motor_current_ma),
+                      "current_lim", error))
+      return false;
+  }
+  if (!send_command("enable:all", "", error)) return false;  // silent in firmware.
+  set_status([](ExoStatus& s) {
+    s.armed = true;
+    s.watchdog_tripped = false;
+  });
+  if (home) return do_home(error);
+  return true;
+}
+
+bool ExoLinkWorker::do_disarm(std::string& error) {
+  if (port_ && port_->is_open()) {
+    if (!send_command("disable:all", "", error)) {
+      // A failed disarm write is worth surfacing, but still mark disarmed
+      // intent; the link may be down and the caller needs to know.
+      set_status([](ExoStatus& s) { s.armed = false; });
+      return false;
+    }
+  }
+  set_status([](ExoStatus& s) { s.armed = false; });
+  return true;
+}
+
+bool ExoLinkWorker::do_home(std::string& error) {
+  if (!port_ || !port_->is_open()) {
+    error = "exo link is not open";
+    return false;
+  }
+  if (!send_command("home:all", "home", error)) return false;
+  last_command_time_ = Clock::now();
+  JointPose neutral;
+  for (std::size_t j = 0; j < kJointCount; ++j) neutral.set(static_cast<Joint>(j), 0);
+  set_status([&neutral](ExoStatus& s) {
+    s.last_commanded = neutral;
+    s.watchdog_tripped = false;
+  });
+  return true;
+}
+
+bool ExoLinkWorker::do_set_pose(const JointPose& pose, std::string& error) {
+  if (!port_ || !port_->is_open()) {
+    error = "exo link is not open";
+    return false;
+  }
+  if (!snapshot().armed) {
+    error = "exo must be armed before commanding a pose";
+    return false;
+  }
+  std::string command;
+  if (!format_set_finger_angles(pose, command)) {
+    error = "pose has no joint value in [-100, 100]";
+    return false;
+  }
+  if (!send_command(command, "finger_angles", error)) return false;
+  last_command_time_ = Clock::now();
+  set_status([&pose](ExoStatus& s) {
+    for (std::size_t j = 0; j < kJointCount; ++j) {
+      if (pose.has_value[j]) {
+        s.last_commanded.values[j] = pose.values[j];
+        s.last_commanded.has_value[j] = true;
+      }
+    }
+    s.watchdog_tripped = false;
+  });
+  return true;
+}
+
+bool ExoLinkWorker::send_command(const std::string& command, const std::string& expect_substr,
+                                 std::string& error) {
+  const std::string framed = command + config_.line_terminator;
+  if (!port_->write(framed)) {
+    error = "serial write failed: " + port_->error();
+    set_status([&error](ExoStatus& s) {
+      s.link_open = false;
+      s.last_error = error;
+    });
+    return false;
+  }
+  if (expect_substr.empty()) return true;  // silent-in-firmware command.
+  const auto reply = read_until(expect_substr, config_.reply_timeout_ms);
+  if (!reply) {
+    error = "no '" + expect_substr + "' ack for " + command;
+    return false;
+  }
+  std::string upper = *reply;
+  std::transform(upper.begin(), upper.end(), upper.begin(),
+                 [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+  if (upper.find("ERROR:") != std::string::npos) {
+    error = "device rejected " + command + ": " + *reply;
+    return false;
+  }
+  return true;
+}
+
+std::optional<std::string> ExoLinkWorker::read_until(const std::string& needle, int timeout_ms) {
+  const auto deadline = Clock::now() + std::chrono::milliseconds(timeout_ms);
+  for (;;) {
+    // Firmware terminates a reply frame with ';'. Split the accumulated buffer
+    // on ';' and check each complete frame for the needle.
+    std::size_t delim;
+    while ((delim = read_buffer_.find(';')) != std::string::npos) {
+      std::string frame = read_buffer_.substr(0, delim);
+      read_buffer_.erase(0, delim + 1);
+      if (frame.find(needle) != std::string::npos) return frame;
+    }
+    const int remaining =
+        static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                             deadline - Clock::now())
+                             .count());
+    if (remaining <= 0) return std::nullopt;
+    const std::string chunk = port_->read(256, std::min(remaining, 50));
+    if (!chunk.empty()) read_buffer_ += chunk;
+  }
+}
+
+bool ExoLinkWorker::query_firmware(std::string& firmware, bool& firmware_ok, std::string& error) {
+  read_buffer_.clear();
+  if (!send_command("version", "", error)) return false;
+  const auto reply = read_until("ersion", config_.reply_timeout_ms);  // "Version"/"version"
+  if (!reply) {
+    firmware.clear();
+    firmware_ok = false;
+    error = "no version reply";
+    return false;
+  }
+  // Take the text after the last ':' if present, else the whole frame.
+  const auto colon = reply->rfind(':');
+  firmware = colon == std::string::npos ? *reply : reply->substr(colon + 1);
+  // Trim surrounding whitespace.
+  const auto begin = firmware.find_first_not_of(" \t\r\n");
+  const auto end = firmware.find_last_not_of(" \t\r\n");
+  firmware = begin == std::string::npos ? std::string{} : firmware.substr(begin, end - begin + 1);
+  firmware_ok = firmware_at_least(parse_firmware(firmware), kMinFingerAnglesFirmware);
+  return true;
+}
+
+void ExoLinkWorker::set_status(const std::function<void(ExoStatus&)>& mutate) {
+  std::lock_guard<std::mutex> lock(status_mutex_);
+  mutate(status_);
+}
+
+}  // namespace scifi2_hub::exo

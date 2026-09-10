@@ -245,6 +245,14 @@ synapsectl start [-h] [config_file]
   pass an App name as `config_file` or assume a device start retries a failed
   App while the overall device is already running.
 
+### Operator App build evidence (2026-09-10)
+
+The operator ran `synapsectl apps build --clean apps/stateful-decode-and-sync`.
+It reached Docker/vcpkg dependency installation and failed building libusb at
+`autoreconf -vfi`; this establishes the `apps build --clean <app-directory>`
+form, not a successful package build. The App directory has since been renamed
+to `apps/scifi2-hub-manager`. Agents must still not execute `synapsectl`.
+
 ## Python Environment
 
 Use 64-bit CPython 3.13 as the current project Python baseline.

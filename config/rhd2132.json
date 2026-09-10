@@ -55,7 +55,7 @@
       "type": "kApplication",
       "id": 2,
       "application": {
-        "name": "stateful-decode-and-sync",
+        "name": "scifi2-hub-manager",
         "parameters": {
           "sample_rate_hz": 20000,
           "num_classes": 5,
@@ -77,7 +77,15 @@
           "mlp_dropout": 0.2,
           "mlp_lr": 0.01,
           "mlp_epochs": 100,
-          "synthetic_seed": 44257
+          "synthetic_seed": 44257,
+          "exo_enabled": false,
+          "exo_device_path": "/dev/ttyACM0",
+          "exo_baud": 1000000,
+          "exo_total_current_ma": 800,
+          "exo_per_motor_current_ma": 250,
+          "exo_watchdog_ms": 1000,
+          "exo_decode_min_confidence": 0.6,
+          "exo_class_poses": []
         }
       }
     }

@@ -6,8 +6,8 @@ Status: host raw recorder, task instructor, Reactions bridge and offline tools i
 
 | Piece | Implementation evidence | Remaining work |
 | --- | --- | --- |
-| Waveforms | `apps/stateful-decode-and-sync/client/stateful_decode_and_sync/waveform.py` | Operator has confirmed display; display success does not establish recording continuity. |
-| Device Disk Writer | `apps/stateful-decode-and-sync/config/rhd2132_mode_switch.json` | Verify actual storage target, retrieval, sample/channel schema and timestamps. This is not a host-local recording toggle. |
+| Waveforms | `apps/scifi2-hub-manager/client/scifi2_hub_manager/waveform.py` | Operator has confirmed display; display success does not establish recording continuity. |
+| Device Disk Writer | `apps/scifi2-hub-manager/config/rhd2132.json` | Verify actual storage target, retrieval, sample/channel schema and timestamps. This is not a host-local recording toggle. |
 | Host raw/task HDF5 | `host/recording/CMakeLists.txt`, app `tools/task_recorder_main.cpp`, `src/hdf5_record_sink.cpp` | Standalone host build, exclusive creation, raw-wire batches, checked writes and loopback tests exist. Bench throughput, task-boundary joins and physical acceptance remain open. Clock history is empty without observations. |
 | Authoritative epochs | `proto/gui_control.proto`, `src/task_timeline_adapter.cpp` under the app | Task events carry first-governed source sequence/timestamp. Current deployment config has no task definition. |
 | Instructor/socket | `client/calibration_task.py`, `client/run_reactions_bridge.py`, `host/web/ScienceXYZTaskAdapter.js` | Terminal/website controllers correlate committed task events; deploy the generated task config and validate a live session. The older calibration_prompter controls feature capture only. |
@@ -100,7 +100,7 @@ Operator-provided inventory (2026-09-05): device SFI2-0-260534 is running, Synap
 Next read-only operator probe from the repository root:
 
 ```bash
-python apps/stateful-decode-and-sync/client/broadband_probe.py --device-ip "$DEV" --duration 5
+python apps/scifi2-hub-manager/client/broadband_probe.py --device-ip "$DEV" --duration 5
 ```
 
 Inspect actual `channel_ranges`, sample rate, channel count and loss counters. GPIO channel identification still requires the operator's physical pin/wiring description and a measured edge; the probe alone does not establish edge timing.

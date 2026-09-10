@@ -10,10 +10,9 @@ digraph T19MultiSourceStreamingPrerequisites {
   wireless_3 [label="Wireless source 3\nunique reported virtual ID"];
   wireless_4 [label="Wireless source 4\nunique reported virtual ID"];
 
-  app [label="stateful-decode-and-sync\n(single reference reader)", fillcolor="#e8f5e9", color="#3a7d44"];
+  app [label="scifi2-hub-manager\n(single reference reader)", fillcolor="#e8f5e9", color="#3a7d44"];
   host [label="Host adapters / fusion / recorder\nindependent ZeroMQ subscriptions", fillcolor="#fff5e6", color="#c9791c"];
 
-  { rank=same; omnetics; wireless_1; wireless_2; wireless_3; wireless_4; }
   omnetics -> app [label="configured connection"];
   omnetics -> host [label="node output Tap"];
   wireless_1 -> host [label="node output Tap"];

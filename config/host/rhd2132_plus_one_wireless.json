@@ -5,7 +5,7 @@
   "description": "Composite host profile: one verified RHD2132 reference stream plus one external WirelessBatch v1 source.",
   "deployable_with_synapsectl": false,
   "device_config": {
-    "path": "rhd2132_mode_switch.json",
+    "path": "rhd2132.json",
     "reference_source": {
       "name": "IntanRHD2132",
       "peripheral_id_resolution": "query synapsectl info at deployment; do not use a copied/example ID",

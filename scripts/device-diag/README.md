@@ -14,7 +14,7 @@ The workaround is the **mailbox pattern**: the `postinst` writes its report to `
 
 ## Packages
 
-- `nml-diag/` — diagnostic state gathering; writes only its report in addition to package installation. Version 0.6.0 captures the device clock/boot ID, `stateful-decode-and-sync.service` status and definition, its boot-scoped journal, matching service units and application mentions, plus the existing server/USB diagnostics. The service name is a lookup candidate; the unit list and cross-journal search also cover a missing or differently named unit. Bump `Version:` in `DEBIAN/control` when changing the report.
+- `nml-diag/` — diagnostic state gathering; writes only its report in addition to package installation. Version 0.6.0 captures the device clock/boot ID, `scifi2-hub-manager.service` status and definition, its boot-scoped journal, matching service units and application mentions, plus the existing server/USB diagnostics. The service name is a lookup candidate; the unit list and cross-journal search also cover a missing or differently named unit. Bump `Version:` in `DEBIAN/control` when changing the report.
 - `nml-quarantine/` — the one mutating tool: moves `axon_test_source.so` from `/usr/lib/scifi/plugins/` to `/opt/scifi/data/quarantine/` to test plugin-interference hypotheses. Reversible by redeploying the original `scifi-axon-test-source` .deb. (Not needed in the 2026-08-24 investigation; the journal exonerated the plugin.)
 
 Constraints that keep these safe: install at most a doc file, never touch shared paths, end `postinst` with `exit 0` unconditionally, never restart `scifi-server` from inside `postinst` (it is the process servicing the deploy), and never call `dpkg` mutating verbs from `postinst` (the dpkg lock is held).

@@ -2,7 +2,7 @@
 
 ## Choose one route
 
-**Current blocker from the operator's latest `synapsectl info`:** the overall device reports Running, but Application `stateful-decode-and-sync` reports **Running: False**. Resolve Step 2 before starting another instructor. The shown July 24–25 log lines are historical output, not a current App-start failure diagnosis. Connecting Chrome does not start this device App.
+**Current blocker from the operator's latest `synapsectl info`:** the overall device reports Running, but Application `scifi2-hub-manager` reports **Running: False**. Resolve Step 2 before starting another instructor. The shown July 24–25 log lines are historical output, not a current App-start failure diagnosis. Connecting Chrome does not start this device App.
 
 **Route A: terminal instructor** is the next recommended smoke test. It presents rest/action A/action B instructions in Terminal 4. **Chrome and the task website are not involved at any point in Route A.**
 
@@ -41,8 +41,8 @@ ls "$SETUP/device-config.json" "$SETUP/task-profile.json" "$SETUP/provenance.jso
 For a new setup only, install dependencies and generate a **new** output directory (change `SETUP` in all terminals if choosing a different setup):
 
 ```bash
-python -m pip install -e 'apps/stateful-decode-and-sync/client[test,waveform,recording]'
-python apps/stateful-decode-and-sync/client/calibration_task.py prepare \
+python -m pip install -e 'apps/scifi2-hub-manager/client[test,waveform,recording]'
+python apps/scifi2-hub-manager/client/calibration_task.py prepare \
   --base-config config/rhd2132.json \
   --provenance config/calibration-provenance.template.json \
   --output-dir "$SETUP"
@@ -83,14 +83,14 @@ After a successful start, check:
 synapsectl -u "$DEV" info
 ```
 
-Require **Application → stateful-decode-and-sync → Running: True**, not just the overall device `Status: Running`. If the App is False, retain the start command's output and current error evidence. Do not proceed to Terminal 2. To determine this installed CLI's supported log/status commands, run `synapsectl --help` and share its output; don't assume a log subcommand or trust historical log timestamps as the present failure cause.
+Require **Application → scifi2-hub-manager → Running: True**, not just the overall device `Status: Running`. If the App is False, retain the start command's output and current error evidence. Do not proceed to Terminal 2. To determine this installed CLI's supported log/status commands, run `synapsectl --help` and share its output; don't assume a log subcommand or trust historical log timestamps as the present failure cause.
 
 ### Step 3 ? Terminal 2: start the control service
 
 Run the common terminal setup lines above, then:
 
 ```bash
-python apps/stateful-decode-and-sync/client/run_service.py \
+python apps/scifi2-hub-manager/client/run_service.py \
   --device-ip "$DEV" --port 18765
 ```
 
@@ -127,7 +127,7 @@ Run the common terminal setup lines and set the **same session** as Terminal 3:
 
 ```bash
 export SESSION=data/calibration-task-run2
-python apps/stateful-decode-and-sync/client/calibration_task.py run \
+python apps/scifi2-hub-manager/client/calibration_task.py run \
   --profile "$SETUP/task-profile.json" --journal "$SESSION/instructor.ndjson" \
   --port 18765 --repetitions 3 --hold-seconds 3
 ```
@@ -143,7 +143,7 @@ After Terminal 4 exits successfully, leave a short tail (about two seconds), the
 ### Step A7 ? Terminal 4: verify and fit offline
 
 ```bash
-python apps/stateful-decode-and-sync/client/analyze_recording.py \
+python apps/scifi2-hub-manager/client/analyze_recording.py \
   "$SESSION/raw.h5" --profile "$SETUP/task-profile.json" \
   --journal "$SESSION/instructor.ndjson" \
   --output-dir "$SESSION/analysis" --fit
@@ -169,7 +169,7 @@ Run the common terminal setup lines. Set the exact Chrome page origin (get it by
 
 ```bash
 export REACTIONS_ORIGIN=https://chr.nml.wtf
-python apps/stateful-decode-and-sync/client/run_reactions_bridge.py \
+python apps/scifi2-hub-manager/client/run_reactions_bridge.py \
   --device-uri "$DEV:647" --recorder build/raw-recorder/task-recorder \
   --profile "$SETUP/task-profile.json" --provenance "$SETUP/provenance.json" \
   --output-root data/reactions --service-port 18765 --port 9999 \
@@ -233,7 +233,7 @@ Run the common terminal setup lines. Set `SESSION` to the **actual session_dir r
 
 ```bash
 export SESSION='data/reactions/reactions-REPLACE_WITH_RETURNED_ID'
-python apps/stateful-decode-and-sync/client/analyze_recording.py \
+python apps/scifi2-hub-manager/client/analyze_recording.py \
   "$SESSION/raw.h5" --profile "$SETUP/task-profile.json" \
   --journal "$SESSION/browser-events.ndjson" \
   --output-dir "$SESSION/analysis" --fit
@@ -282,9 +282,9 @@ Coincident-marker fix (2026-09-05): GPIO 0 uses upward triangles at the bottom o
 Live viewer update (2026-09-05): traces and both GPIO overlays now use nominal sample time derived from sequence differences and the advertised sample rate. Source timestamp jitter, repeats and regressions do not distort this display axis or suppress otherwise contiguous GPIO edges. Original timestamps remain in the buffer/raw recording. No sample values are interpolated. Sequence gaps retain their nominal missing-sample duration and break connecting lines; resets, reconnects, parse failures and rate changes also break lines. Elapsed time across a reset is unknown; the next segment is placed one nominal sample after the last. This supersedes the earlier source-time description of the live GUI only; offline diagnostics retain their original source-time axis. Restart the viewer and check for `nominal sample time` in its status bar. 38 waveform tests pass, including batched/regressing timestamps, ring wrap, gaps, rate changes and GUI marker timing.
 
 ```powershell
-$env:PYTHONPATH='apps/stateful-decode-and-sync/client'
+$env:PYTHONPATH='apps/scifi2-hub-manager/client'
 $env:QT_QPA_PLATFORM='offscreen'
-.venv/Scripts/python.exe -m unittest discover -s apps/stateful-decode-and-sync/client/tests -q
+.venv/Scripts/python.exe -m unittest discover -s apps/scifi2-hub-manager/client/tests -q
 node --test host/web/test_sciencexyz_adapter.mjs
 ```
 

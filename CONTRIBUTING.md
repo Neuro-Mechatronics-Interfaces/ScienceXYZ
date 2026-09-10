@@ -15,20 +15,20 @@ Start with [README.md](README.md) for setup, [AGENTS.md](AGENTS.md) for reposito
 In an activated project Python environment, install the client and MCP packages together:
 
 ```bash
-python -m pip install -e 'apps/stateful-decode-and-sync/client[test,recording]'
-python -m pip install -e 'apps/stateful-decode-and-sync/mcp[test,analysis]'
-python -m pytest apps/stateful-decode-and-sync/mcp/tests -q
+python -m pip install -e 'apps/scifi2-hub-manager/client[test,recording]'
+python -m pip install -e 'apps/scifi2-hub-manager/mcp[test,analysis]'
+python -m pytest apps/scifi2-hub-manager/mcp/tests -q
 ```
 
 For changes spanning the client and MCP boundary, also run:
 
 ```bash
-python -m pytest apps/stateful-decode-and-sync/client/tests -q
+python -m pytest apps/scifi2-hub-manager/client/tests -q
 ```
 
 Use offscreen Qt where required by the test environment and report skipped optional-dependency cases. C++ recorder checks and prerequisites are in [the recorder guide](docs/calibration-recording-mvp.md#host-recorder-build-and-use). Run checks relevant to the change; documentation-only edits need link, path, and diff review rather than a hardware trial.
 
-See the [MCP README](apps/stateful-decode-and-sync/mcp/README.md) for registration and environment variables. Preview `science-mcp-install --scope repo --dry-run`, review the chosen executable, then register the desired scope and reload the client. Avoid committing machine-specific executable paths or credentials. A configured server is not evidence that a client has loaded it or that the headstage is reachable.
+See the [MCP README](apps/scifi2-hub-manager/mcp/README.md) for registration and environment variables. Preview `science-mcp-install --scope repo --dry-run`, review the chosen executable, then register the desired scope and reload the client. Avoid committing machine-specific executable paths or credentials. A configured server is not evidence that a client has loaded it or that the headstage is reachable.
 
 ## Adding an MCP tool or runtime assistant
 

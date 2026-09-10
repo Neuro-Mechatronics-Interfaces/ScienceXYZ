@@ -1,0 +1,14 @@
+digraph "inner_001" {
+  graph [layout=neato, overlap=false, splines=true, labelloc=t, label="t19-multisource-streaming-prerequisites: inner view 1"];
+  "omnetics" [color="#33658a", fillcolor="#edf5fb", fontname="Arial", fontsize="10", height="0.5", label="Omnetics 32-channel source\nreported peripheral ID", margin="0.12,0.08", pin="true", pos="0,0!", shape="box", style="rounded,filled", width="1.9692"];
+  "wireless_1" [color="#33658a", fillcolor="#edf5fb", fontname="Arial", fontsize="10", height="0.5", label="Wireless source 1\nunique reported virtual ID", margin="0.12,0.08", pin="true", pos="180,0!", shape="box", style="rounded,filled", width="1.7192"];
+  "wireless_2" [color="#33658a", fillcolor="#edf5fb", fontname="Arial", fontsize="10", height="0.5", label="Wireless source 2\nunique reported virtual ID", margin="0.12,0.08", pin="true", pos="360,0!", shape="box", style="rounded,filled", width="1.7192"];
+  "wireless_3" [color="#33658a", fillcolor="#edf5fb", fontname="Arial", fontsize="10", height="0.5", label="Wireless source 3\nunique reported virtual ID", margin="0.12,0.08", pin="true", pos="540,0!", shape="box", style="rounded,filled", width="1.7192"];
+  "app" [color="#3a7d44", fillcolor="#e8f5e9", fontname="Arial", fontsize="10", height="0.5", label="scifi2-hub-manager\n(single reference reader)", margin="0.12,0.08", pin="true", pos="720,0!", shape="box", style="rounded,filled", width="1.6879"];
+  "host" [color="#c9791c", fillcolor="#fff5e6", fontname="Arial", fontsize="10", height="0.5", label="Host adapters / fusion / recorder\nindependent ZeroMQ subscriptions", margin="0.12,0.08", pin="true", pos="0,-100!", shape="box", style="rounded,filled", width="2.3338"];
+  "omnetics" -> "app" [color="#4f6d7a", fontname="Arial", fontsize="9", label="configured connection"];
+  "omnetics" -> "host" [color="#4f6d7a", fontname="Arial", fontsize="9", label="node output Tap"];
+  "wireless_1" -> "host" [color="#4f6d7a", fontname="Arial", fontsize="9", label="node output Tap"];
+  "wireless_2" -> "host" [color="#4f6d7a", fontname="Arial", fontsize="9", label="node output Tap"];
+  "wireless_3" -> "host" [color="#4f6d7a", fontname="Arial", fontsize="9", label="node output Tap"];
+}

@@ -4,7 +4,7 @@
       "type": "kApplication",
       "id": 2,
       "application": {
-        "name": "stateful-decode-and-sync",
+        "name": "scifi2-hub-manager",
         "parameters": {
           "low_cutoff_hz": 200.0,
           "high_cutoff_hz": 5000.0,

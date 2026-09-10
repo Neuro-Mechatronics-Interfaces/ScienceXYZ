@@ -43,9 +43,9 @@ int main(int argc, char** argv) {
     gpio->add_channel_ids(1);
     std::string bytes = frame.SerializeAsString();
     bytes += std::string("\x98\x06\x07", 3); // Unknown field 99, preserved verbatim.
-    app::recording::RawTapMessage message{555, {bytes.begin(), bytes.end()}};
+    scifi2_hub::recording::RawTapMessage message{555, {bytes.begin(), bytes.end()}};
     {
-      app::recording::Hdf5RecordSink sink(path.string());
+      scifi2_hub::recording::Hdf5RecordSink sink(path.string());
       check(sink.open("test", 111, "{}"), "open");
       check(sink.write_raw_messages(true, {}), "empty batch");
       check(sink.write_raw_messages(true, {message}), "first append");
@@ -57,7 +57,7 @@ int main(int argc, char** argv) {
     }
     const auto size = std::filesystem::file_size(path);
     {
-      app::recording::Hdf5RecordSink collision(path.string());
+      scifi2_hub::recording::Hdf5RecordSink collision(path.string());
       H5Eset_auto2(H5E_DEFAULT, nullptr, nullptr);
       check(!collision.open("test", 0, "overwrite"), "existing file refused");
     }
@@ -87,7 +87,7 @@ int main(int argc, char** argv) {
     for (bool write : {true, false}) {
       const std::string failure_path = path.string() + (write ? ".write-failure" : ".flush-failure");
       std::filesystem::remove(failure_path);
-      app::recording::Hdf5RecordSink sink(failure_path);
+      scifi2_hub::recording::Hdf5RecordSink sink(failure_path);
       check(sink.open("test", 0, "{}"), "failure fixture open");
       fail_write = write; fail_flush = !write;
       check(!sink.write_raw_messages(true, {message}), "I/O failure surfaced");

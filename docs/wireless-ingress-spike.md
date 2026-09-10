@@ -1,8 +1,8 @@
 # Hardware-free wireless ingress spike
 
 The first implementation of the external gateway boundary is the SDK-independent
-`app::wireless::IngressMux` in
-[`apps/stateful-decode-and-sync/src/wireless_ingress.hpp`](../apps/stateful-decode-and-sync/src/wireless_ingress.hpp).
+`scifi2_hub::wireless::IngressMux` in
+[`apps/scifi2-hub-manager/src/wireless_ingress.hpp`](../apps/scifi2-hub-manager/src/wireless_ingress.hpp).
 It is intentionally driven by an injected `NonblockingReader`, so deterministic
 tests can exercise the complete acceptance and loss-accounting path without a
 SciFi-2, wireless sensor, or live LAN publisher.
@@ -25,7 +25,7 @@ contract version, configured source/gateway identity, shape, format, payload
 length, rational rate, source tick frequency, replay policy, and configured
 limits.
 
-[`wireless_zmq_reader.hpp`](../apps/stateful-decode-and-sync/src/wireless_zmq_reader.hpp)
+[`wireless_zmq_reader.hpp`](../apps/scifi2-hub-manager/src/wireless_zmq_reader.hpp)
 provides the production transport boundary used by the app target. Each
 `ZmqNonblockingReader` owns one SUB socket, subscribes to one exact topic, and
 retains at most three frames while draining the complete multipart message.
@@ -46,11 +46,11 @@ The test target is generated from the canonical proto rather than a handwritten
 message substitute:
 
 ```bash
-cmake -S apps/stateful-decode-and-sync -B build/stateful-decode-and-sync \
+cmake -S apps/scifi2-hub-manager -B build/scifi2-hub-manager \
   -DBUILD_DEVICE_APP=OFF -DBUILD_TESTING=ON
-cmake --build build/stateful-decode-and-sync \
-  --target stateful-decode-and-sync-wireless-ingress-tests
-ctest --test-dir build/stateful-decode-and-sync -R wireless-ingress --output-on-failure
+cmake --build build/scifi2-hub-manager \
+  --target scifi2-hub-manager-wireless-ingress-tests
+ctest --test-dir build/scifi2-hub-manager -R wireless-ingress --output-on-failure
 ```
 
 The current Windows shell does not have CMake/protoc installed; run these

@@ -1,5 +1,39 @@
 # Mistakes
 
+### 2026-09-10 - libusb dependency build requires automake
+
+The operator's clean App build failed in Docker while building libusb 1.0.27:
+`autoreconf -vfi` exited 1. Reproduced in the cached builder and read its inner
+log: `Can't exec "aclocal": No such file or directory`. The earlier diagnostic
+fix declared libusb but omitted its automake build prerequisite; an isolated
+syntax check using distro development headers did not exercise vcpkg. Added
+`automake` to both Dockerfile architecture branches. With that addition, the
+pinned vcpkg libusb build and complete ARM64 App compile/link passed in a
+disposable SDK container; ELF dependencies include `libusb-1.0.so.0`. Device
+execution and CLI packaging remain operator checks.
+
+### 2026-09-10 - editable reinstall encountered a running MCP executable
+
+Refreshing editable installs after the hub directory rename failed with Windows
+`WinError 32` because `science-mcp.exe` was running. Pip partially moved its
+metadata before failing. Restored the metadata and refreshed editable path and
+source-URL metadata from a temporary install without replacing the running
+executable. New Python processes import both renamed packages; the existing MCP
+process still needs restarting. Close consumers before reinstalling executable
+entry points on Windows.
+
+### 2026-09-10 - USB startup diagnostic omitted its build dependency
+
+The new `setup()` diagnostic included libusb and called its API without declaring
+the dependency or linking it. The cached App builder also lacked `libusb.h`.
+Added `libusb` to the vcpkg manifest and a pkg-config imported CMake target for
+headers/linkage; changed the include to `<libusb.h>`. A full ARM64 syntax check
+of `main.cpp` passed in the cached SDK container after installing the ARM64
+development package in that disposable container. The normal image rebuild,
+final link/package, and operator runtime check remain separate verification.
+Candidate rule: adding a native-library include also requires explicit target
+dependency/linkage and a builder refresh when dependencies are image-cached.
+
 This file records concrete mistakes encountered while working in this repository. Recurring failure modes may be promoted into durable rules in `AGENTS.md`.
 
 ## Entry Template
@@ -118,9 +152,9 @@ hides state-collision bugs.
 ### 2026-09-09 - App host-tests build required CONFIG-mode protobuf absent on the distro
 
 Building the SDK-free host tests to run `test_hub_spoke_cross_language_hash`
-(`cmake -S apps/stateful-decode-and-sync -B build/app-tests -DBUILD_DEVICE_APP=OFF`)
+(`cmake -S apps/scifi2-hub-manager -B build/app-tests -DBUILD_DEVICE_APP=OFF`)
 failed at configure: `find_package(Protobuf CONFIG REQUIRED)` at
-`apps/stateful-decode-and-sync/CMakeLists.txt:109` could not find
+`apps/scifi2-hub-manager/CMakeLists.txt:109` could not find
 `protobuf-config.cmake`. The cause was a protobuf-version mismatch, not a missing
 package: the device App is built inside the Synapse SDK image (protobuf >=22, which
 ships CMake config files), but the operator's Ubuntu host had protobuf 3.21.12,
@@ -380,7 +414,7 @@ lr>=~0.01 the first-layer gradients explode and the softmax collapses to uniform
 
 ### 2026-09-01 — Started an unconfirmed application rebuild
 
-**Attempt:** After applying the raw-forwarding feature-work gate, started `synapsectl apps build --clean apps/stateful-decode-and-sync` to produce a package for bench validation.
+**Attempt:** After applying the raw-forwarding feature-work gate, started `synapsectl apps build --clean apps/scifi2-hub-manager` to produce a package for bench validation.
 
 **Failure:** The user intended to perform the build themselves and had not approved a build action. The long Docker dependency build was stopped before application compilation; no replacement package was deployed.
 
@@ -392,7 +426,7 @@ lr>=~0.01 the first-layer gradients explode and the softmax collapses to uniform
 
 ### 2026-09-01 — App Docker context omitted the shared wireless proto
 
-**Attempt:** The user ran `synapsectl apps build --clean apps/stateful-decode-and-sync` in WSL and supplied the build transcript.
+**Attempt:** The user ran `synapsectl apps build --clean apps/scifi2-hub-manager` in WSL and supplied the build transcript.
 
 **Failure:** Docker image creation succeeded, but CMake stopped at
 `tests/CMakeLists.txt:43` with `protobuf_generate could not find any .proto files`.
@@ -632,7 +666,7 @@ release with a self-consistent version set, or pin the transitive versions
 explicitly, before assuming a build failure is a local toolchain problem.
 
 **Correction to the WSL-host approach:** The right build path for this consumer
-is the app's OWN `apps/stateful-decode-and-sync/Dockerfile` (arm64 cross-compile,
+is the app's OWN `apps/scifi2-hub-manager/Dockerfile` (arm64 cross-compile,
 `ubuntu:20.04` + gcc-10-aarch64, CMake 3.28, vcpkg pinned `0f88ecb8`), driven from
 the app's own `vcpkg.json` — that manifest resolves a SELF-CONSISTENT set
 (protobuf 4.25.1 with abseil 20240116.2, plus hdf5 1.14.4.3, iir1, spdlog, fmt),

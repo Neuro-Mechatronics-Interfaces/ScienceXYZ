@@ -1,0 +1,6 @@
+digraph "t19-multisource-streaming-prerequisites_parent" {
+  graph [layout=neato, overlap=false, splines=true, labelloc=t, label="t19-multisource-streaming-prerequisites: parent overview"];
+  "inner_001" [URL="t19-multisource-streaming-prerequisites.inner-001.svg", fillcolor="#eef4ff", label="Inner view 1\n6 nodes", pin="true", pos="0,0!", shape="folder", style="filled", target="_top", tooltip="Open Inner view 1\n6 nodes"];
+  "inner_002" [URL="t19-multisource-streaming-prerequisites.inner-002.svg", fillcolor="#eef4ff", label="Inner view 2\n1 node", pin="true", pos="180,0!", shape="folder", style="filled", target="_top", tooltip="Open Inner view 2\n1 node"];
+  "inner_002" -> "inner_001" [label="1 connection"];
+}

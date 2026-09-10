@@ -105,7 +105,7 @@ Confirm that:
 
 `calibrate-session` (the `run_calibration_session.py` entry point) is the single launcher for a Reactions-driven calibration recording. It generates the session artifacts, gates on the operator's device start, and then runs the host control service and the Reactions WebSocket bridge that owns the built C++ recorder. **It never runs `synapsectl` and never controls the device** — you run the `synapsectl` commands yourself and hand the launcher the resulting `info` capture.
 
-Prerequisites: the client installed (`pip install -e 'apps/stateful-decode-and-sync/client[recording]'`) and the C++ raw recorder built (see [recorder build](docs/calibration-recording-mvp.md#host-recorder-build-and-use)).
+Prerequisites: the client installed (`pip install -e 'apps/scifi2-hub-manager/client[recording]'`) and the C++ raw recorder built (see [recorder build](docs/calibration-recording-mvp.md#host-recorder-build-and-use)).
 
 ### 1. Preview the exact commands (`--dry-run`)
 
@@ -134,7 +134,7 @@ synapsectl -u 192.168.100.157 start data/reactions/session-003/device-config.jso
 synapsectl -u 192.168.100.157 info > data/reactions/session-003/info.txt
 ```
 
-Confirm the capture shows Application **`stateful-decode-and-sync` → Running: True** (the overall device `Status: Running` is not sufficient).
+Confirm the capture shows Application **`scifi2-hub-manager` → Running: True** (the overall device `Status: Running` is not sufficient).
 
 ### 4. Launch the host processes past the device gate
 
@@ -153,7 +153,7 @@ The browser integration, transport requirements, and offline verification are de
 `calibrate-gui` is a PySide6 front end for the same flow, so the whole session can be driven from one window instead of the terminal. It performs the identical steps with the same boundaries — it **never** runs `synapsectl`. Launch it (or make a shortcut to `calibrate-gui.exe`) and work top to bottom:
 
 1. **Device and session** — set the device URI, tap, origin, optional gestures, and session dir, then **Generate / reuse session** (an existing complete session is reused, matching the terminal launcher).
-2. **Operator device start** — the exact `synapsectl start` line is shown with a **Copy** button. You can run it yourself and **Load info capture…**, or use the optional **Run: start device** and **Run: fetch info + gate** buttons, which invoke `synapsectl` directly (the `synapsectl command` field defaults to the name resolved from the active venv/PATH — a Windows-native install in `.venv/Scripts` works with no change; override the field for a differently located or WSL install). Either way the window gates on Application `stateful-decode-and-sync` → Running: True. Running `synapsectl` from this operator GUI is permitted under the AGENTS.md CLI-execution boundary scope; it never happens from tests or an agent path.
+2. **Operator device start** — the exact `synapsectl start` line is shown with a **Copy** button. You can run it yourself and **Load info capture…**, or use the optional **Run: start device** and **Run: fetch info + gate** buttons, which invoke `synapsectl` directly (the `synapsectl command` field defaults to the name resolved from the active venv/PATH — a Windows-native install in `.venv/Scripts` works with no change; override the field for a differently located or WSL install). Either way the window gates on Application `scifi2-hub-manager` → Running: True. Running `synapsectl` from this operator GUI is permitted under the AGENTS.md CLI-execution boundary scope; it never happens from tests or an agent path.
 3. **Host processes** — **Start service + bridge** (enabled only after the gate passes) launches the control service and Reactions bridge as child processes this window owns, streaming their output into the log pane.
 4. **Recording and task control** — once the bridge reports ready, **Connect to bridge** opens a loopback WebSocket using the same envelopes the Reactions page sends, then **Start/Stop recording** and the task-event buttons drive the C++ recorder directly (no browser required). The Reactions page can still connect to the same bridge instead.
 

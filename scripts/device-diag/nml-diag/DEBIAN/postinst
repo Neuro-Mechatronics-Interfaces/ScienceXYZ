@@ -28,11 +28,11 @@ publish
 collect 'device clock' date -Is
 collect 'boot identity' cat /proc/sys/kernel/random/boot_id
 collect 'saved device configuration (first 65536 bytes)' head -c 65536 /opt/scifi/config/device.json
-collect 'application service status' systemctl show stateful-decode-and-sync.service --no-pager \
+collect 'application service status' systemctl show scifi2-hub-manager.service --no-pager \
   -p LoadState -p ActiveState -p SubState -p Result -p ExecMainCode \
   -p ExecMainStatus -p ExecStart -p FragmentPath -p NRestarts
-collect 'application service definition' systemctl cat stateful-decode-and-sync.service --no-pager
-collect 'this boot: application journal (last 1200)' journalctl -b -u stateful-decode-and-sync.service -n 1200 --no-pager
+collect 'application service definition' systemctl cat scifi2-hub-manager.service --no-pager
+collect 'this boot: application journal (last 1200)' journalctl -b -u scifi2-hub-manager.service -n 1200 --no-pager
 collect 'this boot: server journal (last 80)' journalctl -b -u scifi-server -n 80 --no-pager
 echo '=== NML-DIAG END ==='
 publish

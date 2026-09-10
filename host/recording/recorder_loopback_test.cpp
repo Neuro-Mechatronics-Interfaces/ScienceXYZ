@@ -93,7 +93,7 @@ int main(int argc, char** argv) {
       using namespace stateful_decode_and_sync::v1;
       for (int n = 1; n <= 2; ++n) {
         TaskTransitionEvent event;
-        event.set_protocol_version(app::protocol::kProtocolVersion);
+        event.set_protocol_version(scifi2_hub::protocol::kProtocolVersion);
         event.set_definition_id("fixture.task"); event.set_definition_revision(1);
         event.set_definition_hash(std::string(71, 'a'));
         event.set_app_session_id("fixture-session"); event.set_run_sequence(1);

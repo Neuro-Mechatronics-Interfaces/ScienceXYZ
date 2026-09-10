@@ -1,5 +1,25 @@
 # TODO
 
+## Hub App naming and USB build update (2026-09-10)
+
+Current App source is `apps/scifi2-hub-manager`, deployed name
+`scifi2-hub-manager`, C++ class `scifi2_hub::SciFi2HubManagerApp`, and Python
+package `scifi2_hub_manager`. Baseline config: `config/rhd2132.json` under the
+App; Exo example: `config/rhd2132_with_exo.json`. Historical names in older bench
+entries below identify the builds actually observed. The v1 protobuf package
+retains its historical name for compatibility. See the App README migration
+instructions before rebuilding/reinstalling or preparing a new recording.
+
+The operator's libusb build failure was reproduced as missing `aclocal`;
+Docker now installs `automake`, and the complete renamed ARM64 App links with
+the pinned vcpkg libusb. Deployment and App-process USB access remain unverified.
+Operator USB notes report no CDC-ACM kernel support/tty for the OpenRB: successful
+libusb enumeration/open does not complete the Exo transport. T-52/T-53 remain
+gated on a supported, tested transport and independent physical-control checks.
+**T-57** owns fresh App-context USB access evidence and the supported OpenRB
+transport implementation; its first step is the operator's renamed App build
+and runtime diagnostic capture.
+
 ## Long-term MCP, voice, and motor-unit integration (2026-09-10)
 
 These are planned capabilities, not implemented or bench-accepted features. See [SECURITY.md](SECURITY.md) and [CONTRIBUTING.md](CONTRIBUTING.md) for requirements. The project handoff MCP holds the canonical actionable records:
@@ -10,6 +30,7 @@ These are planned capabilities, not implemented or bench-accepted features. See 
 - [ ] **T-54:** Implement and validate online motor-unit decomposition in the loaded SciFi-2 `kApplication`; first establish suitable input bandwidth/rate and bounded compute budgets. Current `broadband_out` is decimated (T-46), not an assumed native raw input.
 - [ ] **T-55:** Add a versioned motor-unit database and read-only interval queries, dependent on T-54, with bounded on-device state and host archival. Answer sustained light index-flexion questions with detected-unit counts, explicit interval/quality/provenance, and unavailable results when evidence is insufficient.
 - [ ] **T-56:** Build an opt-in host voice assistant with configurable lightweight transcription/inference, restricted local MCP dispatch, host-held API credentials, export controls, and measured accuracy/latency/cost. Stage observation before motion; integrate T-52/T-53 and T-55 as they become accepted.
+- [ ] **T-57:** On-device exo link — hardware verification. The `kApplication` now carries an SDK-independent `ExoLinkWorker` (`src/exo_link.{hpp,cpp}`, `src/serial_port.{hpp,cpp}`) driven over the existing `control` tap by `set_exo_mode` (off/external/decode; default off) and `set_exo_pose`, with per-class `exo_class_poses` for decode mode and an `exo` section in the state snapshot. Covered only by the hardware-free `exo_link` unit test; no protobuf/SDK C++ compile or bench run has occurred locally. Remaining, operator-gated: (1) build the App in the SDK Docker image (`synapsectl apps build`) — this is the first real C++ compile of the proto/protocol/main.cpp changes; (2) with the OpenRB-150 plugged into the headstage USB, identify `exo_device_path` via the `ls /dev/tty*` with/without procedure in [`docs/exo-integration.md`](apps/scifi2-hub-manager/docs/exo-integration.md); (3) confirm `set_exo_mode:external` opens the link (`state.exo.link_open`, parsed firmware) and `set_exo_pose` moves the hand; (4) verify decode-mode drive and the watchdog return-to-neutral on hardware. Feeds T-52/T-53.
 
 Existing **T-48** (classifier diagnostics), **T-49** (device identity), and **T-50** (MCP registration/setup) remain canonical and are not replaced. MCP setup/test guidance is now in CONTRIBUTING; T-50 still needs operator registration/launch verification. Acquisition, synchronization, and physical recording acceptance remain with T-22/T-26/T-34 and related existing tasks.
 
@@ -172,7 +193,7 @@ Blocking before hardware bring-up: (1) adapter must electrically enumerate again
 
 ### 2026-08-26 — stateful_decode_and_sync App implemented (offline; bench-verify pending)
 
-New on-device App `apps/stateful_decode_and_sync/` implementing all five stages of `PLAN.md`: live real↔synthetic source toggle, labeled per-class ring buffer, Kaifosh-2025 multivariate MPF features (STFT → CSD → band-average → Hermitian matrix-log via a hand-rolled cyclic-Jacobi eigensolver, no `eigen3`), and a hand-rolled 2-hidden-layer MLP (backprop + SGD, feature z-scoring, dropout). Three `ListValue` consumer taps (`set_source_mode`, `set_capture`, `fit_mlp`), two producer taps (`broadband_out` `BroadbandFrame`, `class_out` `Tensor`), plus `config/rhd2132_mode_switch.json` (binds ID 200) and four client scripts.
+New on-device App `apps/scifi2-hub-manager/` implementing all five stages of `PLAN.md`: live real↔synthetic source toggle, labeled per-class ring buffer, Kaifosh-2025 multivariate MPF features (STFT → CSD → band-average → Hermitian matrix-log via a hand-rolled cyclic-Jacobi eigensolver, no `eigen3`), and a hand-rolled 2-hidden-layer MLP (backprop + SGD, feature z-scoring, dropout). Three `ListValue` consumer taps (`set_source_mode`, `set_capture`, `fit_mlp`), two producer taps (`broadband_out` `BroadbandFrame`, `class_out` `Tensor`), plus `config/rhd2132_mode_switch.json` (binds ID 200) and four client scripts.
 
 Status: the four SDK-independent modules compile clean under 
 ```bash
@@ -181,7 +202,7 @@ g++ -std=c++20 -Wall -Wextra -Wshadow
 and pass an offline smoke test; `mode_switch_app.cpp` mirrors the proven example-app SDK usage but needs the Docker build to compile (SDK headers live in the builder image). See `PLAN.md` for the vs-plan deltas.
 
 Next (bench, staged per PLAN.md §7):
-- [ ] `synapsectl apps build apps/stateful_decode_and_sync` — confirm it compiles; resolves open-question #1 (`create_tap<synapse::BroadbandFrame>` allowed?). A `Tensor` fallback for `broadband_out` is documented at the call site.
+- [ ] `synapsectl apps build apps/scifi2-hub-manager` — confirm it compiles; resolves open-question #1 (`create_tap<synapse::BroadbandFrame>` allowed?). A `Tensor` fallback for `broadband_out` is documented at the call site.
 - [ ] Deploy + start on the ID-200 chain; confirm `broadband_out` streams (Stage 0).
 - [ ] Toggle real↔synthetic via `client/set_source_mode.py` (Stage 1).
 - [ ] Capture labeled windows; confirm per-class counts (Stage 2).
@@ -227,7 +248,7 @@ rejection, timeout, immutable replacement, and transport-loss behavior.
 Verification from the repository CPython 3.13 environment:
 
 ```text
-PYTHONPATH=apps/stateful_decode_and_sync/client .venv/Scripts/python.exe -m unittest discover -s apps/stateful_decode_and_sync/client/tests -v
+PYTHONPATH=apps/scifi2-hub-manager/client .venv/Scripts/python.exe -m unittest discover -s apps/scifi2-hub-manager/client/tests -v
 Ran 11 tests ... OK
 ```
 
@@ -350,7 +371,7 @@ checks.
 The adapter re-enumerated before the fresh run. `\.venv\\Scripts\\synapsectl.exe
 -u 192.168.100.157 info` reported device `SFI2-0-260534`, Synapse 2.4.1,
 firmware 3164583911, and `IntanRHD2132` as peripheral ID 200. A clean
-`stop`/`start apps/stateful_decode_and_sync/config/rhd2132_mode_switch.json`
+`stop`/`start apps/scifi2-hub-manager/config/rhd2132_mode_switch.json`
 bound the broadband source to `IntanRHD2132 (id: 200)` and started the app with
 the typed control/state/result taps.
 
@@ -443,10 +464,10 @@ timestamps and diagnostics. The focused Linux build remains a user-run gate.
 
 ### 2026-09-01 - App-context protobuf build correction
 
-The first `synapsectl apps build --clean apps/stateful-decode-and-sync` attempt
+The first `synapsectl apps build --clean apps/scifi2-hub-manager` attempt
 failed during CMake protobuf generation because the Docker app context does not
 contain repository-level `protocol/`. CMake now generates the wireless bindings
-from `apps/stateful-decode-and-sync/proto/wireless/v1/wireless_batch.proto`, a
+from `apps/scifi2-hub-manager/proto/wireless/v1/wireless_batch.proto`, a
 context-local mirror of the root contract.
 
 ### 2026-09-01 - T-22 measured acceptance harness prepared
@@ -501,7 +522,7 @@ quaternion order. Do not create it from simulator values. See
 ### 2026-09-01 - Config-only Disk Writer path
 
 Added a `kDiskWriter` node to
-[`apps/stateful-decode-and-sync/config/rhd2132_mode_switch.json`](apps/stateful-decode-and-sync/config/rhd2132_mode_switch.json),
+[`apps/scifi2-hub-manager/config/rhd2132_mode_switch.json`](apps/scifi2-hub-manager/config/rhd2132.json),
 connected from the App's `BroadbandFrame` output with the supported static
 filename `stateful-decode-and-sync.hdf5`. In `SAMPLING` mode this records the
 App's unchanged forwarded reference stream; in `SYNTHETIC` mode it records the

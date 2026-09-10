@@ -129,6 +129,6 @@ provenance belongs in the host fusion recorder.
 - `vendor/synapse-api/api/nodes/disk_writer.proto`: filename and storage-device
   ID configuration; status only.
 - `vendor/synapse-api/api/synapse.proto`: device-wide `Start` and `Stop` RPCs.
-- `apps/stateful-decode-and-sync/src/mode_switch_app.cpp`: one
+- `apps/scifi2-hub-manager/src/mode_switch_app.cpp`: one
   `setup_reader(kBroadbandNodeId)`, inherited `data_reader_`, and a
   `BroadbandFrame` producer tap.

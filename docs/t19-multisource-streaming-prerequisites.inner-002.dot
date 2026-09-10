@@ -1,0 +1,4 @@
+digraph "inner_002" {
+  graph [layout=neato, overlap=false, splines=true, labelloc=t, label="t19-multisource-streaming-prerequisites: inner view 2"];
+  "wireless_4" [color="#33658a", fillcolor="#edf5fb", fontname="Arial", fontsize="10", height="0.5", label="Wireless source 4\nunique reported virtual ID", margin="0.12,0.08", pin="true", pos="0,0!", shape="box", style="rounded,filled", width="1.7192"];
+}
