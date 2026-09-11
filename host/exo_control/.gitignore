@@ -1,0 +1,6 @@
+/build/
+/.cxx/
+/.gradle/
+/android/.gradle/
+/android/build/
+/android/src/main/jniLibs/

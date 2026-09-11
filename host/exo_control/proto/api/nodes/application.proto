@@ -1,0 +1,24 @@
+syntax = "proto3";
+
+package synapse;
+
+import "google/protobuf/struct.proto";
+
+message ApplicationNodeConfig {
+    // Your application name, it should match what is deployed
+    string name = 1;
+
+    // Application specific configuration, will be loaded by
+    // the custom application during runtime
+    map<string, google.protobuf.Value> parameters = 2;
+}
+
+message ApplicationNodeStatus {
+    string name = 1;
+
+    // Is the application started and running?
+    bool running = 2;
+
+    // If the application failed to start, what were the logs
+    string error_logs = 3;
+}

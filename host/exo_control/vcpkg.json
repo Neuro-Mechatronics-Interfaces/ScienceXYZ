@@ -1,0 +1,9 @@
+{
+  "name": "exo-control",
+  "version-semver": "0.1.0",
+  "dependencies": [
+    "protobuf", "grpc", "cppzmq",
+    { "name": "protobuf", "host": true },
+    { "name": "grpc", "host": true, "features": ["codegen"] }
+  ]
+}

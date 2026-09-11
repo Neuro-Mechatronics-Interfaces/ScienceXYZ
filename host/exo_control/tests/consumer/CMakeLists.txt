@@ -1,0 +1,5 @@
+cmake_minimum_required(VERSION 3.22)
+project(exo_external_consumer LANGUAGES C)
+find_package(ExoControl CONFIG REQUIRED)
+add_executable(exo_consumer main.c)
+target_link_libraries(exo_consumer PRIVATE exo::control)

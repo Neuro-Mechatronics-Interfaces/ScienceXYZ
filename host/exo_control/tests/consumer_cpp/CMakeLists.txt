@@ -1,0 +1,6 @@
+cmake_minimum_required(VERSION 3.22)
+project(exo_external_cpp_consumer LANGUAGES CXX)
+set(CMAKE_CXX_STANDARD 17)
+find_package(ExoControl CONFIG REQUIRED COMPONENTS Core)
+add_executable(exo_cpp_consumer main.cpp)
+target_link_libraries(exo_cpp_consumer PRIVATE exo::core)

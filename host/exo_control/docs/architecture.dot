@@ -1,0 +1,1 @@
+digraph Exo { rankdir=LR; node [shape=box]; ui [label="Android / desktop app"]; sdk [label="C++ controller\nC ABI / JNI"]; transport [label="ListTaps gRPC\nZeroMQ Taps"]; app [label="SciFi-2 hub-manager\nMotion / raw gates"]; exo [label="USB-C Exo"]; ui -> sdk; sdk -> transport; transport -> app [label="Wi-Fi / Ethernet"]; app -> exo; }

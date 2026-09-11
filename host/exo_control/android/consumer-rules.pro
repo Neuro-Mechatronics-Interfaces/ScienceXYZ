@@ -1,0 +1,2 @@
+-keep class org.sciencexyz.exo.ExoClient { *; }
+-keep class org.sciencexyz.exo.ExoClient$NativeException { *; }

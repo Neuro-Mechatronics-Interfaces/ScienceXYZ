@@ -1,0 +1,43 @@
+# Copy to .github/workflows/exo-sdk.yml in the consuming repository.
+# Set SDK_DIR to where you placed the standalone SDK.
+name: Exo SDK desktop builds
+on: [push, pull_request, workflow_dispatch]
+env:
+  SDK_DIR: host/exo_control
+jobs:
+  unix:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Linux dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build libprotobuf-dev protobuf-compiler libgrpc++-dev protobuf-compiler-grpc cppzmq-dev
+      - name: Mac dependencies
+        if: runner.os == 'macOS'
+        run: brew install cmake ninja protobuf grpc cppzmq
+      - run: cmake -S "$SDK_DIR" -B build/exo -G Ninja -DCMAKE_BUILD_TYPE=Release
+      - run: cmake --build build/exo --parallel 4
+      - run: ctest --test-dir build/exo --output-on-failure
+      - run: cmake --install build/exo --prefix "$PWD/build/exo-sdk"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: exo-sdk-${{ runner.os }}-${{ runner.arch }}
+          path: build/exo-sdk
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+      - name: Dependencies
+        shell: pwsh
+        run: '& "$env:VCPKG_INSTALLATION_ROOT/vcpkg.exe" install grpc cppzmq protobuf --triplet x64-windows-static --host-triplet x64-windows'
+      - name: Build and local tests
+        shell: pwsh
+        run: '& "$env:SDK_DIR/scripts/build-sdk.ps1" -Platform Windows -VcpkgRoot $env:VCPKG_INSTALLATION_ROOT -BuildDir build/exo'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: exo-sdk-Windows-x64
+          path: build/exo/install

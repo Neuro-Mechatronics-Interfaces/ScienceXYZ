@@ -1,0 +1,92 @@
+syntax = "proto3";
+
+package synapse;
+
+import "api/node.proto";
+import "api/status.proto";
+
+import "google/protobuf/struct.proto";
+
+message Peripheral {
+    enum Type {
+      kUnknown = 0;
+      kBroadbandSource = 1;
+      kElectricalStimulation = 2;
+      kOpticalStimulation = 3;
+      kSpikeSource = 4;
+      kCamera = 5;
+    }
+    string name = 1;
+    string vendor = 2;
+    uint32 peripheral_id = 3;
+    Type type = 4;
+    string address = 5;
+}
+
+message DeviceInfo {
+    string name = 1;
+    string serial = 2;
+    uint32 synapse_version = 3;
+    uint32 firmware_version = 4;
+    Status status = 5;
+    repeated Peripheral peripherals = 6;
+    DeviceConfiguration configuration = 7;
+}
+
+message DeviceConfiguration {
+    repeated NodeConfig nodes = 1;
+    repeated NodeConnection connections = 2;
+}
+
+
+// Device settings that are configurable by the user.
+// Keys and value types are defined by the device and advertised via
+// GetSettingsResponse.schema.
+message DeviceSettings {
+    reserved 1, 2, 3;
+    reserved "name", "time_source", "fpga_clock_freq_hz";
+
+    google.protobuf.Struct values = 4;
+}
+
+// Describes a single settings key that the device accepts.
+message SettingDescriptor {
+    enum Kind {
+        kKindUnknown = 0;
+        kString = 1;
+        kInt = 2;
+        kDouble = 3;
+        kBool = 4;
+        kEnum = 5;
+    }
+
+    string name = 1;
+    string description = 2;
+    Kind kind = 3;
+    google.protobuf.Value default_value = 4;
+
+    // Allowed values for enum-kind or discrete-set settings
+    // (e.g. valid FPGA clock frequencies).
+    repeated google.protobuf.Value allowed_values = 5;
+}
+
+message GetSettingsQuery {
+
+}
+
+message GetSettingsResponse {
+    DeviceSettings settings = 1;
+
+    // Describes the keys this device accepts in DeviceSettings.values.
+    repeated SettingDescriptor schema = 2;
+}
+
+message UpdateDeviceSettingsRequest {
+    // Only keys present in settings.values will be updated.
+    DeviceSettings settings = 1;
+}
+
+message UpdateDeviceSettingsResponse {
+    Status status = 1;
+    DeviceSettings updated_settings = 2;
+}

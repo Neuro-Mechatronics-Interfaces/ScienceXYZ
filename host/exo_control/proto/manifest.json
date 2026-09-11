@@ -1,0 +1,33 @@
+{
+  "synapse_api_revision": "4c9e9c43a42d2980bdc4238c72568d52adf5a8be",
+  "gui_control_source": "apps/scifi2-hub-manager/proto/gui_control.proto",
+  "sha256_lf": {
+    "SYNAPSE_API_COPYRIGHT": "9db190a6a2faa12db7062a53cf1544cc70482d10f043d89111b58cee1efe6afb",
+    "api/app.proto": "3ec44e2b679bb6f0ec087f7439c853996dd39280f9e649dcbfb3db7872ae9db5",
+    "api/channel.proto": "a12ee0524fbf653474135f45ee3c46600d61743c238e87f6a85cf6508eb6f27b",
+    "api/datatype.proto": "eacb695a1eb1f9068e0e34b1e7c69c33dc22c9121fb37b80687d7cb2991b1e82",
+    "api/device.proto": "f20cc819b53db043dbba810977915c50bbce950575765f2389f13d02a96cb235",
+    "api/files.proto": "f4a6ead959c37bf7c819678247c54bd87085fbb0653d4cee04c1bff4eb5685a9",
+    "api/logging.proto": "8fc6b0ce2c996acb8c01bb7efcd68fe49f8604fe0c8ac7897b9589ab8f5b9041",
+    "api/node.proto": "1d0a0014d560c941d74aa22b107313f7c368e4536f5cac72626c5f8bd6adbcd3",
+    "api/nodes/application.proto": "d0f1b4551f897e9c64d3f3ac97528c368af311f0036f7d08e2ae593a2b16b80b",
+    "api/nodes/broadband_source.proto": "810291a21698b2be3b4a6eee6cb37deca3823d2015f5a75923a3a5973235dfeb",
+    "api/nodes/camera.proto": "bed19cc3b984c20fc59a605df336745aacd4fa95f2d0a5afb43ad9dc47099de4",
+    "api/nodes/disk_writer.proto": "c8f55cf95eb26ed3fe66dea85db43b7a7f160fb81c7d56afc1c0d1134132758a",
+    "api/nodes/electrical_stimulation.proto": "8d047aff39d2c767f30d07dfaa79d9099b4bac3e8b8d31f1689a33a5e67bbf07",
+    "api/nodes/optical_stimulation.proto": "0b33e8b5d99f8cd2f748031797299565b518e6de0adb0d35d95c72b2cc08e2d1",
+    "api/nodes/signal_config.proto": "545483ae9ad60626df13384105e95aec432ee52c9ec04283b5fd466356ccfceb",
+    "api/nodes/signal_status.proto": "aeee454df08f793f089d5e8742c62fab3f091f5a52aeb049d5140c78f5a1472a",
+    "api/nodes/spectral_filter.proto": "2bc2a9c5eefa47ac8f362094c917e310e2a08ec5578b9a956180bde60dd2279d",
+    "api/nodes/spike_binner.proto": "e2a8e7fa7a20aa4deaf470218dd523818f4c6a7172688c751373a99d72e6d050",
+    "api/nodes/spike_detector.proto": "bf53c581578a454aa7c5b85a20614975005a25081271c25448d64611522f091a",
+    "api/nodes/spike_source.proto": "7c97a3b466774b5f6f503618612d8d113102b77cbf973d52eff160a1fa09100d",
+    "api/performance.proto": "372fa9d7196733fc6b9bed7ab77f31c19aa2aac31da1da33301db645f785a20c",
+    "api/query.proto": "196eb7e7d929930656b834e14bebce15a1684b2b099ff82d718b4b9a66e7ed29",
+    "api/status.proto": "79abc2abb3d73d8ee176f1a1b89094f2bf6f8fc7fff12e73acc611c23a09137a",
+    "api/synapse.proto": "742f1a64730504f2011651cacec9d72f736df373c2a1957962285f8c62de46b3",
+    "api/tap.proto": "a3b4b991c3c67d2d690e54972719395015a33b1672b99fe4d3027f0b23132d27",
+    "api/time.proto": "0b9115aca00868e4a6386badcdc5e0a7dde9a0e07da466b366d545eb8609ac21",
+    "gui_control.proto": "d0f853a833d4ac603fa9df46d6a777055cbce71ec7583e6cc3efbd4ef3c0f977"
+  }
+}

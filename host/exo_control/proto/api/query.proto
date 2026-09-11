@@ -1,0 +1,92 @@
+syntax = "proto3";
+
+package synapse;
+
+import "api/channel.proto";
+import "api/status.proto";
+import "api/tap.proto";
+import "api/device.proto";
+
+message SampleQuery {
+  repeated Channel channels = 1;
+  uint32 sample_count = 2;
+}
+
+message ImpedanceQuery {
+  repeated uint32 electrode_ids = 1;
+  uint32 peripheral_id = 2;
+}
+
+message SelfTestQuery {
+  uint32 peripheral_id = 1;
+}
+
+message ImpedanceMeasurement {
+  uint32 electrode_id = 1;
+  float magnitude = 2;
+  float phase = 3;
+}
+
+message ImpedanceResponse {
+  repeated ImpedanceMeasurement measurements = 1;
+}
+
+message SelfTestItem {
+  string test_name = 1;
+  bool passed = 2;
+  repeated uint32 test_data = 3;
+  string test_report = 4;
+}
+
+message SelfTestResponse {
+  bool all_passed = 1;
+  repeated SelfTestItem tests = 2;
+}
+
+message QueryRequest {
+  enum QueryType {
+    kNone = 0;
+    kImpedance = 1;
+    kSample = 2;
+    kSelfTest = 3;
+    kListTaps = 4;
+    kGetSettings = 5;
+  }
+  QueryType query_type = 1;
+  oneof query {
+    ImpedanceQuery impedance_query = 2;
+    SampleQuery sample_query = 3;
+    SelfTestQuery self_test_query = 4;
+    ListTapsQuery list_taps_query = 5;
+    GetSettingsQuery get_settings_query = 6;
+  }
+}
+
+message StreamQueryRequest {
+  QueryRequest request = 1;
+
+  // Other options to fill in specific to a stream
+}
+
+message QueryResponse {
+  Status status = 1;
+  repeated uint32 data = 2;
+  oneof response {
+    ImpedanceResponse impedance_response = 3;
+    SelfTestResponse self_test_response = 4;
+    ListTapsResponse list_taps_response = 5;
+    GetSettingsResponse get_settings_response = 6;
+  }
+}
+
+message StreamQueryResponse {
+  StatusCode code = 1;
+  string message = 2;
+  uint64 timestamp_ns = 3;
+  
+  // We need to switch on the test being run
+  oneof response {
+    ImpedanceResponse impedance = 4;
+    SelfTestResponse self_test = 5;
+  }
+}
