@@ -142,6 +142,52 @@ bool ExoLinkWorker::query(const std::string& command, std::string* error_out, in
   }, error_out, timeout_ms);
 }
 
+bool ExoLinkWorker::raw(const std::string& command, std::string* reply_out,
+                        std::string* error_out, int timeout_ms) {
+  // Trim and reject empty/oversized lines and embedded terminators; the firmware
+  // parses one line at a time, so a raw multi-line string would desync framing.
+  std::string trimmed = command;
+  const auto begin = trimmed.find_first_not_of(" \t\r\n");
+  const auto end = trimmed.find_last_not_of(" \t\r\n");
+  trimmed = begin == std::string::npos ? std::string{} : trimmed.substr(begin, end - begin + 1);
+  if (trimmed.empty()) { if (error_out) *error_out = "empty raw command"; return false; }
+  if (trimmed.size() > 200) { if (error_out) *error_out = "raw command too long (max 200)"; return false; }
+  if (trimmed.find_first_of("\r\n") != std::string::npos) {
+    if (error_out) *error_out = "raw command must be a single line";
+    return false;
+  }
+  return submit([this, trimmed, reply_out](std::string& error) {
+    if (!port_ || !port_->is_open()) { error = "connect the exo first"; return false; }
+    // Send verbatim with the standard terminator, then read whatever frame(s)
+    // arrive within the reply budget. Many firmware replies begin "OK:"/"ERROR:"
+    // and end with ';'; some commands are silent. read_until returns the first
+    // frame containing ';'-delimited content, or times out (treated as an
+    // accepted fire-and-forget: the caller sees an empty reply).
+    read_buffer_.clear();
+    const std::string framed = trimmed + config_.line_terminator;
+    if (!port_->write(framed)) {
+      error = "serial write failed: " + port_->error();
+      port_->close();
+      set_status([&error](ExoStatus& s) { s.link_open = false; s.last_error = error; });
+      return false;
+    }
+    const auto reply = read_until_any(config_.reply_timeout_ms);
+    const std::string text = reply.value_or("");
+    set_status([&text](ExoStatus& s) { s.last_reply = text; });
+    if (reply_out) *reply_out = text;
+    // Surface a firmware ERROR as a failure so the terminal shows it as such,
+    // but still return the text. A silent (empty) reply is not an error.
+    std::string upper = text;
+    std::transform(upper.begin(), upper.end(), upper.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+    if (upper.find("ERROR:") != std::string::npos) {
+      error = text;
+      return false;
+    }
+    return true;
+  }, error_out, timeout_ms);
+}
+
 ExoStatus ExoLinkWorker::snapshot() const {
   std::lock_guard<std::mutex> lock(status_mutex_);
   return status_;
@@ -465,6 +511,27 @@ std::optional<std::string> ExoLinkWorker::read_until(const std::string& needle, 
       std::string frame = read_buffer_.substr(0, delim);
       read_buffer_.erase(0, delim + 1);
       if (frame.find(needle) != std::string::npos || frame.find("ERROR:") != std::string::npos) return frame;
+    }
+    const int remaining =
+        static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                             deadline - Clock::now())
+                             .count());
+    if (remaining <= 0) return std::nullopt;
+    const std::string chunk = port_->read(256, std::min(remaining, 50));
+    if (!port_->is_open() || !port_->error().empty()) return std::nullopt;
+    if (read_buffer_.size() + chunk.size() > 16384) { port_->close(); read_buffer_.clear(); return std::nullopt; }
+    if (!chunk.empty()) read_buffer_ += chunk;
+  }
+}
+
+std::optional<std::string> ExoLinkWorker::read_until_any(int timeout_ms) {
+  const auto deadline = Clock::now() + std::chrono::milliseconds(timeout_ms);
+  for (;;) {
+    const std::size_t delim = read_buffer_.find(';');
+    if (delim != std::string::npos) {
+      std::string frame = read_buffer_.substr(0, delim);
+      read_buffer_.erase(0, delim + 1);
+      return frame;  // first complete frame, whatever it contains
     }
     const int remaining =
         static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(

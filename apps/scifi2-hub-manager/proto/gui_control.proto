@@ -24,6 +24,7 @@ enum CommandKind {
   COMMAND_SET_EXO_MODE = 14;
   COMMAND_SET_EXO_POSE = 15;
   COMMAND_QUERY_EXO = 16;
+  COMMAND_EXO_RAW = 17;
 }
 
 // Engagement mode for the optional on-device NML_Hand_Exo link. The App owns
@@ -135,6 +136,14 @@ message SetExoMode {
 
 message QueryExo { string query = 1; } // Allowlisted read-only firmware command.
 
+// Raw firmware-command passthrough to the exo (bench serial-terminal). This
+// DELIBERATELY bypasses the read-only allowlist and can command motion, so the
+// device App rejects it unless exo_raw_enabled is true in the App config (a gate
+// separate from exo_motion_enabled). Intended for an operator at the bench, not
+// an automated motion API. The App forwards `command` verbatim, waits for the
+// firmware's reply, and returns it in ExoStatus.last_reply.
+message ExoRaw { string command = 1; }
+
 // A pose command for EXO_MODE_EXTERNAL. At least one joint value is required;
 // unlisted joints are held. Rejected unless the exo is engaged (mode != OFF)
 // and armed.
@@ -164,6 +173,7 @@ message ControlCommand {
     SetExoMode set_exo_mode = 23;
     SetExoPose set_exo_pose = 24;
     QueryExo query_exo = 25;
+    ExoRaw exo_raw = 26;
   }
 }
 

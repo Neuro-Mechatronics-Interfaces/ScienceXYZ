@@ -157,6 +157,23 @@ def create_exo_window(device_ip, *, controller_factory=None):
             note.setWordWrap(True); v3.addWidget(note)
             layout.addWidget(box3)
 
+            # (4) raw firmware terminal (bench serial-monitor passthrough)
+            box4 = QGroupBox("4. Firmware terminal (raw passthrough)")
+            v4 = QVBoxLayout(box4)
+            trow = QHBoxLayout(); v4.addLayout(trow)
+            self.raw_input = QLineEdit()
+            self.raw_input.setPlaceholderText("firmware command, e.g. version, help, get_enable:all, home:all")
+            self.raw_input.returnPressed.connect(self.send_raw)
+            self.raw_button = QPushButton("Send")
+            self.raw_button.clicked.connect(self.send_raw)
+            trow.addWidget(self.raw_input, 1); trow.addWidget(self.raw_button)
+            rawnote = QLabel("Sends the line verbatim to the exo firmware (like the Arduino monitor) and shows the "
+                             "reply below. This bypasses the read-only allowlist and CAN command motion, so the "
+                             "device config must set exo_raw_enabled true; otherwise the App rejects it. Requires "
+                             "a connected link.")
+            rawnote.setWordWrap(True); v4.addWidget(rawnote)
+            layout.addWidget(box4)
+
             self.log = QPlainTextEdit(); self.log.setReadOnly(True); self.log.setMaximumBlockCount(400)
             layout.addWidget(self.log, 1)
             self._refresh_start_line()
@@ -183,6 +200,8 @@ def create_exo_window(device_ip, *, controller_factory=None):
             self.move_button.setEnabled(idle and self.link_open and self.allow_motion.isChecked())
             self.allow_motion.setEnabled(idle)
             self.joint.setEnabled(idle); self.value.setEnabled(idle)
+            self.raw_input.setEnabled(idle and self.link_open)
+            self.raw_button.setEnabled(idle and self.link_open)
             self.copy_button.setEnabled(bool(self.start_line.text()))
             run_idle = self.synapsectl_process is None
             self.run_start_button.setEnabled(run_idle)
@@ -270,7 +289,20 @@ def create_exo_window(device_ip, *, controller_factory=None):
 
         # -- (2) exo link -----------------------------------------------------
         def connect_exo(self):
+            # A restarted App publishes new Tap endpoints. connect() alone is
+            # a no-op while the controller still considers its old session live.
+            # This runs on the executor, only for an explicit USB Connect.
+            self.controller.disconnect()
             self.controller.connect()
+            # Establish a correlated round trip before the USB command, rather
+            # than losing it during PUB/SUB subscription propagation.
+            for attempt in range(3):
+                try:
+                    self.controller.get_state(timeout=1.0)
+                    break
+                except TimeoutError:
+                    if attempt == 2:
+                        raise
             self.events.put(("connected", None))
             return self.controller.set_exo_mode("connected")
 
@@ -298,6 +330,16 @@ def create_exo_window(device_ip, *, controller_factory=None):
                 finally:
                     self.controller.set_exo_mode("connected")  # disarm, retain read-only link
             self.submit(move, op="move")
+
+        def send_raw(self):
+            if not self.link_open or self.pending or self.closing:
+                return
+            text = self.raw_input.text().strip()
+            if not text:
+                return
+            self.log.appendPlainText(f">>> {text}")
+            self.raw_input.clear()
+            self.submit(lambda: self.controller.exo_raw(text), op="raw")
 
         def drain_events(self):
             while not self.events.empty():

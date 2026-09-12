@@ -49,8 +49,14 @@ public:
           selected = &tap;
         }
         if (!selected) throw std::runtime_error("missing Tap: " + names[i]);
-        auto expected = i == 0 ? synapse::TAP_TYPE_CONSUMER : synapse::TAP_TYPE_PRODUCER;
-        if (selected->tap_type() != expected) throw std::runtime_error("wrong Tap direction: " + names[i]);
+        const auto type = selected->tap_type();
+        // Science's Python/C++ clients subscribe to legacy output Taps whose
+        // direction is omitted (proto3 UNSPECIFIED). Control must be explicit.
+        const bool compatible = i == 0 ? type == synapse::TAP_TYPE_CONSUMER
+            : type == synapse::TAP_TYPE_PRODUCER || type == synapse::TAP_TYPE_UNSPECIFIED;
+        if (!compatible) throw std::runtime_error("wrong Tap direction: " + names[i] +
+            " (advertised " + std::to_string(static_cast<int>(type)) + ", expected " +
+            (i == 0 ? "CONSUMER=2" : "PRODUCER=1 or legacy UNSPECIFIED=0") + ")");
         std::smatch match;
         const auto endpoint = selected->endpoint();
         if (!std::regex_match(endpoint, match, std::regex(R"(tcp://(?:\[[^\]]+\]|[^:]+):([0-9]{1,5}))")))

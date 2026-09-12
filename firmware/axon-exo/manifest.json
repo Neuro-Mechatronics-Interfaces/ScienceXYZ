@@ -1,0 +1,12 @@
+{
+  "name": "scifi-axon-exo",
+  "kind": "peripheral_plugin",
+  "version": "0.2.0",
+  "abi_version": 3,
+  "description": "NML Hand Exo measured angle BroadbandSource; commands remain on App CDC",
+  "peripheral_ids": ["0xF002"],
+  "install": {
+    "type": "shared_library",
+    "target": "/usr/lib/scifi/plugins/axon_exo.so"
+  }
+}

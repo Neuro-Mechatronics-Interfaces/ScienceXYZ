@@ -12,6 +12,8 @@ namespace {
 void check(bool ok, const char* message) { if(!ok) throw std::runtime_error(message); }
 struct Service : synapse::SynapseDevice::Service {
   std::vector<std::string> endpoints;
+  std::atomic<int> control_type{synapse::TAP_TYPE_CONSUMER};
+  std::atomic<int> output_type{synapse::TAP_TYPE_PRODUCER};
   grpc::Status Query(grpc::ServerContext*, const synapse::QueryRequest* request, synapse::QueryResponse* response) override {
     if(request->query_type()!=synapse::QueryRequest::kListTaps || !request->has_list_taps_query())
       return {grpc::StatusCode::INVALID_ARGUMENT,"only ListTaps permitted"};
@@ -19,7 +21,7 @@ struct Service : synapse::SynapseDevice::Service {
     for(int i=0;i<3;++i) {
       auto tap=response->mutable_list_taps_response()->add_taps();
       tap->set_name(names[i]); tap->set_endpoint(endpoints.at(i));
-      tap->set_tap_type(i==0 ? synapse::TAP_TYPE_CONSUMER : synapse::TAP_TYPE_PRODUCER);
+      tap->set_tap_type(static_cast<synapse::TapType>(i==0 ? control_type.load() : output_type.load()));
     }
     response->mutable_status()->set_code(synapse::kOk);
     return grpc::Status::OK;
@@ -87,6 +89,36 @@ int main() {
     check(std::string(result.data()).find("raw disabled by mock")!=std::string::npos,"C error detail");
     check(exo_disconnect(c)==0,"C disconnect"); exo_destroy(c);
     check(peer.off==2,"C OFF ack");
+    // Legacy discovery omits output direction. Exercise the full handshake,
+    // state receive and C ABI, not only a matching enum predicate.
+    service.output_type=synapse::TAP_TYPE_UNSPECIFIED;
+    check(exo_create("127.0.0.1",port,1500,&c)==0,"legacy C create");
+    check(exo_connect(c)==0,"legacy unspecified output handshake");
+    check(exo_query(c,"version")==0,"legacy output query");
+    check(exo_disconnect(c)==0,"legacy disconnect"); exo_destroy(c);
+    {
+      Controller legacy(make_synapse_transport("127.0.0.1",port),Milliseconds(1500));
+      legacy.connect(); legacy.poll(Milliseconds(100));
+      check(legacy.state().has_value(),"legacy output state receive");
+      legacy.disconnect();
+    }
+    auto rejected_direction = [&] {
+      auto transport=make_synapse_transport("127.0.0.1",port);
+      try { transport->open(Milliseconds(1500)); }
+      catch(const std::runtime_error& e) {
+        return std::string(e.what()).find("wrong Tap direction:")!=std::string::npos;
+      }
+      return false;
+    };
+    service.output_type=synapse::TAP_TYPE_CONSUMER;
+    check(rejected_direction(),"consumer output rejected");
+    service.output_type=99;
+    check(rejected_direction(),"unknown output direction rejected");
+    service.output_type=synapse::TAP_TYPE_PRODUCER;
+    service.control_type=synapse::TAP_TYPE_UNSPECIFIED;
+    check(rejected_direction(),"unspecified control rejected");
+    service.control_type=synapse::TAP_TYPE_PRODUCER;
+    check(rejected_direction(),"producer control rejected");
     server->Shutdown();
     std::cout<<"Loopback gRPC/ZeroMQ/C ABI passed (localhost only)\n";
     return 0;

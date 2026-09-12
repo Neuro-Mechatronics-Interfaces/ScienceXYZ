@@ -46,13 +46,13 @@ class SynapseTapTransport:
         return bool(tap.send(payload))
 
     def receive(self, tap_name: str, timeout: float | None = None) -> bytes | None:
-        # Tap.read() has no timeout parameter. Closing the Tap from another
-        # thread is the cancellation mechanism used by BroadbandController.
+        # Bound reader shutdown. The installed Tap API accepts milliseconds;
+        # never close a ZMQ socket concurrently to cancel a blocking receive.
         with self._lock:
             tap = self._taps.get(tap_name)
         if tap is None:
             raise TransportError(f"tap is not connected: {tap_name}")
-        return tap.read()
+        return tap.read(timeout_ms=max(1, int(1000 * (timeout if timeout is not None else 0.5))))
 
     def disconnect(self, tap_name: str) -> None:
         with self._lock:

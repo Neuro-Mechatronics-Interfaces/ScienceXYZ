@@ -218,7 +218,31 @@ void test_task_protocol_round_trip_and_validation() {
 
 }  // namespace
 
+void test_raw_command_validation() {
+  auto command = valid_prepare_command();
+  command.set_command(COMMAND_EXO_RAW);
+  expect(scifi2_hub::protocol::is_known_command(command.command()),
+         "raw command supports correlated results and rejections");
+  expect(!scifi2_hub::protocol::validate_command(command), "raw payload required");
+  for (const auto& text : {std::string("version"), std::string("info;")}) {
+    command.mutable_exo_raw()->set_command(text);
+    std::string encoded;
+    ControlCommand decoded;
+    expect(static_cast<bool>(scifi2_hub::protocol::serialize_command(command, encoded)),
+           "raw command serializes through protocol validator");
+    expect(static_cast<bool>(scifi2_hub::protocol::parse_command(encoded, decoded)),
+           "raw command passes incoming protocol validation");
+    expect(decoded.exo_raw().command() == text, "raw text preserved");
+  }
+  for (const auto& text : {std::string(), std::string(" \t"), std::string("version\ninfo"),
+                           std::string("version\rinfo"), std::string(201, 'x')}) {
+    command.mutable_exo_raw()->set_command(text);
+    expect(!scifi2_hub::protocol::validate_command(command), "malformed raw rejected");
+  }
+}
+
 int main() {
+  test_raw_command_validation();
   test_command_round_trip_and_validation();
   test_command_rejects_version_range_and_shape_errors();
   test_state_and_result_validation();

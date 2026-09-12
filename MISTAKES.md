@@ -1,5 +1,124 @@
 # Mistakes
 
+### 2026-09-11 - Android polling disabled pose controls and exposed an arm/pose timing race
+
+Operator connected MyoHID and reported flickering Send pose/working state and
+success only when pressing Enable All and Send pose quickly. Android reused its
+command-busy flag for every 250ms poll. The tracked device config also has a
+1000ms inactivity watchdog; separate button presses leave an arm-to-pose window
+that can expire (live watchdog settings were not queried). Android polling now
+leaves command availability unchanged; the explicitly labelled Enable + send
+pose action sends EXTERNAL then pose consecutively on the owning executor.
+New session-gated app decode mappings use the same sequence for fresh events.
+Watchdog/gates remain unchanged; no timer re-arm, pose keepalive, or motion retry.
+Android fake-client regression tests were added; build/test/device validation
+of this change remains with the operator as requested.
+
+### 2026-09-11 - Two-source App graph rejected by the server
+
+After restoring exo node 3, operator configuration failed with "Node 2 already
+has an incoming connection" on Synapse 2.4.1. Protobuf parsing and SDK reader
+inspection did not validate server graph semantics. Removed the second edge
+and the App's edge requirement; retain the configured source and subscribe by
+node ID using the SDK. Added a tracked-config single-input regression check.
+This auxiliary subscription still needs operator verification that the server
+starts/publishes an unconnected source. Do not equate SDK support or schema
+validity with server acceptance. This supersedes the preceding edge repair.
+
+### 2026-09-11 - Exo source parameter referenced an absent graph node
+
+Operator info showed the new Exo BroadbandSource peripheral 300, but App startup
+failed because `exo_source_node_id=3` referenced no configured node. The current
+tracked JSON also lacked node 3 and its edge to App 2, contradicting the earlier
+handoff's configuration claim; when the omission occurred is not established.
+Restored the 10 Hz, 36-channel motor source and connection, preserving RHD and
+App settings. Canonical protobuf parsing and graph-reference checks pass.
+Operator must stop/start with the corrected JSON; rebuilding the App alone does
+not install a device graph. Physical stream acceptance remains pending.
+
+### 2026-09-11 - Native Exo SDK rejected legacy output Tap metadata
+
+Operator built MyoHID with the SDK AAR and reported `wrong Tap direction:
+command_result (status 2)` both while the device App was running and stopped.
+The native SDK required explicit PRODUCER metadata; the installed working
+Python Tap client also subscribes to UNSPECIFIED outputs. The mock advertised
+only explicit directions, missing this compatibility case. Accept UNSPECIFIED
+for the named read-only result/state Taps, keep control explicitly CONSUMER,
+and include numeric metadata in errors. Added localhost handshake/state/C ABI
+coverage for omitted direction and rejection tests for invalid directions.
+The exact live metadata value is inferred, not captured from the device.
+
+### 2026-09-11 - Exo reconnect reused the previous App's Tap session
+
+Operator rebuilt/deployed the App, then supplied repeated client timeouts and
+CDC control=1/data=2 reply-route silence. Fresh info listed RHD 200, Exo 300 and
+App Running True; its July log tail was historical. GUI Connect only called
+controller.connect(), which is a no-op when its old session is still marked
+connected. It now disconnects/re-discovers Taps and establishes an acknowledged
+state request before the USB command. Installed Tap.read supports timeout_ms;
+the transport had incorrectly claimed it did not, and closed sockets while
+reader threads could still use them. Receives now honor 500ms and disconnect
+joins readers before closing. Regression tests cover ordering and timeouts.
+CDC open additionally clears then asserts DTR after normal baud setup. Physical
+board-side silence is not proven fixed; matched deployment/retry is pending.
+Candidate rule: after process restart, refresh discovered endpoints and verify
+an application round trip before diagnosing a downstream device timeout.
+
+### 2026-09-11 - Raw Exo command omitted from protocol validation
+
+Operator reports digit controls work but terminal `version` / `info;` time out
+waiting for a client request ID. Raw dispatch and worker code existed, but
+`control_protocol.hpp` omitted COMMAND_EXO_RAW from both the known-command list
+and payload validation. Incoming requests were dropped without a correlated
+rejection before reaching the worker. Added recognition and bounded single-line
+payload validation; the default-off raw authorization gate remains in the App.
+Protocol round-trip regression tests now cover both reported commands, missing
+payload, and malformed text. Candidate rule: exercise new commands through the
+wire validator, not only the worker and mocked GUI. Bench retry requires App
+rebuild/redeployment; local passing tests do not prove deployed behavior.
+
+### 2026-09-11 - CPack filename omitted the Synapse RPC package version
+
+The operator's axon-exo deployment failed with `Package version is required`.
+The `.deb` had Version 0.1.0 internally, but CPack's default hyphenated
+`scifi-axon-exo-0.1.0-Linux.deb` filename did not match the CLI's
+`package_version_arch.deb` split, so `create_metadata` sent an empty RPC
+version. Set `CPACK_DEBIAN_FILE_NAME=DEB-DEFAULT`, rebuilt as
+`scifi-axon-exo_0.1.0_arm64.deb`, and checked filename/metadata agreement.
+Candidate rule: validate both Debian control metadata and the deployment
+client's filename-derived metadata before delivering a package.
+
+### 2026-09-11 - Portable SDK build and PUB/SUB startup assumptions
+
+**Attempt:** Build a portable Exo DLL/JNI client and validate its live transport
+against a localhost-only mock, then cross-build dependencies for Android.
+**Failures/causes:** MSVC used /MD while the selected vcpkg dependencies used
+/MT (LNK2038); Java found exo_jni.dll but not its dependent exo_control.dll;
+the Windows loopback test received command replies before the state SUB was
+ready. The pinned vcpkg rejected an assumed `--classic` switch; its normal
+package-list install already selects classic mode outside a manifest directory.
+**Corrections:** Match the static triplet's CRT, load exo_control explicitly
+before exo_jni, and require an initial state plus acknowledged read-only
+handshake before reporting connected. Use fresh IDs for retried GET_STATE so
+the App republishes a snapshot instead of only replaying a cached result.
+Windows/Linux controller and real localhost transport tests and Windows JNI
+smoke now pass. The Android OpenSSL parallel install also hit a Makefile rename
+race (`Device or resource busy`); serial compilation/install succeeded. Build
+OpenSSL alone with VCPKG_MAX_CONCURRENCY=1, then restore parallelism for the
+remaining dependencies. The porting guide records that reproducible workaround.
+An attempted Linux-wide `--exclude-libs,ALL` also caused duplicate generated
+protobuf registration when tests linked the C++ core and the C DLL against one
+shared libprotobuf. Restrict symbol hiding to the Android static-dependency
+bundle; do not apply that isolation setting to a shared protobuf runtime.
+The first Android AAR bundled NDK 27 libc++_shared.so, whose RELRO end failed
+the 16 KB check even though its LOAD segments passed. The final SDK links private
+static runtimes behind the C boundary, hides all implementation symbols, and
+exports only 14 C/3 JNI functions. The final AAR's two libraries pass both
+alignment and dependency checks; no shared runtime is bundled.
+**Candidate prevention:** Verify DLL loading in a JVM and subscription readiness
+in a real local PUB/SUB test; compilation and a terminal command reply alone do
+not prove a complete connection.
+
 ### 2026-09-10 - Exo probe/limits/angles all failed identically: no reply_route ACK
 
 **Attempt:** First bench run of the wireless Exo path (exo-integration.md): App
@@ -1067,3 +1186,48 @@ Candidate rule: a config-merge tool must round-trip the file's existing values
 losslessly or fail loudly; never fall back to a writer that can only represent a
 subset of the format. Also: `$(which ...)` is POSIX syntax and fails in cmd.exe;
 document per-shell command forms for operator-run install tooling.
+
+### 2026-09-11 - OpenRB core does not link with -DCDC_DISABLED (interface-0 assumption)
+
+**Attempt:** For the OpenRB Axon-enumeration proof (`firmware/OpenRB_Axon_Enum_Proof/`),
+scifi-server claims USB interface 0, so the plan was to disable CDC
+(`-DCDC_DISABLED`) so the new vendor/bulk PluggableUSB interface would be the
+only interface and land at interface 0. An early `arduino-cli compile
+--build-property "build.extra_flags=... -DCDC_DISABLED ..."` appeared to SUCCEED.
+
+**What went wrong:** The "success" was a stale cached `core.a` built WITHOUT the
+flag; `nm` on the ELF still showed `Serial_`/`SerialUSB`. After clearing the core
+cache and a true `--clean` rebuild, the link FAILED: `USBCore.cpp:921: undefined
+reference to Serial_::handleEndpoint(int)` and `SAMD21_USBDevice.h:109: undefined
+reference to SerialUSB`. The OpenRB-150 SAMD core (0.2.1) references `SerialUSB`
+and `Serial_::handleEndpoint` OUTSIDE the `#ifdef CDC_ENABLED` guards, so CDC
+cannot be cleanly disabled by the documented macro without editing the shared
+core (which must not be modified).
+
+**Cause:** (1) arduino-cli's cached precompiled core masked the real build
+outcome -- a build property that changes core compilation needs the core cache
+cleared (or trust only a `--clean` build whose verbose output shows the flag on
+the core `.cpp` compile lines). (2) This core's CDC gating is incomplete.
+
+**Correction:** Left CDC ENABLED and instead guaranteed interface 0 by plug
+order: the SAMD core assigns PluggableUSB interfaces first-plugged-first, and
+constructors are collected via `__libc_init_array` with SORT-ed priority, so the
+Axon module global is declared `__attribute__((init_priority(101)))` to
+construct (and plug) before the core's default-priority `SerialUSB`. Result: a
+composite device, Axon = interface 0, CDC = interfaces 1-2, within the 7-EP cap.
+Verified by a clean build (no core edits, ~12 KB flash) and by confirming the
+linker uses `.init_array`/`__libc_init_array` (forward, priority-sorted).
+
+**Candidate rule:** When a build property affects core/library compilation,
+never trust a non-`--clean` arduino-cli build -- clear the core cache or verify
+the flag appears on the core file compile lines; a cached `core.a` will silently
+hide both failures and the effect of the flag. And do not assume a documented
+build macro (`CDC_DISABLED`) actually compiles/links on a vendor core; verify.
+# 2026-09-11: SDK test executable needs librt on the focal cross-builder
+
+The standalone axon-exo ARM64 plugin test initially failed to link with
+`libscifi-peripheral-sdk.so: undefined reference to shm_open`. SDK 0.2.0 uses
+POSIX shared memory, and the focal toolchain requires explicit `librt` linkage
+for the test executable. Added `rt` to that target; it then linked and loaded
+the actual plugin successfully under QEMU. Retain the real SDK load test so
+plugin compilation alone is not mistaken for runtime ABI validation.

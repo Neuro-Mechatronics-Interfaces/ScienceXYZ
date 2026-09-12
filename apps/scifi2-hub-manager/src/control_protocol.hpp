@@ -91,6 +91,7 @@ inline bool is_known_command(CommandKind command) {
     case stateful_decode_and_sync::v1::COMMAND_SET_EXO_MODE:
     case stateful_decode_and_sync::v1::COMMAND_SET_EXO_POSE:
     case stateful_decode_and_sync::v1::COMMAND_QUERY_EXO:
+    case stateful_decode_and_sync::v1::COMMAND_EXO_RAW:
       return true;
     default:
       return false;
@@ -357,6 +358,17 @@ inline ValidationResult validate_command(const ControlCommand& command) {
     case COMMAND_SET_EXO_POSE:
       if (!command.has_set_exo_pose()) break;
       return validate_set_exo_pose(command.set_exo_pose());
+    case COMMAND_EXO_RAW: {
+      if (!command.has_exo_raw()) break;
+      const auto& text = command.exo_raw().command();
+      if (text.size() > 200 || text.find_first_not_of(" \t\r\n") == std::string::npos ||
+          text.find_first_of("\r\n") != std::string::npos) {
+        return invalid_result(ValidationCode::kInvalidArgument, "exo_raw.command",
+                              "raw command must be a non-empty single line of at most 200 bytes");
+      }
+      // Authorization remains in launch_exo: exo_raw_enabled defaults off.
+      return valid_result();
+    }
     case COMMAND_QUERY_EXO:
       if (!command.has_query_exo()) break;
       if (command.query_exo().query() == "version" ||

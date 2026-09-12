@@ -68,6 +68,8 @@ class SciFi2HubManagerApp : public synapse::App {
 
  private:
   enum class SourceMode : int { kSampling = 0, kSynthetic = 1 };
+  std::shared_ptr<synapse::ZMQDataReader> exo_data_reader_;
+  void poll_exo_source();
 
   // ---- configuration ----
   struct AppConfig {
@@ -93,7 +95,13 @@ class SciFi2HubManagerApp : public synapse::App {
     // App-owned USB CDC link. Optional tty transport is for other kernels.
     // Decode classes with no pose leave the last target until watchdog disarm.
     bool exo_enabled = false;
+    uint32_t exo_source_node_id = 0; // optional measured-angle BroadbandSource
     bool exo_motion_enabled = false;
+    // Bench serial-terminal passthrough. Off by default: when true, the App
+    // accepts COMMAND_EXO_RAW and forwards arbitrary firmware commands (incl.
+    // motion) verbatim. Deliberately separate from the network safety boundary;
+    // only enable for a supervised bench session.
+    bool exo_raw_enabled = false;
     exo::ExoLinkConfig exo_link;
     // Per-class target pose for EXO_MODE_DECODE, indexed by class id. An empty
     // pose (no joints) means "hold" for that class.

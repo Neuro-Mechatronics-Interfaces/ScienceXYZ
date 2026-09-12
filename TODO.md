@@ -1,23 +1,41 @@
 # TODO
 
+## Exo angle source and reconnect (2026-09-11)
+
+Latest operator info confirms Exo (300) now advertises BroadbandSource alongside
+RHD (200). App startup failed on missing node 3, then the server rejected the
+added 3->2 edge because App 2 already has an input. The corrected graph keeps
+only 1->2; the rebuilt App subscribes to configured node 3 through an auxiliary
+SDK reader without a graph edge. Server startup/publication of that source
+remains unverified. CDC 1/2 handshake and stale-Tap acceptance also remain T-57.
+GUI reconnect now refreshes Taps and waits for state; bounded receives finish
+before socket close. The default-off motion/raw gates remain unchanged.
+
+Implemented driver 0.2.0 `kBroadbandSource`: background Axon polls, per-motor
+angle/age/validity, source uptime and separate SciFi receipt timestamps; matched
+firmware reads one position per loop with a 2ms timeout. Config node 3 feeds a
+separate App reader and `exo_angles` Tap, preserving neural node 1 processing.
+Current source IDs are observed examples, not constants. Pending: operator
+acceptance is tracked by **T-65** for angle streaming and **T-64** for discovery
+coexistence. The operator
+deploys matching firmware, driver and App and verifies live angles, missing
+motors, source timing, reconnect/raw commands and RHD acquisition continuity.
+See [deployment and channel contract](firmware/axon-exo/README.md). Clock
+alignment and anatomical joint calibration are not established by this work.
+
+## Portable Exo SDK (2026-09-11)
+
+- **T-61:** Dependency/NDK audit is recorded in [host/exo_control/docs/buildability.md](host/exo_control/docs/buildability.md).
+- **T-62:** Implemented the standalone C++ controller, C ABI, JNI/Java wrapper, bounded protocol transport, schema snapshot, packaging and transfer guide in `host/exo_control/`. Windows/Linux controller and localhost gRPC/ZeroMQ tests pass; Windows Java JNI loading/errors/ownership/cleanup smoke passes. Android arm64/API 26 native and JNI libraries now cross-build successfully; the self-contained AAR passes ELF/dependency/16 KB alignment checks. Remaining acceptance is the operator's Android/desktop device session and a native macOS build; consult the SDK verification record for exact artifacts. User-reported Python gui-exo motion works (2026-09-11), but that does not establish native-client bench acceptance. T-53 safety/MCP and T-57 broader hardware acceptance remain separate.
+
 ## Hub App naming and USB build update (2026-09-10)
 
 Current App source is `apps/scifi2-hub-manager`, deployed name
-`scifi2-hub-manager`, C++ class `scifi2_hub::SciFi2HubManagerApp`, and Python
-package `scifi2_hub_manager`. Baseline config: `config/rhd2132.json` under the
-App; Exo example: `config/rhd2132_with_exo.json`. Historical names in older bench
-entries below identify the builds actually observed. The v1 protobuf package
-retains its historical name for compatibility. See the App README migration
-instructions before rebuilding/reinstalling or preparing a new recording.
+`scifi2-hub-manager`, C++ class `scifi2_hub::SciFi2HubManagerApp`, and Python package `scifi2_hub_manager`. Baseline config: `config/rhd2132.json` under the App; Exo example: `config/rhd2132_with_exo.json`. Historical names in older bench entries below identify the builds actually observed. The v1 protobuf package retains its historical name for compatibility. See the App README migration instructions before rebuilding/reinstalling or preparing a new recording.
 
 The operator's libusb build failure was reproduced as missing `aclocal`;
-Docker now installs `automake`, and the complete renamed ARM64 App links with
-the pinned vcpkg libusb. The operator subsequently deployed and ran the App;
-`scifi-info.log` confirms root App identity, discovery of `2f5d:2202`, successful
-`libusb_open`, and setup completion (evidence supplied 2026-09-10).
-Operator USB notes report no CDC-ACM kernel support/tty for the OpenRB: successful
-libusb enumeration/open does not complete the Exo transport. T-52/T-53 remain
-gated on a supported, tested transport and independent physical-control checks.
+Docker now installs `automake`, and the complete renamed ARM64 App links with the pinned vcpkg libusb. The operator subsequently deployed and ran the App; `scifi-info.log` confirms root App identity, discovery of `2f5d:2202`, successful `libusb_open`, and setup completion (evidence supplied 2026-09-10).
+Operator USB notes report no CDC-ACM kernel support/tty for the OpenRB: successful libusb enumeration/open does not complete the Exo transport. T-52/T-53 remain gated on a supported, tested transport and independent physical-control checks.
 **T-57** owns fresh App-context USB access evidence and the supported OpenRB
 transport implementation; the access gate passed under the observed permissions.
 Userspace primary-CDC transport and laptop bridge/GUI are now implemented and
@@ -121,6 +139,14 @@ Only after that path is reliable should filtering, spike detection, decoding, or
 Do not add electrical or optical stimulation behavior unless explicitly requested. Recording and stimulation should remain separate concerns during initial infrastructure development.
 
 ## NML Synapse Bridge — Protocol Investigation (2026-08-24)
+
+2026-09-11 update: [axon-exo](firmware/axon-exo/README.md) implements the
+minimum MCU registration path (hardware type 0xF002), composite exo firmware
+and App CDC 1/2 selection. ARM64 build/QEMU and host parser/transport checks
+are automated evidence only. Remaining: operator deployment, simultaneous
+RHD + NML Hand Exo enumeration, current runtime IDs, CDC queries/reconnect
+and acquisition continuity. ID-addressed actuator control is not exposed by
+the current SDK/API; this minimum retains the App CDC command path.
 
 First-pass investigation of Science's public custom-peripheral interface is complete. See `docs/axon-peripheral-protocol.md` and `docs/feasibility-mcu-vs-fpga.md`.
 

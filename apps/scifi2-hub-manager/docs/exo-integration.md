@@ -1,6 +1,8 @@
 # Exo commands through SciFi-2 over Wi-Fi
 
-The laptop's existing Synapse control service sends typed commands over the `control` Tap to `SciFi2HubManagerApp`. Its dedicated Exo worker owns the USB connection to OpenRB-150. No laptop Exo SDK, COM port, SSH relay, new headstage network listener, or separate Synapse peripheral is needed.
+The laptop's existing Synapse control service sends typed commands over the `control` Tap to `SciFi2HubManagerApp`. Its dedicated Exo worker owns the CDC interfaces on OpenRB-150. With the optional Axon firmware, scifi-server separately owns interface 0 for peripheral registration.
+
+The tracked `rhd2132_with_exo.json` requires the **Axon angle-polling firmware and driver 0.2.0** and sets `exo_usb_control_interface: 1` (one CDC function: control 1/data 2). Only neural node 1 has a graph edge to the App (the server rejects a second incoming edge). Exo BroadbandSource node 3 is configured without an outgoing edge; `exo_source_node_id: 3` creates an auxiliary SDK subscription by node ID (server publication still requires bench verification) and forwards measured frames on `exo_angles`. Commands retain the CDC path and existing gates. See [build, channel semantics and deployment](../../../firmware/axon-exo/README.md). For legacy dual-CDC firmware, remove node 3, `exo_source_node_id` and `exo_usb_control_interface` to restore command-only 0/2 probing.
 
 ## Operator workflow
 
@@ -88,7 +90,13 @@ with NdjsonClient(timeout=15) as client:
         client.request("set_exo_mode", mode="off")
 ```
 
-Other languages can send the same fields with `protocol_version: 1`, a unique `request_id`, and `command`. No raw firmware-command passthrough is exposed. Read queries are allowlisted: `version`, `check_limits`, `get_gesture_angles:all`; they require a connected, disarmed worker. This service is for a trusted bench network. Keep its bind address loopback; the existing Synapse control Tap is not a new authenticated motion API.
+Other languages can send the same fields with `protocol_version: 1`, a unique `request_id`, and `command`. Read queries are allowlisted: `version`, `check_limits`, `get_gesture_angles:all`; they require a connected, disarmed worker. A raw firmware-command passthrough (`exo_raw`, command field `command`) exists for a bench serial terminal; it bypasses the allowlist and can command motion, so the device App rejects it unless `exo_raw_enabled` is true in the App config (a gate separate from `exo_motion_enabled`). This service is for a trusted bench network. Keep its bind address loopback; the existing Synapse control Tap is not a new authenticated motion API.
+
+### Firmware terminal (raw passthrough)
+
+The `gui-exo` **Firmware terminal** panel (and the `exo_raw` command over the control plane) sends a line verbatim to the OpenRB firmware, like the Arduino serial monitor: `help`, `version`, `get_enable:all`, `home:all`, gesture and motor commands, etc. The reply appears in `state.exo.last_reply` (shown in the GUI log). Requires a connected link and `exo_raw_enabled: true` in the device config. Because this can command motion outside the pose/arm path, keep it to a supervised bench session with the mechanism unloaded; leave `exo_raw_enabled` false in any configuration that is not for hands-on bench work.
+
+**Diagnosing offline motors.** If `set_finger_angles` (or the GUI motion test) fails with `no reachable targets ... skipped_offline=N lib_error=3`, the firmware pinged those Dynamixel IDs at boot and got no response -- the servos were offline when the firmware initialized (unpowered Dynamixel bus, wiring, or wrong IDs), and the reachability flags are set at init. The firmware is built for the right hand (IDs 11-19: wrist=11/12, thumb=13/14/15, index=16, middle=17, ring=18, pinky=19). Recovery via the terminal: power the Dynamixel bus, then `reboot:all` (re-pings and re-inits reachability) or reset the OpenRB; confirm with `get_enable:all` and per-motor reads before retrying motion.
 
 ## Modes and configuration
 
@@ -104,7 +112,10 @@ Poses use firmware's rest-anchored signed scale: -100 extension, 0 rest, +100 fl
 | Parameter | Default / supported range |
 |---|---|
 | `exo_enabled` | false; example configuration true |
+| `exo_source_node_id` | absent; example 3, separate configured measured-angle source; auxiliary SDK subscription, no graph edge |
+| `exo_usb_control_interface` | absent uses legacy 0/2 probing; composite example explicitly 1 |
 | `exo_motion_enabled` | false; explicit motor-enable gate |
+| `exo_raw_enabled` | false; gate for the `exo_raw` bench serial-terminal passthrough |
 | `exo_transport` | `usb_cdc`; optional `tty` for a kernel with CDC-ACM |
 | `exo_usb_serial` | empty; exactly one VID 2f5d / PID 2202 match required |
 | `exo_device_path` | `/dev/ttyACM0`; used only with `tty` |
@@ -119,7 +130,9 @@ Class joint IDs are 1 thumb, 2 index, 3 middle, 4 ring, 5 pinky, 6 wrist. An emp
 
 ## Transport, results, and limitations
 
-The observed headstage has no CDC-ACM kernel support. The App therefore uses libusb, discovers the primary control interface 0's CDC Union slave and bulk endpoints from descriptors, claims only that pair, sets 8N1 line coding and DTR/RTS, and sends `set_reply_route:both`. It requests `both` rather than `cmd` because which physical CDC enumerates as interface 0 is not guaranteed (the firmware's two CDCs have unspecified init order); mirroring replies to both CDCs guarantees the App's claimed interface carries them. The second CDC pair remains unclaimed. Ambiguous devices, malformed descriptors, bound kernel drivers and failed claims fail clearly; the App does not detach a kernel driver or chmod devices. An optional USB serial string disambiguates devices without pinning a bus address.
+The observed headstage has no CDC-ACM kernel support. The App uses libusb and discovers the selected CDC Union slave and bulk endpoints from descriptors. The composite firmware selects control 1/data 2, leaving Axon interface 0 to the server. Legacy firmware probes CDC controls 0 and 2. Open sets normal baud before clearing/reasserting DTR/RTS and sends `set_reply_route:both`; this also supports legacy mirrored replies. Ambiguous devices, malformed descriptors, bound kernel drivers and failed claims fail clearly; the App does not detach a kernel driver or chmod devices. An optional USB serial string disambiguates devices without pinning a bus address.
+
+After an App restart, GUI Connect disconnects the previous Tap session, re-discovers endpoints and waits for an acknowledged state query before sending the USB handshake. Receives honor bounded timeouts and readers exit before their sockets close. This fixes stale client sessions; it does not prove recovery from every board-side USB fault.
 
 Bulk writes have a 500 ms total budget; replies have a 1500 ms budget. Partial reads on USB timeout are retained. Failed writes or missing ACKs close the link and report an uncertain outcome; never blindly retry a motion. Replugging requires an explicit new connection command. Transfers occur off the App's acquisition loop, with one App operation in flight and a bounded worker queue.
 

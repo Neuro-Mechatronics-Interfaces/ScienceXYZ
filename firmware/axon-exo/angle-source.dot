@@ -1,0 +1,16 @@
+digraph Exo {
+  rankdir=LR;
+  node [shape=box, style=rounded];
+  motors [label="Dynamixel motors\nread-only positions"];
+  board [label="OpenRB-150\nAxon + one CDC function"];
+  driver [label="axon_exo 0.2\nBroadbandSource node 3"];
+  rhd [label="RHD source\nnode 1"];
+  app [label="hub-manager\nApplication node 2"];
+  taps [label="Separate Taps\nexo_angles / broadband_out"];
+  motors -> board [label="one bounded read/pass"];
+  board -> driver [label="Axon interface 0"];
+  driver -> app [label="auxiliary SDK subscription\nnot a graph edge; bench pending", style=dashed];
+  rhd -> app [label="neural frames"];
+  app -> taps;
+  app -> board [label="gated commands: CDC 1/2", constraint=false];
+}

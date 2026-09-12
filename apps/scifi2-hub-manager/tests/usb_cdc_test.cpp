@@ -9,18 +9,20 @@ struct Fake : UsbBackend {
     {1,0,10,0,{},{{0x82,2,64},{3,2,64}}},
     {2,0,2,2,{5,0x24,6,2,3},{}}, {3,0,10,0,{},{{0x84,2,64},{5,2,64}}}};
   std::vector<int> claims, releases;
+  std::vector<int> line_states;
   int driver=0, claim_failure=-1, write_rc=0, read_rc=-7, writes=0, reads=0;
+  int expected_control=0, expected_data=1;
   std::string input="abcdef";
   bool open(const UsbCdcConfig&, std::vector<UsbInterface>& out, std::string&) override { out=topology; return true; }
   void close() override {}
   int kernel_active(int) override { return driver; }
   int claim(int i) override { if(i==claim_failure) return -6; claims.push_back(i); return 0; }
   void release(int i) override { releases.push_back(i); }
-  int alternate(int i,int a) override { check(i==1 && a==0); return 0; }
+  int alternate(int i,int a) override { check(i==expected_data && a==0); return 0; }
   int control(int request,int value,int i,unsigned char* bytes,int size,unsigned timeout) override {
-    check(i==0 && timeout>0 && timeout<=2000);
+    check(i==expected_control && timeout>0 && timeout<=2000);
     if(request==0x20) { check(size==7 && bytes[0]==0x40 && bytes[1]==0x42 && bytes[2]==0x0f && bytes[6]==8); return 7; }
-    check(request==0x22 && (value==0 || value==3)); return 0;
+    check(request==0x22 && (value==0 || value==3)); line_states.push_back(value); return 0;
   }
   int bulk(int ep,unsigned char* bytes,int size,int& transferred,unsigned timeout) override {
     check(timeout>0 && timeout<=2000);
@@ -34,6 +36,7 @@ int main() {
   auto fake=std::make_unique<Fake>(); auto* f=fake.get();
   auto port=make_usb_cdc_port({},std::move(fake));
   check(port->open()); check(f->claims==std::vector<int>({0,1}));
+  check(f->line_states==std::vector<int>({0,3}));
   check(port->write("hello")); check(f->writes==3);
   check(port->read(2,10)=="ab"); check(port->read(4,10)=="cdef"); check(f->reads==1);
   f->write_rc=-7; check(!port->write("motion")); check(f->writes==4); check(!port->is_open());
@@ -51,4 +54,17 @@ int main() {
   check(!select_cdc_endpoints(topology,0,result,error));
   topology=Fake().topology; topology[1].endpoints.pop_back();
   check(!select_cdc_endpoints(topology,0,result,error));
+  // Composite Axon firmware: interface 0 belongs to the server. Claim only
+  // CDC 1/2, including after reconnect, and never fall back to interface 0.
+  fake=std::make_unique<Fake>(); f=fake.get();
+  f->expected_control=1; f->expected_data=2;
+  f->topology={{0,0,0xFF,0,{},{{1,2,64},{0x82,2,64}}},
+    {1,0,2,2,{5,0x24,6,1,2},{}}, {2,0,10,0,{},{{0x85,2,64},{4,2,64}}}};
+  UsbCdcConfig composite; composite.control_interfaces={1};
+  port=make_usb_cdc_port(composite,std::move(fake));
+  check(port->open()); check(f->claims==std::vector<int>({1,2}));
+  check(!port->select_next_candidate());
+  port->close(); check(f->releases==std::vector<int>({2,1}));
+  port->reset_candidate(); check(port->open());
+  check(f->claims==std::vector<int>({1,2,1,2}));
 }

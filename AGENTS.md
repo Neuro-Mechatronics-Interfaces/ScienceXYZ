@@ -100,6 +100,28 @@ Hardware synchronization through the SciFi GPIO may be evaluated separately,
 but do not assume GPIO events are represented in a particular Synapse stream
 without verifying the current API/firmware behavior.
 
+## Exo Motion Safety
+
+Commands that can move the NML_Hand_Exo are gated behind explicit device-config
+flags, defaulting off, so a normally deployed App cannot actuate the hand until
+an operator opts in for a supervised bench session:
+
+- `exo_motion_enabled` gates torque-enabling / pose / decode actuation
+  (`EXO_MODE_EXTERNAL`, `EXO_MODE_DECODE`, `set_exo_pose`).
+- `exo_raw_enabled` gates the `exo_raw` firmware-command passthrough (a bench
+  serial terminal), which bypasses the read-only query allowlist and can command
+  motion. It is a **separate** gate from `exo_motion_enabled`.
+
+Keep both false in any configuration that is not for hands-on bench work; the
+tracked example `apps/scifi2-hub-manager/config/rhd2132_with_exo.json` enables
+them for bench use. Do not add a new exo command that can move the hand without a
+default-off config gate and a clear rejection when the gate is off. The control
+Tap is not an authenticated motion API; treat any motion-capable path as bench
+tooling for a supervised operator, not a network service. Raw passthrough and
+motion tests belong to an operator at the bench with the mechanism unloaded, the
+same as the operator-run GUI/CLI tooling under the Synapse CLI Execution
+Boundary; the agent itself still never actuates hardware.
+
 ## Data and Reproducibility
 
 Raw acquired data is immutable. Derived, filtered, aligned, or resampled data must be distinguishable from raw data and reproducible from tracked code/configuration. Every recorded session should eventually include enough metadata to reconstruct:
@@ -252,6 +274,17 @@ It reached Docker/vcpkg dependency installation and failed building libusb at
 `autoreconf -vfi`; this establishes the `apps build --clean <app-directory>`
 form, not a successful package build. The App directory has since been renamed
 to `apps/scifi2-hub-manager`. Agents must still not execute `synapsectl`.
+
+### Operator Exo registration evidence (2026-09-11)
+
+Supplied `synapsectl -u 192.168.100.157 info` after App redeployment reports
+SFI2-0-260534, Synapse 2.4.1, firmware 3164583911, RHD ID 200 and NML Hand Exo
+ID 300 (registration-only driver reports Unknown), App Running True. IDs are
+observations, not constants. The attached July App log tail is historical.
+GUI Connect reports no reply-route ACK on CDC control 1/data 2, then client
+timeouts after restart. This confirms discovery, not working CDC or the newer
+0.2.0 measured-angle stream. Existing earlier digit movement was operator
+reported before this failure; do not infer watchdog/acquisition acceptance.
 
 ## Python Environment
 

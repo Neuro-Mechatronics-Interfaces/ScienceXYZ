@@ -22,6 +22,23 @@ def _isolated_settings():
         yield
 
 
+def test_connect_refreshes_taps_and_waits_before_usb():
+    app = QApplication.instance() or QApplication([])
+    controller = Mock()
+    controller.connected = True
+    controller.get_state.side_effect = [TimeoutError("slow join"), "ready"]
+    window = create_exo_window("fake", controller_factory=lambda ip: controller)
+    controller.reset_mock()
+    window.connect_exo()
+    names = [call[0] for call in controller.mock_calls]
+    assert names == ["disconnect", "connect", "get_state", "get_state", "set_exo_mode"]
+    controller.set_exo_mode.assert_called_once_with("connected")
+    window.close()
+    deadline = time.monotonic() + 2
+    while not window.closed and time.monotonic() < deadline:
+        app.processEvents(); time.sleep(0.01)
+
+
 def test_gui_motion_is_explicit_and_disarms():
     app = QApplication.instance() or QApplication([])
     controller = Mock()
@@ -57,6 +74,32 @@ def test_gui_motion_is_explicit_and_disarms():
         app.processEvents(); time.sleep(0.01)
     assert window.closed
     controller.disconnect.assert_called_once()
+
+
+def test_raw_terminal_sends_after_connect():
+    app = QApplication.instance() or QApplication([])
+    controller = Mock()
+    controller.connected = False
+    controller.exo_raw.return_value = "OK"
+    window = create_exo_window("fake", controller_factory=lambda ip: controller)
+    # Disabled before a link is open.
+    assert not window.raw_button.isEnabled()
+    window.raw_input.setText("version")
+    window.send_raw()
+    controller.exo_raw.assert_not_called()  # no link yet
+    # Open the link (command-driven), then the terminal is usable.
+    window.events.put(("op", ("connect", True, "succeeded")))
+    window.drain_events()
+    assert window.raw_button.isEnabled()
+    window.raw_input.setText("get_enable:all")
+    window.send_raw()
+    controller.exo_raw.assert_called_once_with("get_enable:all")
+    assert window.raw_input.text() == ""  # cleared after send
+    window.link_open = False
+    window.close()
+    deadline = time.monotonic() + 2
+    while not window.closed and time.monotonic() < deadline:
+        app.processEvents(); time.sleep(0.01)
 
 
 def test_link_gating_is_command_driven_not_broadcast_state():

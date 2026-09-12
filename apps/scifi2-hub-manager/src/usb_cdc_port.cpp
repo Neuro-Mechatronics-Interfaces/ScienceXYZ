@@ -85,6 +85,10 @@ class UsbCdcPort final : public SerialPort {
         static_cast<unsigned char>(config_.baud >> 16), static_cast<unsigned char>(config_.baud >> 24), 0, 0, 8};
     rc = backend_->control(0x20, 0, endpoints_.control, coding.data(), coding.size(), config_.timeout_ms);
     if (rc != 7) { fail("SET_LINE_CODING", rc); return false; }
+    // Force a fresh session edge even after an App died with DTR asserted.
+    // Set the normal baud first so this never performs a 1200-baud reset.
+    rc = backend_->control(0x22, 0, endpoints_.control, nullptr, 0, config_.timeout_ms);
+    if (rc != 0) { fail("clear DTR/RTS", rc); return false; }
     rc = backend_->control(0x22, 3, endpoints_.control, nullptr, 0, config_.timeout_ms);
     if (rc != 0) { fail("SET_CONTROL_LINE_STATE (DTR/RTS)", rc); return false; }
     dtr_ = true; open_ = true;

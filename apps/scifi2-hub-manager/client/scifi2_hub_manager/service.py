@@ -260,6 +260,8 @@ class ControlService:
             return c.set_exo_pose(request["joints"], request_id)
         if name == "query_exo":
             return c.query_exo(request["query"], request_id)
+        if name == "exo_raw":
+            return c.exo_raw(request["command"], request_id)
         preconditions = self._task_preconditions(request)
         if name == "start_task":
             return c.start_task(preconditions=preconditions, request_id=request_id)

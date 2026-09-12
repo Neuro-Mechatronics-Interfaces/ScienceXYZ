@@ -21,7 +21,10 @@ These are concrete reasons not to link the upstream Tap class into a bounded
 mobile client unchanged. No vendor source was modified. The small
 `src/synapse_transport.cpp` implements the same ListTaps RPC and single-frame
 ZeroMQ PUB/SUB protocol using generated **canonical** API bindings, with RPC
-deadlines, strict Tap directions, advertised TCP port discovery, and zero linger.
+deadlines, validated Tap directions, advertised TCP port discovery, and zero linger.
+Control must advertise CONSUMER. Read-only command_result/state Taps accept
+PRODUCER or legacy UNSPECIFIED metadata, matching the installed Python client's
+subscription behavior. Other direction values are rejected with numeric details.
 It never hard-codes peripheral IDs or Tap ports. Hostname/IP and RPC port are
 separate parameters; the protocol's default RPC port is 647.
 

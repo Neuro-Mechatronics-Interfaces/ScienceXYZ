@@ -43,6 +43,11 @@ Science currently supports and tests Synapse App development on Ubuntu Linux and
 
 ## Quick Start
 
+The [portable Exo SDK](host/exo_control/README.md) provides a standalone C++
+controller, C ABI and Android/desktop JNI wrapper for the same network path as
+`gui-exo`. See its [build and repository-transfer instructions](host/exo_control/docs/porting.md).
+It builds independently of the device App and includes hardware-free tests.
+
 The host-local raw broadband/task recorder has a standalone C++ build, separate from the device App. See [recorder build, schema and operator workflow](docs/calibration-recording-mvp.md#host-recorder-build-and-use) for Linux/WSL dependencies, hardware-free tests, and exclusive-create recording. The [calibration task workflow](docs/calibration-task-workflow.md) covers the terminal instructor, Reactions WebSocket adapter, epoch verification and offline diagnostic/model-fitting commands. Physical GPIO timing and end-to-end calibration acceptance remain open.
 
 ### 1. Clone the repository
@@ -237,6 +242,11 @@ synapsectl deploy --help
 ```
 
 ## Project Documentation
+
+For the OpenRB-150 Axon composite firmware, measured-angle BroadbandSource
+driver, graph configuration and CDC command connection, see
+[firmware/axon-exo](firmware/axon-exo/README.md).
+The driver build requires no FPGA tooling; deployment and bench acceptance remain operator-run.
 
 The repository separates documentation by purpose:
 

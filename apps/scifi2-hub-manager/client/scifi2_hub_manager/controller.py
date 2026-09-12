@@ -169,6 +169,13 @@ class BroadbandController:
             self._connected = False
             self._stop.set()
         self._task_snapshot_ready.clear()
+        # Receives are bounded to 0.5s. Join before closing/replacing sockets so
+        # old reader threads cannot race a new connection or ZMQ socket close.
+        for thread in self._threads:
+            if thread is not threading.current_thread():
+                thread.join(timeout=1.0)
+        if any(t.is_alive() and t is not threading.current_thread() for t in self._threads):
+            raise ControllerError("reader shutdown timed out; refusing to replace live Tap sockets")
         for name in (self.CONTROL, self.STATE, self.RESULTS, self.TASK_TRANSITIONS):
             try:
                 self.transport.disconnect(name)
@@ -180,8 +187,6 @@ class BroadbandController:
         for item in pending:
             item.failure = ControllerError("controller disconnected")
             item.event.set()
-        for thread in self._threads:
-            thread.join(timeout=0.25)
         self._threads.clear()
         if was_connected or self.state.pipeline_state != "disconnected":
             self._mark_disconnected("controller disconnected")
@@ -385,8 +390,8 @@ class BroadbandController:
                 self._pending.pop(command.request_id, None)
             raise
 
-    def get_state(self, request_id: str | None = None):
-        return self.execute(self._new_command("get_state", request_id))
+    def get_state(self, request_id: str | None = None, *, timeout: float | None = None):
+        return self.execute(self._new_command("get_state", request_id), timeout=timeout)
 
     def subscribe_state(self, enabled: bool = True, request_id: str | None = None):
         command = self._new_command("subscribe_state", request_id)
@@ -484,6 +489,22 @@ class BroadbandController:
             raise ValueError("query must be version, check_limits, or get_gesture_angles:all")
         command = self._new_command("query_exo", request_id)
         command.query_exo.query = query
+        return self.execute(command)
+
+    def exo_raw(self, command_text: str, request_id: str | None = None):
+        """Send a raw firmware command to the exo (bench serial terminal).
+
+        Bypasses the read-only allowlist -- can command motion -- so the device
+        App only accepts it when exo_raw_enabled is set in its config; otherwise
+        it fails with an invalid-argument error. The firmware reply appears in
+        ``state.exo.last_reply``. Requires a connected (disarmed) link.
+        """
+        if not isinstance(command_text, str) or not command_text.strip():
+            raise ValueError("raw command must be a non-empty string")
+        if len(command_text) > 200 or "\n" in command_text or "\r" in command_text:
+            raise ValueError("raw command must be a single line of at most 200 chars")
+        command = self._new_command("exo_raw", request_id)
+        command.exo_raw.command = command_text.strip()
         return self.execute(command)
 
     def set_exo_mode(self, mode: str, request_id: str | None = None):

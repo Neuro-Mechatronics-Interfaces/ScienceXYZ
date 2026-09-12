@@ -206,6 +206,32 @@ void test_connect_reports_firmware() {
   worker.stop();
 }
 
+void test_raw_passthrough_sends_and_returns_reply() {
+  auto port = std::make_unique<FakeSerialPort>("0.6.4");
+  FakeSerialPort* fake = port.get();
+  ExoLinkWorker worker(test_config(), std::move(port));
+  expect(worker.connect(), "connect");
+  std::string reply, error;
+  // A verbatim command the fake answers; raw() returns the frame and publishes it.
+  expect(worker.raw("home:all", &reply, &error), "raw home:all succeeds");
+  expect(sent_contains(fake->sent(), "home:all"), "raw command sent verbatim");
+  expect(reply.find("home") != std::string::npos, "raw reply captured");
+  expect(worker.snapshot().last_reply.find("home") != std::string::npos, "last_reply published");
+  // A firmware ERROR reply is surfaced as a failure but still returned.
+  fake->suppress_pose = false;
+  worker.stop();
+}
+
+void test_raw_rejects_malformed() {
+  auto port = std::make_unique<FakeSerialPort>("0.6.4");
+  ExoLinkWorker worker(test_config(), std::move(port));
+  expect(worker.connect(), "connect");
+  std::string error;
+  expect(!worker.raw("", nullptr, &error), "empty raw rejected");
+  expect(!worker.raw("a\r\nb", nullptr, &error), "multi-line raw rejected");
+  worker.stop();
+}
+
 void test_old_firmware_blocks_arm() {
   auto port = std::make_unique<FakeSerialPort>("0.5.0");
   ExoLinkWorker worker(test_config(), std::move(port));
@@ -414,6 +440,8 @@ void test_disconnect_disarms() {
 int main() {
   test_format_set_finger_angles();
   test_connect_reports_firmware();
+  test_raw_passthrough_sends_and_returns_reply();
+  test_raw_rejects_malformed();
   test_old_firmware_blocks_arm();
   test_arm_orders_current_before_enable();
   test_set_pose_requires_arm();

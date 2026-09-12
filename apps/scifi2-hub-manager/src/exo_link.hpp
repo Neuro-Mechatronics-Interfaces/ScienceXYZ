@@ -132,6 +132,13 @@ class ExoLinkWorker {
   bool set_pose(const JointPose& pose, std::string* error_out = nullptr,
                 int timeout_ms = 5000);
   bool query(const std::string& command, std::string* error_out = nullptr, int timeout_ms = 5000);
+  // Raw firmware-command passthrough (bench serial terminal). Unlike query(),
+  // NO allowlist: `command` is sent verbatim and can command motion. The App
+  // only calls this when exo_raw_enabled is configured. Requires an open link;
+  // the firmware reply (or error) is returned and published in last_reply. A
+  // command with an empty firmware terminator is sent fire-and-forget.
+  bool raw(const std::string& command, std::string* reply_out = nullptr,
+           std::string* error_out = nullptr, int timeout_ms = 5000);
 
   ExoStatus snapshot() const;
 
@@ -165,6 +172,9 @@ class ExoLinkWorker {
                     std::string& error);
   // Read frames until one containing `needle` arrives or the timeout elapses.
   std::optional<std::string> read_until(const std::string& needle, int timeout_ms);
+  // Read and return the first complete ';'-terminated frame (any content), or
+  // nullopt on timeout. Used by raw() where the reply text is not known ahead.
+  std::optional<std::string> read_until_any(int timeout_ms);
   // Drain and return whatever bytes are already buffered on the link within
   // `timeout_ms` (best effort). Used before a connect handshake to clear a stale
   // startup banner and to record what the board emitted for diagnostics.

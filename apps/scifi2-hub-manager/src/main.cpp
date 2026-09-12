@@ -216,6 +216,21 @@ bool SciFi2HubManagerApp::setup() {
   }
 
   // Producer taps.
+  if (cfg_.exo_source_node_id) {
+    const auto source = synapse::get_node_by_id(device_configuration_, cfg_.exo_source_node_id);
+    // Synapse 2.4.1 rejects multiple incoming graph edges. Subscribe by node
+    // ID through the SDK instead; this auxiliary source has no edge to the App.
+    if (!source || !source->has_broadband_source() || cfg_.exo_source_node_id==kBroadbandNodeId) {
+      spdlog::error("exo_source_node_id must reference a separate configured BroadbandSource");
+      return false;
+    }
+    auto neural_reader = data_reader_;
+    if (!setup_reader(cfg_.exo_source_node_id)) return false;
+    exo_data_reader_ = data_reader_;
+    data_reader_ = std::move(neural_reader);
+    if (!create_tap<synapse::BroadbandFrame>("exo_angles")) return false;
+  }
+
   // NOTE (plan open-question #1): broadband_out is a BroadbandFrame tap, the
   // semantically correct type for a broadband stream. The example app only
   // demonstrates create_tap<synapse::Tensor>; if the SDK rejects a
@@ -441,8 +456,16 @@ bool SciFi2HubManagerApp::parse_config(const synapse::ApplicationNodeConfig& con
       }
     }
     cfg_.exo_class_poses.clear();
+    cfg_.exo_source_node_id = 0;
+    if (p.contains("exo_source_node_id")) {
+      const double id=p.at("exo_source_node_id").number_value();
+      if (p.at("exo_source_node_id").kind_case()!=google::protobuf::Value::kNumberValue ||
+          !std::isfinite(id) || id<1 || id>65535 || std::floor(id)!=id) return false;
+      cfg_.exo_source_node_id=static_cast<uint32_t>(id);
+    }
     if (cfg_.exo_enabled) {
       cfg_.exo_motion_enabled = p.contains("exo_motion_enabled") && p.at("exo_motion_enabled").bool_value();
+      cfg_.exo_raw_enabled = p.contains("exo_raw_enabled") && p.at("exo_raw_enabled").bool_value();
       if (p.contains("exo_transport")) cfg_.exo_link.transport = p.at("exo_transport").string_value();
       if (cfg_.exo_link.transport != "usb_cdc" && cfg_.exo_link.transport != "tty") return false;
       if (p.contains("exo_usb_serial")) cfg_.exo_link.usb.serial = p.at("exo_usb_serial").string_value();
@@ -461,6 +484,13 @@ bool SciFi2HubManagerApp::parse_config(const synapse::ApplicationNodeConfig& con
         return static_cast<int>(n);
       };
       cfg_.exo_link.baud = bounded_integer("exo_baud", cfg_.exo_link.baud, 1, 4000000);
+      // Axon composite firmware reserves interface 0 for scifi-server and
+      // places its single CDC at 1/2. Explicit selection disables legacy 0/2
+      // fallback so the App never tries to claim the server's interface.
+      if (p.contains("exo_usb_control_interface")) {
+        cfg_.exo_link.usb.control_interfaces = {
+            bounded_integer("exo_usb_control_interface", 0, 0, 254)};
+      }
       cfg_.exo_link.total_current_ma = bounded_integer("exo_total_current_ma", cfg_.exo_link.total_current_ma, 1, 2000);
       cfg_.exo_link.per_motor_current_ma = bounded_integer("exo_per_motor_current_ma", cfg_.exo_link.per_motor_current_ma, 1, 1000);
       cfg_.exo_link.watchdog_ms = bounded_integer("exo_watchdog_ms", cfg_.exo_link.watchdog_ms, 100, 5000);
@@ -1224,6 +1254,9 @@ void SciFi2HubManagerApp::apply_protocol_command(const protocol::ControlCommand&
     case COMMAND_QUERY_EXO:
       launch_exo(command);
       break;
+    case COMMAND_EXO_RAW:
+      launch_exo(command);
+      break;
     case COMMAND_SET_EXO_MODE:
       apply_set_exo_mode(command);
       return;
@@ -1284,6 +1317,9 @@ void SciFi2HubManagerApp::launch_exo(const protocol::ControlCommand& command) {
   if (command.command() == COMMAND_SET_EXO_POSE && exo_mode_ != EXO_MODE_EXTERNAL) {
     reject(ERROR_INVALID_ARGUMENT, "select external mode before a pose"); return;
   }
+  if (command.command() == COMMAND_EXO_RAW && !cfg_.exo_raw_enabled) {
+    reject(ERROR_INVALID_ARGUMENT, "exo_raw_enabled must be true to send raw firmware commands"); return;
+  }
   publish_command_outcome(command, RESULT_ACCEPTED, control::success());
   exo_pending_command_ = command;
   exo_pending_ = std::async(std::launch::async, [this, command]() {
@@ -1297,6 +1333,8 @@ void SciFi2HubManagerApp::launch_exo(const protocol::ControlCommand& command) {
       } else ok = exo_worker_->connect(&error) && exo_worker_->arm(false, &error);
     } else if (command.command() == COMMAND_QUERY_EXO) {
       ok = exo_worker_->query(command.query_exo().query(), &error);
+    } else if (command.command() == COMMAND_EXO_RAW) {
+      ok = exo_worker_->raw(command.exo_raw().command(), nullptr, &error);
     } else {
       exo::JointPose pose;
       for (const auto& j : command.set_exo_pose().joints()) pose.set(exo_joint_from_wire(j.joint()), j.value());
@@ -1362,6 +1400,19 @@ void SciFi2HubManagerApp::fill_exo_status(stateful_decode_and_sync::v1::ExoStatu
 // ---------------------------------------------------------------------------
 // Main loop
 // ---------------------------------------------------------------------------
+void SciFi2HubManagerApp::poll_exo_source() {
+  if (!exo_data_reader_) return;
+  // One multipart batch per iteration; the SDK reader is nonblocking.
+  // Keep the original payload/timestamps/sequence, including invalid samples.
+  // This stream never enters the neural decimator or classifier.
+  auto messages=exo_data_reader_->receive_multipart();
+  for (auto& message:messages) {
+    auto frame=synapse::parse_protobuf_message<synapse::BroadbandFrame>(std::move(message));
+    if (!frame) { spdlog::error("Exo source: malformed BroadbandFrame"); continue; }
+    if (!publish_tap("exo_angles",*frame)) spdlog::error("Exo source: Tap publication failed");
+  }
+}
+
 void SciFi2HubManagerApp::main() {
   std::vector<int32_t> synth_data;
 
@@ -1372,6 +1423,7 @@ void SciFi2HubManagerApp::main() {
 
   while (node_running_) {
     drain_exo_result();
+    poll_exo_source();
     publish_periodic_state_if_due();
     poll_task_source_loss();
 

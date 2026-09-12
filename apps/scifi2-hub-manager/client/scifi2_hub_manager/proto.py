@@ -29,6 +29,7 @@ COMMAND = {
     "query_exo": COMMAND_QUERY_EXO,
     "set_exo_mode": COMMAND_SET_EXO_MODE,
     "set_exo_pose": COMMAND_SET_EXO_POSE,
+    "exo_raw": COMMAND_EXO_RAW,
 }
 
 EXO_MODE = {
