@@ -1,26 +1,17 @@
 # science-mcp
 
-An MCP (Model Context Protocol) toolkit that works alongside the running
-`scifi2-hub-manager` kApplication on the SciFi-2 headstage to help with
-task/device development, model diagnostics, and offline data analysis.
+An MCP (Model Context Protocol) toolkit that works alongside the running `scifi2-hub-manager` kApplication on the SciFi-2 headstage to help with task/device development, model diagnostics, and offline data analysis.
 
-It is a thin, agent-facing wrapper around the existing `nml-science-xyz` client
-library. It exposes that library's **read-only** and **offline** capabilities to
-any MCP client (Claude Code, Codex, etc.) as tools and resources.
+It is a thin, agent-facing wrapper around the existing `nml-science-xyz` client library. It exposes that library's **read-only** and **offline** capabilities to any MCP client (Claude Code, Codex, etc.) as tools and resources.
 
 ## CLI execution boundary
 
-Per `AGENTS.md`, an agent must never run `synapsectl` and must never control the
-device. This server is agent-facing, so it holds to that boundary:
+Per `AGENTS.md`, an agent must never run `synapsectl` and must never control the device. This server is agent-facing, so it holds to that boundary:
 
 - It **never** runs `synapsectl`.
-- It **never** issues device *control* commands (start/stop/capture/fit or any
-  task mutation).
-- Its only device access is **read-only**, through the operator-run loopback
-  NDJSON control service (`run_service.py`), which is the single controller
-  owner.
-- `synapsectl_command` returns the exact command *string* for the operator to
-  run by hand; it does not execute anything.
+- It **never** issues device *control* commands (start/stop/capture/fit or any task mutation).
+- Its only device access is **read-only**, through the operator-run loopback NDJSON control service (`run_service.py`), which is the single controller owner.
+- `synapsectl_command` returns the exact command *string* for the operator to run by hand; it does not execute anything.
 
 Everything else operates on files already on disk.
 
@@ -42,8 +33,7 @@ Resources: `science://repo/agents` (AGENTS.md), `science://repo/todo` (TODO.md).
 
 ## Setup
 
-Prerequisites: 64-bit CPython 3.13 and the repo's virtual environment
-(`README.md` at the repository root covers venv creation).
+Prerequisites: 64-bit CPython 3.13 and the repo's virtual environment (`README.md` at the repository root covers venv creation).
 
 From the repository root, with the venv active:
 
@@ -60,9 +50,7 @@ pip install -e apps/scifi2-hub-manager/mcp
 science-mcp-install --scope both
 ```
 
-`--command` defaults to the bare `science-mcp` name, which works whenever the
-venv is active when the agent launches. To pin the absolute path instead (robust
-even without the venv active), pass the script location for your shell:
+`--command` defaults to the bare `science-mcp` name, which works whenever the venv is active when the agent launches. To pin the absolute path instead (robust even without the venv active), pass the script location for your shell:
 
 ```bash
 # bash / POSIX
@@ -82,16 +70,11 @@ science-mcp-install --scope both --command "C:\path\to\.venv\Scripts\science-mcp
 
 Restart your MCP client (or reload its config) to pick up the new server.
 
-The installer depends on `tomli-w` (declared in `pyproject.toml`, installed by
-step 2) to write Codex TOML, so it round-trips floats, datetimes, and other
-values a real `config.toml` may already contain without corrupting them.
+The installer depends on `tomli-w` (declared in `pyproject.toml`, installed by step 2) to write Codex TOML, so it round-trips floats, datetimes, and other values a real `config.toml` may already contain without corrupting them.
 
 ## Registering with agents (`science-mcp-install`)
 
-`science-mcp-install` merges a `science-mcp` entry into the MCP-server tables of
-Codex and Claude config files, at user scope, repo scope, or both. It is a
-merge/upsert: an existing `science-mcp` entry is replaced in place (never
-duplicated), and every other server and key in the file is preserved.
+`science-mcp-install` merges a `science-mcp` entry into the MCP-server tables of Codex and Claude config files, at user scope, repo scope, or both. It is a merge/upsert: an existing `science-mcp` entry is replaced in place (never duplicated), and every other server and key in the file is preserved.
 
 Targets:
 
@@ -109,9 +92,9 @@ science-mcp-install [--scope user|repo|both] [--command CMD]
 
 - `--scope` — which files to touch (default `both`).
 - `--command` — the command the agent launches (default `science-mcp` on PATH;
-  pass an absolute path to pin a specific venv).
+ pass an absolute path to pin a specific venv).
 - `--service-port` — the loopback NDJSON service port the server reads
-  (default `18765`, matching the calibration workflow).
+ (default `18765`, matching the calibration workflow).
 - `--dry-run` — print the planned actions without writing anything.
 
 Preview first:
@@ -144,17 +127,14 @@ The server reads these at launch (the installer writes the first two):
 
 ## Using the device-state tool
 
-`device_state` reads the live App snapshot, so the operator must first have the
-control service running past the App-Running gate:
+`device_state` reads the live App snapshot, so the operator must first have the control service running past the App-Running gate:
 
 ```bash
 # operator terminal (past the synapsectl start + info gate):
 service-main --device-ip 192.168.100.157 --port 18765
 ```
 
-Then an agent can call `device_state` to read pipeline/model/task state. If the
-service is not running the tool returns a structured `service_unreachable` error
-rather than failing the call.
+Then an agent can call `device_state` to read pipeline/model/task state. If the service is not running the tool returns a structured `service_unreachable` error rather than failing the call.
 
 ## Tests
 
@@ -164,5 +144,4 @@ Hardware-free, device-free:
 pytest apps/scifi2-hub-manager/mcp/tests -q
 ```
 
-The installer tests are fully self-contained. The server tests skip gracefully
-when the MCP SDK or the client library is not installed.
+The installer tests are fully self-contained. The server tests skip gracefully when the MCP SDK or the client library is not installed.

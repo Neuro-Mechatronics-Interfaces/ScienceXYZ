@@ -1,5 +1,28 @@
 # Mistakes
 
+### 2026-09-13 - Persistent VID patch pushed without exec bit crash-looped scifi-server
+
+While making the three-VID `scifi-server` patch survive reboots, the persistent
+patched binary was `adb push`ed to `/opt/scifi/patch/scifi-server.patched`,
+which creates it `0666` (no exec bit). The new boot unit bind-mounted this
+non-executable file over `/opt/scifi/bin/scifi-server`; `launch.sh` then failed
+its executable check with "Server binary not found or not executable", so
+`scifi-server.service` crash-looped (restart counter into the 30s) and the
+device sat on the boot logo. The install steps had `chmod 0755` for the helper
+`.sh` but not for the binary. Cause: `adb push` does not set +x, and a
+bind-mount inherits the source file's mode at the target. Corrected on-device
+with `chmod 0755 /opt/scifi/patch/scifi-server.patched` (immediate at the mount
+target since the bind was already active), then `systemctl restart
+scifi-server.service` — server came up on the patched binary (PID present,
+`/proc/PID/exe` = patched hash), and a reboot reasserted the patch
+automatically with both peripherals present. Preventions added: the install
+block in `docs/adb.md` now `chmod 0755`s the patched binary, and
+`scripts/apply-vid-bind-mount.sh` refuses to bind-mount (logs a warning, boots
+stock) when `$PATCHED` is not executable, so a non-exec source can no longer
+brick the boot. Candidate rule: never bind-mount a file over an executed path
+without verifying the source is executable; treat `adb push` as always
+mode-lossy.
+
 ### 2026-09-11 - Android polling disabled pose controls and exposed an arm/pose timing race
 
 Operator connected MyoHID and reported flickering Send pose/working state and

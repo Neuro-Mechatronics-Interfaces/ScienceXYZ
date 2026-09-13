@@ -1,0 +1,20 @@
+[Unit]
+Description=Bind-mount the OpenRB three-VID scifi-server patch (bench)
+Documentation=file:///opt/scifi/patch/README
+# Must win the pathname before scifi-server opens its executable image.
+Before=scifi-server.service
+# The bind target lives on the rootfs; be explicit about ordering after it.
+RequiresMountsFor=/opt/scifi/bin/scifi-server
+DefaultDependencies=no
+After=local-fs.target
+Wants=local-fs.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# apply/revert live beside the patched binary so the whole mechanism is one dir.
+ExecStart=/opt/scifi/patch/apply-vid-bind-mount.sh apply
+ExecStop=/opt/scifi/patch/apply-vid-bind-mount.sh revert
+
+[Install]
+WantedBy=multi-user.target

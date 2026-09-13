@@ -51,9 +51,7 @@ Add `-DEXO_BUILD_JNI=ON` and JAVA_HOME for desktop Java. macOS produces libexo_c
 Prerequisites: Android NDK, CMake, Ninja, JDK, target dependencies and matching host code generators. The local build uses NDK 27.2.12479018, Android API 26 and c++_static with hidden implementation symbols. Do not reuse Windows libraries for Android. From outside a vcpkg manifest directory, install:
 
 ```powershell
-$env:ANDROID_NDK_HOME = 'C:/path/to/Android/Sdk/ndk/27.2.12479018'
-# Pinned vcpkg/OpenSSL on Windows can race while renaming its Makefile during
-# parallel install. Build that package serially first, then restore parallelism.
+$env:ANDROID_NDK_HOME = 'C:/Users/maxmu/AppData/Local/Android/Sdk/ndk/27.2.12479018'
 $env:VCPKG_MAX_CONCURRENCY = '1'
 & "$env:VCPKG_ROOT/vcpkg.exe" install openssl --triplet arm64-android --host-triplet x64-windows
 $env:VCPKG_MAX_CONCURRENCY = '8'
