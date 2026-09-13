@@ -13,8 +13,8 @@ cmake --build build --parallel 4
 (cd build && cpack -G DEB)
 # The deploy client reads version from the filename, not Debian metadata.
 # Fail the local build if either representation drifts.
-package=build/scifi-axon-exo_0.2.0_arm64.deb
+package=build/scifi-axon-exo_0.3.0_arm64.deb
 test "$(dpkg-deb -f "$package" Package)" = scifi-axon-exo
-test "$(dpkg-deb -f "$package" Version)" = 0.2.0
+test "$(dpkg-deb -f "$package" Version)" = 0.3.0
 test "$(dpkg-deb -f "$package" Architecture)" = arm64
 test "$(dpkg-deb -f "$package" Section)" = synapse-peripherals

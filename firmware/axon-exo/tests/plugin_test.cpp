@@ -31,12 +31,14 @@ int main(int argc, char** argv) {
     check(p->read_frames(1).empty());
     check(p->self_test({}).status().code()==synapse::StatusCode::kUnimplemented);
     std::vector<synapse::Channel> channels;
-    for (unsigned motor : {11u,12u}) for (unsigned field=0;field<4;++field) {
-      synapse::Channel c; c.set_id(channels.size()); c.set_electrode_id(4*motor+field);
+    for (unsigned motor : {11u,12u}) for (unsigned field=0;field<8;++field) {
+      synapse::Channel c; c.set_id(channels.size()); c.set_electrode_id(8*motor+field);
       channels.push_back(c);
     }
     check(!p->validate_channels(channels));
-    auto bad=channels; bad[4].set_electrode_id(44); check(bool(p->validate_channels(bad)));
+    // index 4 must be motor 11 field 4 (electrode 8*11+4). A field that does not
+    // match its position (electrode%8 != i%8) breaks the required layout.
+    auto bad=channels; bad[4].set_electrode_id(8*11+7); check(bool(p->validate_channels(bad)));
     std::atomic<bool> done{false}; std::promise<void> bound;
     auto ready=bound.get_future();
     std::thread server([&]{
@@ -50,10 +52,18 @@ int main(int argc, char** argv) {
         uint32_t request[7]; std::memcpy(request,msg.data(),sizeof(request));
         check(request[0]==1 && request[1]==0xF210 && request[2]==1 && request[4]==2);
         check(request[5]==11 && request[6]==12);
-        // Two motors: valid -12.3 degrees sampled 7ms ago, and unavailable.
-        uint32_t response[]={1,0xF211,77,1,request[3],5000,0,2,
+        // Two motors under the 0xF212 8-field schema. Motor 11: -12.3 deg
+        // sampled 7 ms ago (measured), 110 mA (measured), torque 0.1265 N*m.
+        // Motor 12: angle/current unavailable, torque invalid (NaN payload).
+        float torque0=0.1265f; uint32_t torque0_bits; std::memcpy(&torque0_bits,&torque0,4);
+        uint32_t response[]={1,0xF212,77,1,request[3],5000,0,2,
+                             // motor 11: angle|age_lo, age_hi|angle_status,
+                             //           current|current_status, torque float32
                              uint32_t(uint16_t(-123))|(7u<<16),0,
-                             uint32_t(uint16_t(INT16_MIN)),1u<<16};
+                             uint32_t(uint16_t(110)),torque0_bits,
+                             // motor 12: unavailable angle/current, NaN torque
+                             uint32_t(uint16_t(INT16_MIN)),1u<<16,
+                             uint32_t(uint16_t(0))|(1u<<16),0xFFFFFFFFu};
         // A stale request token must not satisfy the pending poll.
         --response[4]; output.send(zmq::buffer(response),zmq::send_flags::none);
         ++response[4]; output.send(zmq::buffer(response),zmq::send_flags::none);
@@ -64,10 +74,20 @@ int main(int argc, char** argv) {
     auto before=std::chrono::steady_clock::now();
     auto frames=p->read_frames(1);
     check(std::chrono::steady_clock::now()-before<std::chrono::milliseconds(100));
-    check(frames.size()==1 && frames[0].frame_size()==8);
+    check(frames.size()==1 && frames[0].frame_size()==16);
     check(frames[0].timestamp()==5000000000ULL && frames[0].sequence_number()==77);
     check(frames[0].sample_rate()==10 && frames[0].unix_timestamp_ns()>0);
-    check(frames[0][0]==-123 && frames[0][1]==7 && frames[0][4]==INT16_MIN && frames[0][7]==1);
+    // Motor 11 (fields 0..7): angle, age_lo, age_hi, angle_status, current,
+    // current_status, torque_lo, torque_hi. Reconstruct torque from its two
+    // int16 halves as a little-endian float32.
+    check(frames[0][0]==-123 && frames[0][1]==7 && frames[0][3]==0);
+    check(frames[0][4]==110 && frames[0][5]==0);
+    uint32_t t_bits=uint32_t(uint16_t(frames[0][6]))|(uint32_t(uint16_t(frames[0][7]))<<16);
+    float t_nm; std::memcpy(&t_nm,&t_bits,4); check(t_nm>0.126f && t_nm<0.127f);
+    // Motor 12 (fields 8..15): angle unavailable, current unavailable, NaN torque.
+    check(frames[0][8]==INT16_MIN && frames[0][11]==1 && frames[0][13]==1);
+    uint32_t t2=uint32_t(uint16_t(frames[0][14]))|(uint32_t(uint16_t(frames[0][15]))<<16);
+    check(t2==0xFFFFFFFFu);
     check(p->stop_recording()==scifi::Status::OK);
     check(p->read_frames(1).empty());
     // Restart exercises socket lifetime and fresh handshake.

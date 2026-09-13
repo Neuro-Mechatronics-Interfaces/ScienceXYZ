@@ -336,4 +336,24 @@ class FakeDevice:
             task.last_effective_frame.source_id = "fake/reference"
             task.last_effective_frame.sequence_number = self.task_source_sequence
             task.last_effective_frame.timestamp_ns = self.task_source_sequence * 1000
+        # Informational read-only sections mirroring the real device's snapshot.
+        state.pipeline_config.has_config = True
+        state.pipeline_config.upstream_channels = 32
+        state.pipeline_config.featurized_channels = 32
+        state.pipeline_config.decimation_factor = 20
+        state.pipeline_config.source_sample_rate_hz = 20000.0
+        state.pipeline_config.feature_sample_rate_hz = 1000.0
+        state.pipeline_config.window_ms = 200.0
+        state.pipeline_config.stride_ms = 20.0
+        state.pipeline_config.window_samples = 200
+        state.pipeline_config.num_bands = 8
+        state.source_stats.connected = True
+        state.source_stats.has_last_frame = True
+        state.source_stats.last_sequence_number = self.state_version
+        state.source_stats.last_timestamp_ns = self.state_version * 1000
+        state.source_stats.last_sample_rate_hz = 20000
+        state.source_stats.received_message_count = self.state_version
+        state.source_stats.parsed_message_count = self.state_version
+        state.source_stats.forwarded_frame_count = self.state_version
+        state.identity.broadband_source_node_id = 1
         self.transport.inject("state", state.SerializeToString())

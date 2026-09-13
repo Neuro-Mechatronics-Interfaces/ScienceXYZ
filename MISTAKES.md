@@ -1,5 +1,151 @@
 # Mistakes
 
+### 2026-09-13 - Empty exo_angles Tap blamed on the App/config; the real cause was a server-side RHD read storm + Exo queue overflow
+
+`exo_angles_probe.py` raised "no Exo angle frames received" and this was
+initially triaged toward the App's auxiliary node-3 subscription (T-65: does the
+server start/publish an unconnected source?), a decode mismatch, or the config.
+An operator `synapsectl -u <DEV> logs --since 540000` capture
+(`exo-start-fail.log`) disproved all of those. The 9-minute window returned the
+10000-line cap, but every line fell inside an **89 ms burst**
+(16:18:36.649977..16:18:36.738717): 9998x `ERROR scifi-server | Ephys reader:
+Failed to read data from peripheral`, one `ERROR scifi-server | Exo 1 queue
+overflow: dropped 7440 frames`, and the terminating `Received GET_LOGS request`.
+Neither error string exists in this repo (App or client) -- both are emitted by
+the closed on-device `scifi-server`. So: (1) the Exo driver (node 3) *is*
+polling and enqueuing telemetry (the overflow proves production), which means the
+fixed 0.3.0 driver is deployed and the server *does* start/publish the
+unconnected source -- T-65's core doubt does not apply here; (2) the RHD ephys
+reader (peripheral 200) is in a tight failure loop (~112 errors/ms), which both
+contradicts an earlier same-day healthy `info` (climbing `batches=99910`
+Broadband diagnostics) -- device state regressed between the two captures -- and
+plausibly starves the consumer that should drain the Exo queue, so the queue
+overflows and `exo_angles` publishes nothing. The `exo_angles` emptiness is a
+*downstream symptom* of the RHD read fault, not an App/config/decode defect.
+Cause (proximate): peripheral 200 stopped delivering data to the server; root
+trigger (physical vs. server-state vs. USB) not yet established. Correction:
+none in code yet -- this is a device/hardware-state condition. Candidate rule:
+before editing App/client code to explain an empty producer Tap, pull device
+logs and separate `scifi-server`-owned messages (peripheral read/queue errors)
+from App-owned ones; a log window that collapses to milliseconds under the line
+cap is itself evidence of an error storm, not a quiet device. Next evidence:
+recapture `info` (is `Status`/RHD still Running?), power-cycle/reseat the RHD
+(Axon Omnetics on USB-C Port 2), then re-run the probe; if the ephys storm
+clears and Exo still yields nothing, only then reopen the App-drain hypothesis.
+
+**Update (same day, fresh `info`):** a subsequent `info` shows the device fully
+healthy -- `Status: Running`, App `Running: True`, neural diagnostics climbing
+(`batches=1,059,787`, `parse_errors=0`, `forwarded=21,195,740`). The `Ephys
+reader` storm was **transient** and has cleared; the RHD is fine now. That
+leaves the App-drain hypothesis as the leading explanation: the one server-side
+`Exo 1 queue overflow: dropped 7440 frames` line means the driver enqueues
+telemetry into the *server* queue, and an overflow there implies the App's
+`exo_data_reader_` is NOT consuming node 3's socket (a healthy drain would keep
+that queue empty). Neither the App-process log in `info` (neural-only) nor the
+server log distinguishes "App polls node 3 but gets nothing" from "App never
+polls," because `poll_exo_source()` logged nothing. Action taken: added an
+always-emit-once/sec "Exo receive diagnostics" counter to `poll_exo_source()`
+(`apps/scifi2-hub-manager/src/main.cpp`, mirroring the neural
+`maybe_log_reader_diagnostics`), including empty batches, so a redeployed App
+will show whether node-3 frames reach the App reader. Rebuild/redeploy pending;
+this remains a hypothesis until the new `forwarded=`/`messages=` counters are
+read from a live App next to the server's overflow line.
+
+**Correction (same day, `logs --since 15000` capture exo-diag.log):** the
+"transient / cleared" claim above was WRONG -- it was inferred from an `info`
+whose embedded App-process log tail was stale (older wall-clock), not live
+server state. A fresh 15-second `logs` request again collapsed to an ~89 ms
+window (16:33:58.365..454) that is 9998x `Ephys reader: Failed to read data from
+peripheral` + one `Exo 1 queue overflow: dropped 46 frames` + the GET_LOGS line
+-- i.e. the RHD (200) ephys read storm is ACTIVE and continuous (~112 k
+errors/sec), not transient. That flood saturates the log ring so completely that
+NO App INFO line (`Broadband receive diagnostics`, `Exo receive diagnostics`)
+can survive in any `--since` window, so the absence of `Exo receive diagnostics`
+is INCONCLUSIVE about whether the instrumented App is deployed -- it proves
+nothing while the storm runs. Revised conclusion: the RHD ephys read fault is
+the actual root cause; it starves the server's per-peripheral service loop, so
+node 3's queue is drained on neither side and `exo_angles` gets nothing. This is
+a device/hardware condition on the Axon Omnetics adapter (physical RHD2132,
+USB-C Port 2), not an App/config/decode defect and not fixable by more log
+filtering. `--log-level` cannot isolate what is needed (App lines are INFO,
+below the ERROR flood; there is no filter for "INFO-and-overflow but not the
+ephys ERRORs"). Next: at the bench, reseat/power-cycle the Axon Omnetics
+adapter, confirm re-enumeration, restart the App, then `logs --since 5000`; only
+once the storm is gone will the ring carry App INFO lines that reveal (a)
+whether the instrumented App is deployed at all (`Exo receive diagnostics`
+present vs. only `Broadband receive diagnostics`) and (b) the node-3 drain
+counters. Candidate rule: do not treat an `info`-embedded App log tail as live
+device state -- its timestamps can lag the server log by hours; a log window
+that keeps collapsing to milliseconds is an ACTIVE error storm, not a quiet
+device, and repeating the capture at the same width will keep collapsing.
+
+### 2026-09-13 - Exo driver 4->8 field bump missed the request-send path (node 3 start failure)
+
+Bumping the Axon exo telemetry from 4 to 8 fields/motor (schema 0xF211->0xF212)
+required changing every place the host driver
+(`firmware/axon-exo/src/axon_exo.cpp`) computed motors-from-channels. The decode
+(`packet[4]!=channels.size()/8`), the `validate_channels` grouping, and the log
+line were all updated to `/8`, but the **request-building** loop was missed and
+left at the old 4-field arithmetic:
+`request{1,++token,channels.size()/4}` and `for(i=0;i<n;i+=4)
+push_back(electrode_id()/4)`. With the 72-channel config that asked the firmware
+for 18 "motors" with garbage IDs (electrode_id/4 where electrode=8*motor+field),
+so the firmware never returned a well-formed reply. The device log showed the
+0.3.0 driver running (its new "current=mA, torque" banner) but `Exo 1 telemetry
+timeout` x5 then `telemetry: queued=0 ... timeouts=5 stale/malformed=5`, and
+`BroadbandNode: Failed to start peripheral recording` / `Failed to start node
+with id: 3`. The RHD (node 1) started fine; only the exo node failed, which is
+why `synapsectl start` returned the generic "Internal error starting device".
+The earlier misread of a truncated 3-minute log (only the periodic "Connecting
+device usb-X" lines, no config/start lines) briefly suggested a USB enumeration
+loop; the longer capture showed the real config/start/fail sequence. Cause: a
+wire-contract constant (fields-per-motor) duplicated across send, receive,
+validate, and log paths; only three of four were updated. Also missed:
+`SCIFI_REGISTER_PERIPHERAL(...,"0.2.0",...)` version string (bumped to 0.3.0).
+Fix: request loop -> `/8` and `i+=8`; version string -> 0.3.0. The QEMU
+`plugin_test.cpp` mock does assert the request `count==2` and IDs `11,12`, which
+would have caught this, but that test needs QEMU and was not run locally; only
+the host-free `firmware_transport_test` ran, and it exercises the firmware's
+request *parsing*, not the driver's request *building*. Candidate rule: when a
+wire-format constant changes, grep the whole module for the OLD literal
+(`/4`, `i+=4`, `size()/4`) and confirm each occurrence, both directions of the
+protocol (request AND reply); a passing hardware-free test on one side does not
+prove the untested (QEMU/hardware) side. Live bench evidence remains pending a
+driver rebuild/redeploy with this fix.
+
+### 2026-09-13 - device_state returned a "malformed" fallback for a healthy idle App
+
+The first live `science-mcp` `device_state` call against the running
+`scifi2-hub-manager` App (loopback `service-main` on 18765) returned a
+degenerate snapshot: `state_version` and `timestamp_ns` both `"0"` and
+`last_error = {code: "malformed", message: "task status has an unknown
+lifecycle"}`. Cause: a strict-decoder / lenient-encoder mismatch. The C++ App
+calls `snapshot.mutable_task()` unconditionally, so the wire always carries the
+task submessage (`HasField("task")` true), but it only called `set_lifecycle`
+inside `if (task_runtime_)`; with no task configured the field stayed at the
+proto default `TASK_LIFECYCLE_UNSPECIFIED`. The client's `_task_from_proto`
+([model.py]) raised `ProtocolMessageError("task status has an unknown
+lifecycle")` on `unspecified` regardless of `configured`, and `service-main`
+surfaced that as the `malformed` fallback state. The "no task configured" case
+is already fully described by `configured=false`, so an unspecified lifecycle
+there is not a protocol error. Corrected on both sides: C++ now always emits
+`TASK_LIFECYCLE_IDLE` for the unconfigured case; the client normalizes
+`unspecified`->`idle` when `configured=false` and only raises for a *configured*
+task. Regression tests added in `client/tests/test_controller.py`
+(`test_unconfigured_task_submessage_decodes_as_idle`,
+`test_configured_task_without_lifecycle_is_malformed`). Note the identical
+strict pattern exists for `pipeline.source_mode`/`pipeline.state` == unspecified
+in `state_from_proto`; the device always sets those, so no live failure, but the
+same lenient-when-unconfigured treatment should be considered if a new
+pre-first-frame path can emit them. Operational gotcha discovered while
+verifying: the on-disk client fix does NOT take effect until the long-running
+`service-main` (and the MCP server) processes are restarted, because each loaded
+`scifi2_hub_manager.model` at startup; a re-query right after editing still
+showed the old `malformed`. Candidate rule: when adding a state/status field,
+exercise decode for the *unconfigured/default* case, not only the populated one;
+prefer a lenient decoder that keys strict invariants off an explicit
+`configured`/presence flag rather than off a value being non-default.
+
 ### 2026-09-13 - Persistent VID patch pushed without exec bit crash-looped scifi-server
 
 While making the three-VID `scifi-server` patch survive reboots, the persistent

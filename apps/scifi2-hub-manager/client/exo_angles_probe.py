@@ -21,9 +21,9 @@ def main():
     source_id = app["application"]["parameters"]["exo_source_node_id"]
     source = next(n["broadbandSource"] for n in config["nodes"] if n["id"] == source_id)
     channels = source["signal"]["electrode"]["channels"]
-    motors = [c["electrode_id"] // 4 for c in channels[::4]]
+    motors = [c["electrode_id"] // 8 for c in channels[::8]]
     for i, c in enumerate(channels):
-        if c["id"] != i or c["electrode_id"] != 4*motors[i//4]+i%4:
+        if c["id"] != i or c["electrode_id"] != 8*motors[i//8]+i%8:
             raise ValueError("invalid Exo channel order")
     tap = Tap(args.device_ip)
     if not tap.connect("exo_angles"):

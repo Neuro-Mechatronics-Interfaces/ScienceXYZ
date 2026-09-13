@@ -1,9 +1,12 @@
 # NML Hand Exo angle source
 
-Driver **0.2.0** advertises a real `kBroadbandSource` backed by measured OpenRB
-motor positions. It requires the matching `EXO_AXON_USB=1` firmware in
-`third_party/exo/src/cpp/nml_hand_exo`. No FPGA toolchain or gateware is needed.
-Its serial version response identifies it as `0.7.1-axon-0.2.0`.
+Driver **0.3.0** advertises a real `kBroadbandSource` backed by measured OpenRB
+motor positions, currents, and derived torque. It requires the matching
+`EXO_AXON_USB=1` firmware in `third_party/exo/src/cpp/nml_hand_exo`. No FPGA
+toolchain or gateware is needed. Its serial version response identifies it as
+`0.7.1-axon-0.3.0`. The driver and firmware are a matched pair: 0.3.0 uses the
+8-field `0xF212` telemetry schema and refuses the older 4-field `0xF211`
+firmware at the start-time handshake (and vice versa).
 
 ## USB and graph
 
@@ -39,24 +42,36 @@ into firmware or driver. Merely registering a peripheral does not create a node.
 
 ## Channels and timestamps
 
-Select complete groups of four channels per motor. `id` is the sequential
-stream index; `electrode_id = 4 * Dynamixel_ID + field` selects the motor/field.
-The current example uses IDs 11..19 from the right-hand firmware, 36 channels,
-10 Hz nominal polling, 16 bits, unity gain and no analog filters. Supported
-polling rates are integer 1..20 Hz, with 1..18 distinct motors.
+Select complete groups of **eight** channels per motor. `id` is the sequential
+stream index; `electrode_id = 8 * Dynamixel_ID + field` selects the motor/field.
+The example uses IDs 11..19 from the right-hand firmware, 72 channels, 10 Hz
+nominal polling, 16 bits, unity gain and no analog filters. Supported polling
+rates are integer 1..20 Hz, with 1..18 distinct motors. This is the driver
+**0.3.0** / firmware `axon-0.3.0` schema (reply type `0xF212`); the earlier 0.2.0
+/ `0xF211` layout had only fields 0..3.
 
 | Field | Meaning |
 |---|---|
 | 0 | Signed absolute encoder angle in **0.1 degree**; -32768 means unavailable |
 | 1 | Low 16 bits of source sample age in milliseconds (unsigned bit pattern) |
 | 2 | High 16 bits of source sample age in milliseconds (unsigned bit pattern) |
-| 3 | Status: 0 measured, 1 unavailable/read error/out of representable range |
+| 3 | Angle status: 0 measured, 1 unavailable/read error/out of representable range |
+| 4 | `PRESENT_CURRENT` in **milliamps** (signed int16); 0 when unavailable |
+| 5 | Current status: 0 measured, 1 unavailable/read error |
+| 6 | Low 16 bits of derived torque as little-endian **float32 N·m** |
+| 7 | High 16 bits of that float32; the pair is `0xFFFFFFFF` (NaN) when invalid |
 
-These are motor encoder positions, **not anatomical joint angles or the six
-gesture percentages**. Multiple turns are retained up to the representable
-range (-3276.7..3276.7 degrees); out-of-range values are explicitly unavailable.
-Firmware rounds encoder ticks to 0.1 degree. No interpolation, hold-last-value
-substitution or invented zero is used for an offline motor.
+Reconstruct torque as a float from fields 6 (low) and 7 (high):
+`bits = uint16(f6) | uint16(f7) << 16`, then reinterpret `bits` as float32.
+Torque is derived on the device from the same current sample
+(`N·m = mA × 0.00115`, the XC330-T288 constant); it issues no extra bus read, so
+its validity follows field 5.
+
+These are motor encoder positions and motor currents, **not anatomical joint
+angles or the six gesture percentages**. Multiple turns are retained up to the
+representable range (-3276.7..3276.7 degrees); out-of-range values are explicitly
+unavailable. Firmware rounds encoder ticks to 0.1 degree. No interpolation,
+hold-last-value substitution or invented zero is used for an offline motor.
 
 The SDK channel schema only has ELECTRODE/GPIO; ELECTRODE here is the numeric
 container, not a claim that these values are microvolts. `get_lsb=1` preserves
@@ -103,13 +118,16 @@ arduino-cli upload --fqbn OpenRB-150:samd:OpenRB-150 --port COM21 --input-file f
 
 For the SciFi-2 device deriver:  
 ```powershell
-docker build -t axon-exo-builder -f firmware/axon-exo/Dockerfile firmware/axon-exo
+docker build --no-cache -t axon-exo-builder -f firmware/axon-exo/Dockerfile firmware/axon-exo
+```
+and then mount the built driver in the docker container:  
+```powershell
 docker run --rm --mount "type=bind,source=$((Get-Location).Path)/firmware/axon-exo,target=/work" axon-exo-builder bash build-driver.sh
 ```
 
 The Dockerfile extends the existing hub-manager builder and installs SDK 0.2.0,
 ABI 3. Outputs: `dist/openrb/nml_hand_exo.ino.bin`, `build/axon_exo.so`,
-`build/scifi-axon-exo_0.2.0_arm64.deb`. The package privately bundles the SDK at
+`build/scifi-axon-exo_0.3.0_arm64.deb`. The package privately bundles the SDK at
 `/usr/lib/scifi/axon-exo/`; its relative RUNPATH avoids overwriting another
 plugin's files. All server plugins must still use compatible SDK ABIs/SONAMEs.
 The underscore-separated Debian filename is required by the deployment client.
@@ -129,7 +147,7 @@ The underscore-separated Debian filename is required by the deployment client.
 4. Install the new driver, from WSL repository root:
 
    ```bash
-   synapsectl -u "$DEV" peripherals deploy driver --package "$(pwd)/firmware/axon-exo/build/scifi-axon-exo_0.2.0_arm64.deb"
+   synapsectl -u "$DEV" peripherals deploy driver --package "$(pwd)/firmware/axon-exo/build/scifi-axon-exo_0.3.0_arm64.deb"
    ```
 
 5. Rebuild/package/redeploy the App using its normal documented workflow.
@@ -143,6 +161,17 @@ The underscore-separated Debian filename is required by the deployment client.
    ```powershell
    python apps/scifi2-hub-manager/client/exo_angles_probe.py --device-ip 192.168.100.157 --config apps/scifi2-hub-manager/config/rhd2132_with_exo.json --duration 10
    ```
+
+   If the probe reports no frames, the App now logs whether it is draining node 3
+   at all. Fetch `synapsectl -u "$DEV" logs` and look for an `Exo receive
+   diagnostics: ... forwarded_frames=N ... totals(... messages=M forwarded=F ...)`
+   line, emitted at least once per second regardless of traffic. `messages=0`
+   forever means the App's auxiliary reader is not receiving node-3 frames from
+   the server (compare against a server-side `Exo N queue overflow` line, which
+   would show the driver *is* producing into the server queue but the App is not
+   consuming it); `messages>0, forwarded=0` points at the publish/decode side.
+   This separates a driver/server-publication fault from an App-drain fault; the
+   neural `Broadband receive diagnostics` line only covers node 1.
 
 8. In `gui-exo`, Connect then Version. Check terminal `version` and `info;`,
    disconnect/reconnect, and verify neural acquisition continues. Physical

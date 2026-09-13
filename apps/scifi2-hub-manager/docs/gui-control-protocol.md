@@ -71,6 +71,37 @@ The versioned state snapshot has this logical shape. T-5 implements the canonica
     "accuracy": 0.98,
     "duration_ms": 4312
   },
+  "pipeline_config": {
+    "has_config": true,
+    "upstream_channels": 32,
+    "featurized_channels": 32,
+    "decimation_factor": 20,
+    "source_sample_rate_hz": 20000.0,
+    "feature_sample_rate_hz": 1000.0,
+    "window_ms": 200.0,
+    "stride_ms": 20.0,
+    "window_samples": 200,
+    "frequency_bands": [],
+    "num_bands": 8
+  },
+  "source_stats": {
+    "connected": true,
+    "has_last_frame": true,
+    "last_sequence_number": "123456789",
+    "last_timestamp_ns": "1234567890",
+    "last_sample_rate_hz": 20000,
+    "received_message_count": "500000",
+    "parsed_message_count": "500000",
+    "parse_error_count": "0",
+    "forwarded_frame_count": "25000",
+    "dropped_frame_count": "0",
+    "nonmonotonic_count": "0"
+  },
+  "identity": {
+    "broadband_source_node_id": 1,
+    "exo_source_node_id": null,
+    "exo_firmware": ""
+  },
   "last_error": null
 }
 ```
@@ -82,6 +113,8 @@ Each collection has a monotonically increasing `data_generation`, incremented af
 Fitting takes an immutable snapshot of the requested active collection and its generation under the data lock, then trains a candidate model without holding that lock or the live-model lock. On successful completion, the candidate is swapped into the one live inference model. The model records `source_collection_id` and `source_generation`. It is `stale` when the source collection's current generation differs from the recorded generation. New samples arriving during a fit therefore never alter the candidate silently: the fit can succeed and immediately be marked stale. A failed fit never replaces a previously live model.
 
 The model phase is one of `idle`, `queued`, `running`, `succeeded`, `failed`, or `cancelled` (cancellation is reserved for a later command if implemented). Progress fields are meaningful in `running` and terminal phases. A fit while another fit is queued or running is rejected as `busy` in v1.
+
+`pipeline_config`, `source_stats`, and `identity` are read-only informational sections; a client never needs them to drive commands, and older device builds that predate them omit the sections entirely (decoders fall back to zeroed defaults). `pipeline_config` echoes the sizing chosen when the pipeline initializes from the first source frame; every numeric field is zero and `has_config` is `false` until then. An empty `frequency_bands` with `has_config` `true` means the legacy `num_bands`-way split over the one-sided spectrum is in effect, reconstructible from `num_bands` and `feature_sample_rate_hz`. `source_stats` exposes cumulative reader accounting (message/parse/forward counts, sequence-gap `dropped_frame_count` and `nonmonotonic_count`) plus the most recent frame's sequence, source timestamp, and sample rate, so an idle-versus-flowing source is visible without opening a tap. `identity` reports only what the App holds at runtime -- the neural broadband source node id, the optional exo source node id, and the exo firmware string. Peripheral ids (RHD/Exo) and the Synapse/firmware version are deliberately not here; they come from `synapsectl info` and stay in that capture path so the two are never conflated.
 
 While a fit is running, each completed MLP epoch emits a non-terminal
 `command_result` with `status: accepted` and a `progress` object containing the

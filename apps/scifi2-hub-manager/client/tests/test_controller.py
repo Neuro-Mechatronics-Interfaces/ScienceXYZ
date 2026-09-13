@@ -165,6 +165,106 @@ class ControllerTests(unittest.TestCase):
         self.assertTrue(self.controller.connected)
         self.assertEqual(self.controller.state.last_error.code, "malformed")
 
+    def test_unconfigured_task_submessage_decodes_as_idle(self):
+        # The live device always sets the task submessage (mutable_task()), so
+        # HasField("task") is True even with no task configured. An older build
+        # left lifecycle at the proto default (UNSPECIFIED); that must decode as
+        # an idle, unconfigured task rather than a malformed-status error.
+        value = proto.StateSnapshot()
+        value.protocol_version = 1
+        value.state_version = 1
+        value.pipeline.state = 2
+        value.pipeline.source_mode = 1
+        value.active.collection_id = 0
+        value.model.phase = 1
+        value.task.configured = False  # touches the submessage; leaves lifecycle default
+        state = state_from_proto(value)
+        self.assertFalse(state.task.configured)
+        self.assertEqual(state.task.lifecycle, "idle")
+        self.assertIsNone(state.last_error)
+
+    def test_configured_task_without_lifecycle_is_malformed(self):
+        value = proto.StateSnapshot()
+        value.protocol_version = 1
+        value.state_version = 1
+        value.pipeline.state = 2
+        value.pipeline.source_mode = 1
+        value.active.collection_id = 0
+        value.model.phase = 1
+        value.task.configured = True
+        value.task.definition_id = "d"
+        value.task.definition_hash = "h"
+        value.task.app_session_id = "s"
+        # lifecycle left UNSPECIFIED: a *configured* task with no lifecycle is
+        # still a protocol violation.
+        with self.assertRaisesRegex(Exception, "unknown lifecycle"):
+            state_from_proto(value)
+
+    def test_snapshot_carries_pipeline_config_source_stats_and_identity(self):
+        from scifi2_hub_manager.model import state_to_json
+        value = proto.StateSnapshot()
+        value.protocol_version = 1
+        value.state_version = 7
+        value.pipeline.state = 3
+        value.pipeline.source_mode = 1
+        value.active.collection_id = 0
+        value.model.phase = 1
+        value.task.configured = False
+        value.pipeline_config.has_config = True
+        value.pipeline_config.upstream_channels = 32
+        value.pipeline_config.featurized_channels = 30
+        value.pipeline_config.decimation_factor = 20
+        value.pipeline_config.source_sample_rate_hz = 20000.0
+        value.pipeline_config.feature_sample_rate_hz = 1000.0
+        value.pipeline_config.window_ms = 200.0
+        value.pipeline_config.num_bands = 8
+        band = value.pipeline_config.frequency_bands.add()
+        band.low_hz, band.high_hz = 20.0, 150.0
+        value.source_stats.connected = True
+        value.source_stats.has_last_frame = True
+        value.source_stats.last_sequence_number = 123456789
+        value.source_stats.dropped_frame_count = 4
+        value.source_stats.nonmonotonic_count = 1
+        value.identity.broadband_source_node_id = 1
+        value.identity.has_exo_source_node_id = True
+        value.identity.exo_source_node_id = 9
+        value.identity.exo_firmware = "0.6.4"
+
+        state = state_from_proto(value)
+        self.assertTrue(state.pipeline_config.has_config)
+        self.assertEqual(state.pipeline_config.featurized_channels, 30)
+        self.assertEqual(state.pipeline_config.frequency_bands[0].high_hz, 150.0)
+        self.assertEqual(state.source_stats.dropped_frame_count, 4)
+        self.assertEqual(state.identity.exo_source_node_id, 9)
+        self.assertEqual(state.identity.exo_firmware, "0.6.4")
+
+        js = state_to_json(state)
+        # 64-bit counters are stringified for JSON transport; small ints stay int.
+        self.assertEqual(js["source_stats"]["last_sequence_number"], "123456789")
+        self.assertEqual(js["source_stats"]["dropped_frame_count"], "4")
+        self.assertEqual(js["pipeline_config"]["decimation_factor"], 20)
+        self.assertEqual(js["identity"]["exo_source_node_id"], 9)
+        self.assertEqual(js["pipeline_config"]["frequency_bands"], [{"low_hz": 20.0, "high_hz": 150.0}])
+
+    def test_unconfigured_snapshot_defaults_new_sections(self):
+        # A device build that predates these sections omits them; decode must
+        # fall back to zeroed defaults rather than raise.
+        from scifi2_hub_manager.model import state_to_json
+        value = proto.StateSnapshot()
+        value.protocol_version = 1
+        value.state_version = 1
+        value.pipeline.state = 2
+        value.pipeline.source_mode = 1
+        value.active.collection_id = 0
+        value.model.phase = 1
+        state = state_from_proto(value)
+        self.assertFalse(state.pipeline_config.has_config)
+        self.assertFalse(state.source_stats.connected)
+        self.assertIsNone(state.identity.exo_source_node_id)
+        js = state_to_json(state)
+        self.assertEqual(js["source_stats"]["dropped_frame_count"], "0")
+        self.assertIsNone(js["identity"]["exo_source_node_id"])
+
     def test_transport_loss_wakes_pending_and_publishes_disconnected(self):
         updates = []
         self.controller.on_state(updates.append)

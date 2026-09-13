@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(axon-exo VERSION 0.2.0 LANGUAGES CXX)
+project(axon-exo VERSION 0.3.0 LANGUAGES CXX)
 find_package(cppzmq REQUIRED)
 find_package(Protobuf CONFIG REQUIRED)
 find_package(spdlog CONFIG REQUIRED)

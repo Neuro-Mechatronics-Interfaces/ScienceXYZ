@@ -833,6 +833,11 @@ void SciFi2HubManagerApp::publish_state_snapshot() {
 
   auto* task_status = snapshot.mutable_task();
   task_status->set_configured(task_runtime_.has_value());
+  // When no task is configured, still emit a concrete lifecycle (IDLE) rather
+  // than leaving the field at its proto default (UNSPECIFIED). A strict client
+  // treats UNSPECIFIED as a malformed status; the "no task configured" case is
+  // already carried by configured=false and must not read as a protocol error.
+  task_status->set_lifecycle(TASK_LIFECYCLE_IDLE);
   if (task_runtime_) {
     const auto runtime = task_runtime_->snapshot();
     const auto& definition = task_runtime_->definition();
@@ -862,6 +867,52 @@ void SciFi2HubManagerApp::publish_state_snapshot() {
   }
 
   fill_exo_status(snapshot.mutable_exo());
+
+  // Pipeline-config echo: zeroed with has_config=false until initialize_pipeline
+  // sizes the stage from the first source frame.
+  auto* pipeline_config = snapshot.mutable_pipeline_config();
+  pipeline_config->set_has_config(pipeline_ready_);
+  if (pipeline_ready_) {
+    pipeline_config->set_upstream_channels(static_cast<std::uint32_t>(upstream_channels_));
+    pipeline_config->set_featurized_channels(static_cast<std::uint32_t>(featurized_channels_));
+    pipeline_config->set_decimation_factor(static_cast<std::uint32_t>(decimation_factor_));
+    pipeline_config->set_source_sample_rate_hz(static_cast<double>(cfg_.sample_rate_hz));
+    pipeline_config->set_feature_sample_rate_hz(feature_sample_rate_hz_);
+    pipeline_config->set_window_ms(cfg_.window_ms);
+    pipeline_config->set_stride_ms(cfg_.stride_ms);
+    pipeline_config->set_window_samples(static_cast<std::uint32_t>(window_samples_));
+    for (const auto& band : cfg_.frequency_bands_hz) {
+      auto* wire_band = pipeline_config->add_frequency_bands();
+      wire_band->set_low_hz(band.low_hz);
+      wire_band->set_high_hz(band.high_hz);
+    }
+    pipeline_config->set_num_bands(static_cast<std::uint32_t>(cfg_.num_bands));
+  }
+
+  // Live source/frame stats: cumulative reader accounting plus the last frame's
+  // metadata, so an idle vs flowing device is visible without opening a tap.
+  auto* source_stats = snapshot.mutable_source_stats();
+  source_stats->set_connected(source_connected_);
+  source_stats->set_has_last_frame(have_last_sequence_);
+  source_stats->set_last_sequence_number(last_sequence_number_);
+  source_stats->set_last_timestamp_ns(last_source_timestamp_ns_);
+  source_stats->set_last_sample_rate_hz(last_source_sample_rate_hz_);
+  source_stats->set_received_message_count(received_message_count_);
+  source_stats->set_parsed_message_count(parsed_message_count_);
+  source_stats->set_parse_error_count(parse_error_count_);
+  source_stats->set_forwarded_frame_count(forwarded_frame_count_);
+  source_stats->set_dropped_frame_count(dropped_frame_count_);
+  source_stats->set_nonmonotonic_count(nonmonotonic_count_);
+
+  // Runtime identity the App itself holds (node ids + exo firmware). Peripheral
+  // ids and Synapse version deliberately stay in the info-capture path.
+  auto* identity = snapshot.mutable_identity();
+  identity->set_broadband_source_node_id(kBroadbandNodeId);
+  if (cfg_.exo_source_node_id != 0) {
+    identity->set_has_exo_source_node_id(true);
+    identity->set_exo_source_node_id(cfg_.exo_source_node_id);
+  }
+  identity->set_exo_firmware(snapshot.exo().firmware());
 
   if (!protocol::validate_state(snapshot)) {
     spdlog::error("state: refusing to publish invalid snapshot at version {}", state_version_);
@@ -1406,11 +1457,48 @@ void SciFi2HubManagerApp::poll_exo_source() {
   // Keep the original payload/timestamps/sequence, including invalid samples.
   // This stream never enters the neural decimator or classifier.
   auto messages=exo_data_reader_->receive_multipart();
+  std::size_t batch_forwarded = 0;
+  std::size_t batch_parse_errors = 0;
   for (auto& message:messages) {
     auto frame=synapse::parse_protobuf_message<synapse::BroadbandFrame>(std::move(message));
-    if (!frame) { spdlog::error("Exo source: malformed BroadbandFrame"); continue; }
-    if (!publish_tap("exo_angles",*frame)) spdlog::error("Exo source: Tap publication failed");
+    if (!frame) {
+      spdlog::error("Exo source: malformed BroadbandFrame");
+      ++batch_parse_errors;
+      continue;
+    }
+    if (!publish_tap("exo_angles",*frame)) {
+      spdlog::error("Exo source: Tap publication failed");
+      ++exo_publish_error_count_;
+      continue;
+    }
+    ++batch_forwarded;
   }
+  if (!messages.empty()) ++exo_receive_batch_count_;
+  exo_received_message_count_ += messages.size();
+  exo_forwarded_frame_count_ += batch_forwarded;
+  exo_parse_error_count_ += batch_parse_errors;
+  maybe_log_exo_diagnostics(messages.size(), batch_forwarded, batch_parse_errors);
+}
+
+void SciFi2HubManagerApp::maybe_log_exo_diagnostics(std::size_t batch_size,
+                                                    std::size_t forwarded,
+                                                    std::size_t parse_errors) {
+  // Emit at most once per second, but ALWAYS at least once per second even when
+  // the batch is empty: an always-empty Exo drain against a server that reports
+  // "Exo N queue overflow" is the signal that the App is not consuming node 3's
+  // socket. A silent poll_exo_source() (the prior behavior) could not show this.
+  const auto now = std::chrono::steady_clock::now();
+  const bool periodic = !have_last_exo_diagnostics_log_ ||
+                        now - last_exo_diagnostics_log_ >= std::chrono::seconds(1);
+  if (!periodic) return;
+  spdlog::info(
+      "Exo receive diagnostics: batch_size={} forwarded_frames={} parse_errors={} "
+      "totals(batches={} messages={} forwarded={} parse_errors={} publish_errors={})",
+      batch_size, forwarded, parse_errors, exo_receive_batch_count_,
+      exo_received_message_count_, exo_forwarded_frame_count_, exo_parse_error_count_,
+      exo_publish_error_count_);
+  last_exo_diagnostics_log_ = now;
+  have_last_exo_diagnostics_log_ = true;
 }
 
 void SciFi2HubManagerApp::main() {
@@ -1535,16 +1623,20 @@ bool SciFi2HubManagerApp::read_frames(ReadBatch& batch) {
     if (have_last_sequence_) {
       const uint64_t expected = last_sequence_number_ + 1;
       if (frame.sequence_number() > expected) {
+        const uint64_t missing = frame.sequence_number() - expected;
+        dropped_frame_count_ += missing;
         spdlog::warn("Dropped {} frames (expected seq {}, got {})",
-                     frame.sequence_number() - expected,
-                     expected, frame.sequence_number());
+                     missing, expected, frame.sequence_number());
       } else if (frame.sequence_number() < expected) {
+        ++nonmonotonic_count_;
         spdlog::warn("Non-monotonic broadband sequence (expected seq {}, got {})",
                      expected, frame.sequence_number());
       }
     }
     last_sequence_number_ = frame.sequence_number();
     have_last_sequence_ = true;
+    last_source_timestamp_ns_ = frame.timestamp_ns();
+    last_source_sample_rate_hz_ = frame.sample_rate_hz();
     source_connected_ = true;
     last_source_frame_wall_time_ = std::chrono::steady_clock::now();
     have_last_source_frame_wall_time_ = true;

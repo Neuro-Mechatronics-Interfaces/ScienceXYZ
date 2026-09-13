@@ -30,14 +30,18 @@ class Peripheral final : public axon::RecordPeripheral {
     r.mutable_status()->set_message("Physical self-test is operator supervised"); return r;
   }
   const std::optional<std::string> validate_channels(const std::vector<synapse::Channel>& ch) const override {
-    if (ch.empty() || ch.size()>72 || ch.size()%4) return "select four channels per motor, at most 18 motors";
+    // Eight channels per motor (schema 0xF212): angle, age_lo, age_hi,
+    // angle_status, current_mA, current_status, torque_lo, torque_hi.
+    // electrode_id = 8*motor + field.
+    if (ch.empty() || ch.size()>144 || ch.size()%8) return "select eight channels per motor, at most 18 motors";
     for (size_t i=0;i<ch.size();++i) {
-      const unsigned motor=ch[i].electrode_id()/4;
+      const unsigned motor=ch[i].electrode_id()/8;
       if (ch[i].type()!=synapse::ELECTRODE || ch[i].id()!=i || motor<1 || motor>252 ||
-          ch[i].electrode_id()%4!=i%4 || ch[i].reference_id()!=0 ||
-          motor!=ch[i-i%4].electrode_id()/4) return "invalid Exo layout (angle, age low, age high, status)";
-      if (i%4==0) for (size_t j=0;j<i;j+=4)
-        if (ch[j].electrode_id()/4==motor) return "duplicate motor ID";
+          ch[i].electrode_id()%8!=i%8 || ch[i].reference_id()!=0 ||
+          motor!=ch[i-i%8].electrode_id()/8)
+        return "invalid Exo layout (angle, age low, age high, angle status, current, current status, torque low, torque high)";
+      if (i%8==0) for (size_t j=0;j<i;j+=8)
+        if (ch[j].electrode_id()/8==motor) return "duplicate motor ID";
     }
     return std::nullopt;
   }
@@ -98,17 +102,17 @@ class Peripheral final : public axon::RecordPeripheral {
       zmq::socket_t tx(ctx_,zmq::socket_type::pub),rx(ctx_,zmq::socket_type::sub);
       tx.set(zmq::sockopt::linger,0); tx.set(zmq::sockopt::sndtimeo,0);
       rx.set(zmq::sockopt::linger,0); rx.set(zmq::sockopt::rcvtimeo,10); rx.set(zmq::sockopt::rcvhwm,128);
-      axon::subscribe_to_axon_messages(rx,address_,0xF211); rx.connect(rx_); tx.connect(tx_);
+      axon::subscribe_to_axon_messages(rx,address_,0xF212); rx.connect(rx_); tx.connect(tx_);
       uint32_t token=uint32_t(Clock::now().time_since_epoch().count());
       auto next=Clock::now(); auto deadline=next; bool pending=false;
       uint64_t dropped=0,timeouts=0,rejected=0,delivered=0;
-      spdlog::info("Exo {}: {} motors, {} Hz nominal polling; source uptime timestamps, alignment unknown; angle=0.1 degree, age=ms, status=0/1",id,channels.size()/4,rate_);
+      spdlog::info("Exo {}: {} motors, {} Hz nominal polling; source uptime timestamps, alignment unknown; angle=0.1 degree, age=ms, status=0/1, current=mA, torque=float32 N*m",id,channels.size()/8,rate_);
       while (!stop_) {
         const auto now=Clock::now();
         if (pending && now>=deadline) {pending=false; ++timeouts; spdlog::warn("Exo {} telemetry timeout {}",id,timeouts);}
         if (!pending && now>=next) {
-          std::vector<uint32_t> request{1,++token,uint32_t(channels.size()/4)};
-          for (size_t i=0;i<channels.size();i+=4) request.push_back(channels[i].electrode_id()/4);
+          std::vector<uint32_t> request{1,++token,uint32_t(channels.size()/8)};
+          for (size_t i=0;i<channels.size();i+=8) request.push_back(channels[i].electrode_id()/8);
           if (axon::send_axon_packet(tx,address_,0xF210,std::move(request))!=Status::OK)
             throw std::runtime_error("Axon telemetry request send failed");
           pending=true; deadline=now+std::chrono::milliseconds(250);
@@ -119,8 +123,8 @@ class Peripheral final : public axon::RecordPeripheral {
         const auto receipt=Clock::now();
         if (message.size()<sizeof(axon::RxMsgHeader)+20 || message.size()%4) {++rejected; continue;}
         axon::RxPacket packet(std::move(message));
-        if (!pending || packet.src_addr()!=address_ || packet.type()!=0xF211 ||
-            packet.payload_size()!=5+channels.size()/2 || packet[0]!=1 || packet[1]!=token || packet[4]!=channels.size()/4) {++rejected; continue;}
+        if (!pending || packet.src_addr()!=address_ || packet.type()!=0xF212 ||
+            packet.payload_size()!=5+channels.size()/2 || packet[0]!=1 || packet[1]!=token || packet[4]!=channels.size()/8) {++rejected; continue;}
         const uint64_t source_ms=uint64_t(packet[2]) | uint64_t(packet[3])<<32;
         if (source_ms>UINT64_MAX/1000000) {++rejected; continue;}
         std::vector<int16_t> values; values.reserve(channels.size());
@@ -151,4 +155,4 @@ class Peripheral final : public axon::RecordPeripheral {
 };
 }
 static_assert(scifi::plugin::ABI_VERSION==3);
-SCIFI_REGISTER_PERIPHERAL(axon_exo::Peripheral,"axon_exo","0.2.0",0xF002u);
+SCIFI_REGISTER_PERIPHERAL(axon_exo::Peripheral,"axon_exo","0.3.0",0xF002u);

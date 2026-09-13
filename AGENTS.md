@@ -122,6 +122,35 @@ motion tests belong to an operator at the bench with the mechanism unloaded, the
 same as the operator-run GUI/CLI tooling under the Synapse CLI Execution
 Boundary; the agent itself still never actuates hardware.
 
+## OpenRB Three-VID scifi-server Patch
+
+The stock `scifi-server` USB gate accepts only VIDs `0x399A` (Science) and
+`0x2AC1` (RHD); the OpenRB-150 (`0x2F5D`) is rejected, so the Exo peripheral
+does not enumerate. `scripts/scifi-server-accept-openrb-vid.py` binary-patches a
+copy to add `0x2F5D` without removing either existing VID. The agent must never
+run this against a live device; patch a copy, the operator deploys.
+
+Deployment is a **bind mount** over the vendor path
+(`/opt/scifi/bin/scifi-server`), never an on-disk overwrite of the vendor
+binary. Two variants:
+
+- **Temporary** (`/tmp`) — wiped on reboot; the manual procedure in
+  `docs/adb.md` sections 3–14.
+- **Persistent** — a copy at `/opt/scifi/patch/scifi-server.patched` plus the
+  systemd unit `scripts/scifi-openrb-vid-patch.service` (ordered
+  `Before=scifi-server.service`) driven by `scripts/apply-vid-bind-mount.sh`,
+  which reasserts the bind mount every boot. Verified surviving reboot on the
+  bench 2026-09-13. Install/verify/uninstall: `docs/adb.md` section 14b.
+
+The apply step guards against booting a stale/broken patch: it refuses to mount
+(logs a warning, boots stock) unless the vendor binary still matches a recorded
+stock SHA-256 **and** the patched copy is executable. Cause of a 2026-09-13
+boot-logo hang: `adb push` creates files `0666`, and a non-executable file
+bind-mounted over the executed path makes `launch.sh` crash-loop the server.
+Always `chmod 0755` a pushed binary. A Science firmware/server update replaces
+the vendor binary and the hash guard will then refuse the patch — re-pull,
+re-patch, re-install (`docs/adb.md`). See `MISTAKES.md` (2026-09-13).
+
 ## Data and Reproducibility
 
 Raw acquired data is immutable. Derived, filtered, aligned, or resampled data must be distinguishable from raw data and reproducible from tracked code/configuration. Every recorded session should eventually include enough metadata to reconstruct:

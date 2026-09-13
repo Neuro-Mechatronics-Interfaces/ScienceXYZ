@@ -70,6 +70,10 @@ class SciFi2HubManagerApp : public synapse::App {
   enum class SourceMode : int { kSampling = 0, kSynthetic = 1 };
   std::shared_ptr<synapse::ZMQDataReader> exo_data_reader_;
   void poll_exo_source();
+  // Periodic Exo-drain diagnostics (>=1/s, including empty batches). See the
+  // exo_*_count_ members below and the neural maybe_log_reader_diagnostics().
+  void maybe_log_exo_diagnostics(std::size_t batch_size, std::size_t forwarded,
+                                 std::size_t parse_errors);
 
   // ---- configuration ----
   struct AppConfig {
@@ -281,13 +285,32 @@ class SciFi2HubManagerApp : public synapse::App {
   // Frame-drop detection on the upstream reader.
   uint64_t last_sequence_number_ = 0;
   bool have_last_sequence_ = false;
+  uint64_t last_source_timestamp_ns_ = 0;
+  uint32_t last_source_sample_rate_hz_ = 0;
   uint64_t receive_batch_count_ = 0;
   uint64_t received_message_count_ = 0;
   uint64_t parsed_message_count_ = 0;
   uint64_t parse_error_count_ = 0;
   uint64_t forwarded_frame_count_ = 0;
+  // Cumulative sequence-gap accounting, surfaced in SourceStats. These count the
+  // same conditions the reader already logs, retained so a client can read them.
+  uint64_t dropped_frame_count_ = 0;   // sum of (observed_seq - expected) over gaps
+  uint64_t nonmonotonic_count_ = 0;    // observed sequence < expected occurrences
   bool have_last_reader_diagnostics_log_ = false;
   std::chrono::steady_clock::time_point last_reader_diagnostics_log_;
+
+  // Exo auxiliary-source drain accounting. The Exo node has no graph edge and is
+  // drained by poll_exo_source() through exo_data_reader_; these counters make
+  // that path observable in the log the way the neural reader already is. An
+  // always-zero forwarded count while the server reports an "Exo N queue
+  // overflow" means the App is not consuming the source socket.
+  uint64_t exo_receive_batch_count_ = 0;      // poll_exo_source() iterations with >=1 message
+  uint64_t exo_received_message_count_ = 0;    // multipart messages seen
+  uint64_t exo_forwarded_frame_count_ = 0;     // frames republished to the exo_angles Tap
+  uint64_t exo_parse_error_count_ = 0;         // malformed BroadbandFrame messages
+  uint64_t exo_publish_error_count_ = 0;       // publish_tap("exo_angles") failures
+  bool have_last_exo_diagnostics_log_ = false;
+  std::chrono::steady_clock::time_point last_exo_diagnostics_log_;
 };
 
 }  // namespace scifi2_hub

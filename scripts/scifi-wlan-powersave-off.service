@@ -1,0 +1,19 @@
+[Unit]
+# Disable wlan0 Wi-Fi power-save at boot for low-jitter host<->SciFi-2 sync.
+# See scripts/scifi-wlan-powersave.sh for the measured rationale.
+Description=Disable wlan0 Wi-Fi power-save (low-jitter sync)
+Documentation=file:/opt/scifi/patch/scifi-wlan-powersave.sh
+Wants=network.target
+# scifi-wifi-connect brings the link up; run after it and after the supplicant
+# so wlan0 exists and is associated when we clear power_save.
+After=network.target scifi-wifi-connect.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/scifi/patch/scifi-wlan-powersave.sh wlan0
+# Keep the unit "active (exited)" so `systemctl status` reflects that the policy
+# is in force. The daemon unit handles reconnect reassertion.
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

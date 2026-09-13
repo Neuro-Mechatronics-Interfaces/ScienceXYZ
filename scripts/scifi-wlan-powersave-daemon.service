@@ -1,0 +1,23 @@
+[Unit]
+# Reassert wlan0 power_save=off on every (re)association. The vendor
+# wpa_supplicant runs without an action script, so we attach our own wpa_cli
+# action daemon; it calls scifi-wlan-powersave.sh with each connect event.
+# This complements the boot oneshot (scifi-wlan-powersave-off.service): the
+# oneshot covers reboot, this covers Wi-Fi drop/reconnect.
+Description=Reassert wlan0 Wi-Fi power-save OFF on reconnect (wpa_cli action daemon)
+Documentation=file:/opt/scifi/patch/scifi-wlan-powersave.sh
+After=network.target scifi-wifi-connect.service
+Wants=network.target
+
+[Service]
+Type=simple
+# -i wlan0            : interface to watch
+# -p /run/wpa_supplicant : control-socket dir (matches `wpa_supplicant -O`)
+# -a <script>         : run the action script on association changes
+# -B is intentionally omitted so systemd supervises it in the foreground.
+ExecStart=/sbin/wpa_cli -i wlan0 -p /run/wpa_supplicant -a /opt/scifi/patch/scifi-wlan-powersave.sh
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

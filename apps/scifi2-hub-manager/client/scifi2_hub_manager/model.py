@@ -123,6 +123,65 @@ class ExoState:
 
 
 @dataclass(frozen=True)
+class FrequencyBand:
+    low_hz: float
+    high_hz: float
+
+
+@dataclass(frozen=True)
+class PipelineConfig:
+    """Echo of the pipeline sizing decided at 'Pipeline ready'.
+
+    All numeric fields are zero and ``frequency_bands`` empty until the device
+    initializes the pipeline from the first source frame (``has_config`` False).
+    An empty ``frequency_bands`` with ``has_config`` True means the legacy
+    ``num_bands``-way split is in effect.
+    """
+
+    has_config: bool = False
+    upstream_channels: int = 0
+    featurized_channels: int = 0
+    decimation_factor: int = 0
+    source_sample_rate_hz: float = 0.0
+    feature_sample_rate_hz: float = 0.0
+    window_ms: float = 0.0
+    stride_ms: float = 0.0
+    window_samples: int = 0
+    frequency_bands: tuple[FrequencyBand, ...] = ()
+    num_bands: int = 0
+
+
+@dataclass(frozen=True)
+class SourceStats:
+    """Live source/frame health; counters are cumulative since App start."""
+
+    connected: bool = False
+    has_last_frame: bool = False
+    last_sequence_number: int = 0
+    last_timestamp_ns: int = 0
+    last_sample_rate_hz: int = 0
+    received_message_count: int = 0
+    parsed_message_count: int = 0
+    parse_error_count: int = 0
+    forwarded_frame_count: int = 0
+    dropped_frame_count: int = 0
+    nonmonotonic_count: int = 0
+
+
+@dataclass(frozen=True)
+class DeviceIdentity:
+    """Runtime identity the App itself holds (node ids + exo firmware).
+
+    Peripheral ids (RHD/Exo) and the Synapse/firmware version are NOT here; they
+    come from ``synapsectl info`` and stay in the info-capture path.
+    """
+
+    broadband_source_node_id: int = 0
+    exo_source_node_id: int | None = None
+    exo_firmware: str = ""
+
+
+@dataclass(frozen=True)
 class AppState:
     protocol_version: int = 1
     state_version: int = 0
@@ -134,6 +193,9 @@ class AppState:
     model: ModelState = ModelState()
     task: TaskState = TaskState()
     exo: ExoState = ExoState()
+    pipeline_config: PipelineConfig = PipelineConfig()
+    source_stats: SourceStats = SourceStats()
+    identity: DeviceIdentity = DeviceIdentity()
     last_error: ErrorState | None = None
 
     @property
@@ -193,8 +255,14 @@ def _frame_from_proto(message) -> TaskFrameBoundary:
 
 def _task_from_proto(message) -> TaskState:
     lifecycle = proto.enum_name(message, "lifecycle")
+    # Only a *configured* task must carry a concrete lifecycle. An unconfigured
+    # task is fully described by configured=false; older device builds leave
+    # lifecycle at the proto default (unspecified) in that case, which is not a
+    # protocol error. Normalize it to "idle" so an idle App yields clean state.
     if lifecycle == "unspecified":
-        raise ProtocolMessageError("task status has an unknown lifecycle")
+        if message.configured:
+            raise ProtocolMessageError("task status has an unknown lifecycle")
+        lifecycle = "idle"
     if message.configured and (not message.definition_id or not message.definition_hash or not message.app_session_id):
         raise ProtocolMessageError("configured task status is missing identity")
     return TaskState(
@@ -244,6 +312,48 @@ def task_transition_from_proto(message) -> TaskTransition:
         proposal_receipt_sequence=message.proposal_receipt_sequence,
         proposal_receipt_time_ns=message.proposal_receipt_time_ns,
         effective_frame=_frame_from_proto(message.effective_frame),
+    )
+
+
+def _pipeline_config_from_proto(message) -> PipelineConfig:
+    return PipelineConfig(
+        has_config=message.has_config,
+        upstream_channels=message.upstream_channels,
+        featurized_channels=message.featurized_channels,
+        decimation_factor=message.decimation_factor,
+        source_sample_rate_hz=message.source_sample_rate_hz,
+        feature_sample_rate_hz=message.feature_sample_rate_hz,
+        window_ms=message.window_ms,
+        stride_ms=message.stride_ms,
+        window_samples=message.window_samples,
+        frequency_bands=tuple(
+            FrequencyBand(low_hz=b.low_hz, high_hz=b.high_hz) for b in message.frequency_bands
+        ),
+        num_bands=message.num_bands,
+    )
+
+
+def _source_stats_from_proto(message) -> SourceStats:
+    return SourceStats(
+        connected=message.connected,
+        has_last_frame=message.has_last_frame,
+        last_sequence_number=message.last_sequence_number,
+        last_timestamp_ns=message.last_timestamp_ns,
+        last_sample_rate_hz=message.last_sample_rate_hz,
+        received_message_count=message.received_message_count,
+        parsed_message_count=message.parsed_message_count,
+        parse_error_count=message.parse_error_count,
+        forwarded_frame_count=message.forwarded_frame_count,
+        dropped_frame_count=message.dropped_frame_count,
+        nonmonotonic_count=message.nonmonotonic_count,
+    )
+
+
+def _identity_from_proto(message) -> DeviceIdentity:
+    return DeviceIdentity(
+        broadband_source_node_id=message.broadband_source_node_id,
+        exo_source_node_id=message.exo_source_node_id if message.has_exo_source_node_id else None,
+        exo_firmware=message.exo_firmware,
     )
 
 
@@ -300,6 +410,18 @@ def state_from_proto(message) -> AppState:
             last_error=message.exo.last_error, watchdog_tripped=message.exo.watchdog_tripped,
             last_reply=message.exo.last_reply, transport=message.exo.transport,
             last_commanded=tuple((proto.enum_name(j, "joint"), j.value) for j in message.exo.last_commanded)),
+        pipeline_config=(
+            _pipeline_config_from_proto(message.pipeline_config)
+            if message.HasField("pipeline_config") else PipelineConfig()
+        ),
+        source_stats=(
+            _source_stats_from_proto(message.source_stats)
+            if message.HasField("source_stats") else SourceStats()
+        ),
+        identity=(
+            _identity_from_proto(message.identity)
+            if message.HasField("identity") else DeviceIdentity()
+        ),
         last_error=_error(message.last_error) if message.HasField("last_error") else None,
     )
 
@@ -398,6 +520,40 @@ def state_to_json(state: AppState) -> dict[str, Any]:
             },
         },
         "exo": {**vars(state.exo), "last_commanded": dict(state.exo.last_commanded)},
+        "pipeline_config": {
+            "has_config": state.pipeline_config.has_config,
+            "upstream_channels": state.pipeline_config.upstream_channels,
+            "featurized_channels": state.pipeline_config.featurized_channels,
+            "decimation_factor": state.pipeline_config.decimation_factor,
+            "source_sample_rate_hz": state.pipeline_config.source_sample_rate_hz,
+            "feature_sample_rate_hz": state.pipeline_config.feature_sample_rate_hz,
+            "window_ms": state.pipeline_config.window_ms,
+            "stride_ms": state.pipeline_config.stride_ms,
+            "window_samples": state.pipeline_config.window_samples,
+            "frequency_bands": [
+                {"low_hz": b.low_hz, "high_hz": b.high_hz}
+                for b in state.pipeline_config.frequency_bands
+            ],
+            "num_bands": state.pipeline_config.num_bands,
+        },
+        "source_stats": {
+            "connected": state.source_stats.connected,
+            "has_last_frame": state.source_stats.has_last_frame,
+            "last_sequence_number": str(state.source_stats.last_sequence_number),
+            "last_timestamp_ns": str(state.source_stats.last_timestamp_ns),
+            "last_sample_rate_hz": state.source_stats.last_sample_rate_hz,
+            "received_message_count": str(state.source_stats.received_message_count),
+            "parsed_message_count": str(state.source_stats.parsed_message_count),
+            "parse_error_count": str(state.source_stats.parse_error_count),
+            "forwarded_frame_count": str(state.source_stats.forwarded_frame_count),
+            "dropped_frame_count": str(state.source_stats.dropped_frame_count),
+            "nonmonotonic_count": str(state.source_stats.nonmonotonic_count),
+        },
+        "identity": {
+            "broadband_source_node_id": state.identity.broadband_source_node_id,
+            "exo_source_node_id": state.identity.exo_source_node_id,
+            "exo_firmware": state.identity.exo_firmware,
+        },
         "last_error": err(state.last_error),
     }
 

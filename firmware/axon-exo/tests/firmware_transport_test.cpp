@@ -13,22 +13,37 @@ std::vector<uint8_t> packet(unsigned type,std::vector<uint32_t> payload) {
   append(bytes,0x20); return bytes;
 }
 unsigned reads=0;
-bool read_angle(void*,uint8_t id,int16_t& value){++reads;value=-123;return id!=12;}
+using Field=axon_exo::AxonUsbPeripheral::Field;
+// Mock reader for the 0.3.0 schema: each motor is sampled once per field
+// (angle,current,torque). Motor 12 fails its angle read; every field is one
+// reader call, so the per-pass bounded-read invariant is still <=1.
+bool read_sample(void*,uint8_t id,Field field,axon_exo::MotorSample& s){
+  ++reads;
+  if(field==Field::kAngle){ s.angle=-123; return id!=12; }
+  if(field==Field::kCurrent){ s.current_mA=int16_t(id*10); return true; }
+  s.torque_Nm=float(id); return true; // kTorque
+}
 void tick(axon_exo::AxonUsbPeripheral& p) {
   ++mock_ms; USB->DEVICE.DeviceEndpoint[2].EPSTATUS.bit.BK1RDY=false;
-  const auto before=reads;p.poll(read_angle,nullptr);check(reads-before<=1);
+  const auto before=reads;p.poll(read_sample,nullptr);check(reads-before<=1);
 }
 int main() {
   axon_exo::AxonUsbPeripheral p;
   auto request=packet(0xF210,{1,42,2,11,12});
   // Byte-fragmented request, then bounded per-motor sampling and chunked TX.
+  // Two motors x three fields = six reader calls; the 8-field-per-motor reply is
+  // 20+16*2=52 payload + 28 framing = 80 bytes, sent in two <=64-byte chunks.
   for(auto b:request){USBDevice.input.push_back(b);tick(p);}
-  for(int i=0;i<10;++i)tick(p);
-  check(reads==2 && USBDevice.output.size()==64);
-  check(word(USBDevice.output,4)==0x300 && word(USBDevice.output,20)==(0xF2110000u|36));
+  for(int i=0;i<12;++i)tick(p);
+  check(reads==6 && USBDevice.output.size()==80);
+  check(word(USBDevice.output,4)==0x300 && word(USBDevice.output,20)==(0xF2120000u|52));
   check(word(USBDevice.output,28)==42 && word(USBDevice.output,40)==2);
+  // Motor 11 (index 0): angle -123 measured, current 110 mA measured.
   check(int16_t(word(USBDevice.output,44))==-123);
-  check(int16_t(word(USBDevice.output,52))==INT16_MIN && word(USBDevice.output,56)>>16==1);
+  check(word(USBDevice.output,48)>>16==0);                       // angle_status ok
+  check(int16_t(word(USBDevice.output,52))==110 && word(USBDevice.output,52)>>16==0);
+  // Motor 12 (index 1) at offset 44+16=60: angle read failed -> unavailable.
+  check(int16_t(word(USBDevice.output,60))==INT16_MIN && word(USBDevice.output,64)>>16==1);
   USBDevice.output.clear();
   // Unknown packet payload may contain magic/enumeration: never execute it.
   const auto embedded=packet(3,{});std::vector<uint32_t> words;
@@ -41,17 +56,20 @@ int main() {
   for(int i=0;i<10;++i)tick(p);
   check(USBDevice.output.size()==32 && word(USBDevice.output,24)==0xF002);
   USBDevice.output.clear();
-  // Duplicate motor IDs cannot start bus reads.
+  // Duplicate motor IDs cannot start bus reads (reads unchanged from the 6 of
+  // the first two-motor request).
   auto duplicate=packet(0xF210,{1,43,2,11,11});
   USBDevice.input.insert(USBDevice.input.end(),duplicate.begin(),duplicate.end());
   for(int i=0;i<10;++i) tick(p);
-  check(reads==2 && USBDevice.output.empty());
+  check(reads==6 && USBDevice.output.empty());
+  // Largest request: 18 motors x 3 fields = 54 reader calls; reply is
+  // 20+16*18=308 payload + 28 framing = 336 bytes.
   std::vector<uint32_t> full{1,44,18};
   for(unsigned id=1;id<=18;++id)full.push_back(id);
   auto largest=packet(0xF210,full);
   USBDevice.input.insert(USBDevice.input.end(),largest.begin(),largest.end());
-  for(int i=0;i<40;++i) tick(p);
-  check(reads==20 && USBDevice.output.size()==192);
+  for(int i=0;i<100;++i) tick(p);
+  check(reads==6+54 && USBDevice.output.size()==336);
   check(word(USBDevice.output,40)==18);
   std::cout<<"Firmware fragmented framing, measured/missing angles, bounded polling and discovery passed\n";
 }

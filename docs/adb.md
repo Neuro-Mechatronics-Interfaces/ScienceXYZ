@@ -638,3 +638,119 @@ python scripts\scifi-server-accept-openrb-vid.py --check .local\scifi-server.pat
 ```
 
 This only operates on the local file you specify; it does not modify the SciFi-2 unless you explicitly deploy that file afterward.
+
+## 17. Wi-Fi power-save OFF for low-jitter sync (persistent) ##
+
+The Qualcomm cnss/wlan radio (`wlan0`) ships with `power_save on`, which parks
+the radio between packets and wakes it on the AP DTIM/beacon schedule. Measured
+on the bench link (host `192.168.100.14` -> SciFi-2 `192.168.100.157`, verified
+2026-09-13, `scripts/measure_link_latency.ps1`):
+
+```text
+power_save on : median 11 ms, mean 27 ms, p99 65 ms, max 125 ms, jitter 23 ms
+power_save off: median  4 ms, mean  5 ms, p99 ~15 ms, max ~30 ms, jitter ~3 ms
+```
+
+~7x lower jitter. Jitter, not mean latency, is the figure of merit for
+synchronization. This does **not** make consumer Wi-Fi a sync-grade clock on its
+own; it makes the link usable and much more deterministic. Clock alignment should
+still ride device-side timestamps + an offset estimator (AGENTS.md), not raw RTT.
+
+The runtime change is one line:
+
+```cmd
+adb shell "iw dev wlan0 set power_save off"
+```
+
+but it does **not** persist: a reboot restores `on`, and a Wi-Fi drop/reconnect
+can reassert it. Persistence needs two systemd units (rootfs is `ext4 rw`,
+`/opt/scifi/` writable, verified 2026-09-13):
+
+```text
+scripts/scifi-wlan-powersave.sh              # applies power_save off (device)
+scripts/scifi-wlan-powersave-off.service     # boot oneshot
+scripts/scifi-wlan-powersave-daemon.service  # wpa_cli action daemon (reconnect)
+```
+
+The vendor `wpa_supplicant` runs without an action script
+(`/sbin/wpa_supplicant -u -s -O /run/wpa_supplicant`), so the daemon unit attaches
+its own `wpa_cli -a` action daemon on the same control socket to re-apply the
+setting on every association, without modifying the vendor invocation. The
+oneshot covers reboot; the daemon covers reconnect.
+
+### Install (operator, over adb) ###
+
+Connected and rooted (`adb root && adb wait-for-device`). Push the script into
+the same `/opt/scifi/patch/` directory the OpenRB patch uses, and both units into
+systemd:
+
+```cmd
+adb shell "mkdir -p /opt/scifi/patch"
+adb push scripts\scifi-wlan-powersave.sh /opt/scifi/patch/scifi-wlan-powersave.sh && adb push scripts\scifi-wlan-powersave-off.service /etc/systemd/system/scifi-wlan-powersave-off.service && adb push scripts\scifi-wlan-powersave-daemon.service /etc/systemd/system/scifi-wlan-powersave-daemon.service
+```
+
+Set modes. `adb push` creates files `0666`; the script must be executable or the
+units fail:
+
+```cmd
+adb shell "chmod 0755 /opt/scifi/patch/scifi-wlan-powersave.sh; chmod 0644 /etc/systemd/system/scifi-wlan-powersave-off.service /etc/systemd/system/scifi-wlan-powersave-daemon.service"
+```
+
+Enable and start both units now (applies immediately and on every future boot):
+
+```cmd
+adb shell "systemctl daemon-reload; systemctl enable --now scifi-wlan-powersave-off.service scifi-wlan-powersave-daemon.service"
+```
+
+Confirm the runtime state and both units:
+
+```cmd
+adb shell "iw dev wlan0 get power_save; echo === UNITS ===; systemctl is-active scifi-wlan-powersave-off.service scifi-wlan-powersave-daemon.service"
+```
+
+Expected: `Power save: off`, both units `active`.
+
+### Verify it survives a reboot ###
+
+```cmd
+adb reboot
+```
+
+Reconnect after boot:
+
+```cmd
+adb connect 192.168.100.157:5555
+```
+
+then confirm power-save is off again automatically:
+
+```cmd
+adb shell "iw dev wlan0 get power_save; systemctl is-active scifi-wlan-powersave-off.service scifi-wlan-powersave-daemon.service"
+```
+
+Also re-run the host-side characterization to confirm the low-jitter numbers
+returned after the power cycle:
+
+```powershell
+scripts\measure_link_latency.ps1 -Label after-reboot -Count 200 -DelayMs 20
+```
+
+To confirm the reconnect path specifically, force a re-association and re-check:
+
+```cmd
+adb shell "wpa_cli -i wlan0 -p /run/wpa_supplicant reassociate; sleep 5; iw dev wlan0 get power_save"
+```
+
+Expected: still `Power save: off` after the reconnect (the daemon reasserted it).
+
+### Uninstall (restore default power-save behavior) ###
+
+```cmd
+adb shell "systemctl disable --now scifi-wlan-powersave-off.service scifi-wlan-powersave-daemon.service; iw dev wlan0 set power_save on"
+```
+
+Optionally remove the artifacts:
+
+```cmd
+adb shell "rm -f /opt/scifi/patch/scifi-wlan-powersave.sh /etc/systemd/system/scifi-wlan-powersave-off.service /etc/systemd/system/scifi-wlan-powersave-daemon.service; systemctl daemon-reload"
+```

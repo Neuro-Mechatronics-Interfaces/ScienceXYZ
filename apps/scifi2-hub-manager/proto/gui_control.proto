@@ -244,6 +244,61 @@ message PipelineStatus {
   SourceMode source_mode = 2;
 }
 
+// One contiguous [low, high) frequency band of the MPF featurizer, echoed so a
+// client can see the exact band edges the pipeline was configured with.
+message FrequencyBand {
+  double low_hz = 1;
+  double high_hz = 2;
+}
+
+// Echo of the pipeline sizing that is otherwise only visible in the device log
+// at "Pipeline ready". All fields are zero until the pipeline initializes from
+// the first source frame (has_config=false). Read-only; purely informational.
+message PipelineConfig {
+  bool has_config = 1;                     // false until initialize_pipeline() runs
+  uint32 upstream_channels = 2;            // channels in the raw source frame
+  uint32 featurized_channels = 3;          // channels after the configured subset/map
+  uint32 decimation_factor = 4;            // raw:feature sample decimation
+  double source_sample_rate_hz = 5;        // configured raw source rate
+  double feature_sample_rate_hz = 6;       // decimated (feature) rate
+  double window_ms = 7;
+  double stride_ms = 8;
+  uint32 window_samples = 9;               // window length in feature samples
+  // Explicitly-configured half-open bands. Empty means the legacy num_bands-way
+  // split over the one-sided spectrum is in effect (see num_bands below); a
+  // client reconstructs those edges from num_bands and feature_sample_rate_hz.
+  repeated FrequencyBand frequency_bands = 10;
+  uint32 num_bands = 11;                    // legacy full-Nyquist band count
+}
+
+// Live source/frame health, so an idle-vs-flowing device is visible from the
+// snapshot without opening a tap. Counters are cumulative since App start.
+message SourceStats {
+  bool connected = 1;                      // a valid frame has arrived recently
+  bool has_last_frame = 2;                 // false before the first frame
+  uint64 last_sequence_number = 3;         // sequence of the most recent frame
+  uint64 last_timestamp_ns = 4;            // source timestamp of that frame
+  uint32 last_sample_rate_hz = 5;          // sample_rate_hz carried by that frame
+  uint64 received_message_count = 6;       // raw messages pulled from the reader
+  uint64 parsed_message_count = 7;         // messages that parsed as BroadbandFrame
+  uint64 parse_error_count = 8;            // messages that failed to parse
+  uint64 forwarded_frame_count = 9;        // decimated frames emitted downstream
+  uint64 dropped_frame_count = 10;         // frames implied missing by seq gaps
+  uint64 nonmonotonic_count = 11;          // observed out-of-order/rewound seqs
+}
+
+// Runtime identity the App itself holds. This is deliberately limited to what
+// the App knows at runtime -- source node ids and (when the exo link is up) the
+// exo firmware string. Peripheral ids (RHD/Exo) and the Synapse/firmware version
+// are NOT here: they come from `synapsectl info` and stay in the info-capture
+// path, so the two are never conflated.
+message DeviceIdentity {
+  uint32 broadband_source_node_id = 1;     // the neural kBroadbandSource node id
+  bool has_exo_source_node_id = 2;
+  uint32 exo_source_node_id = 3;           // optional measured-angle source node id
+  string exo_firmware = 4;                 // firmware string reported by the exo, if any
+}
+
 message ActiveTarget {
   uint32 collection_id = 1;
   uint32 label = 2;
@@ -394,4 +449,7 @@ message StateSnapshot {
   Error last_error = 8;
   TaskStatus task = 9;
   ExoStatus exo = 10;
+  PipelineConfig pipeline_config = 11;
+  SourceStats source_stats = 12;
+  DeviceIdentity identity = 13;
 }
