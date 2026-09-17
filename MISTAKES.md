@@ -1,5 +1,41 @@
 # Mistakes
 
+### 2026-09-17 - Two real bugs in the hls4ml Axon wrapper caught only by cocotb (SV width-cast precedence; back-to-back result overwrite)
+
+While bringing up `host/hls4ml_radiant/gateware/hls4ml_axon_peripheral.sv` (the
+Science AXI-stream wrapper around an hls4ml core), the wrapper compiled cleanly
+and a single-inference direct sim initially *looked* fine, but the cocotb suite
+exposed two defects that a "the .sv exists / one vector matches" check would have
+missed:
+
+1. **SystemVerilog width-cast operator precedence.** The output encoder wrote
+   `ext = OUT_WORDS*32'(val);` intending "sign-extend `val` to `OUT_WORDS*32`
+   bits". SV parses `32'(val)` as the cast and then multiplies by `OUT_WORDS`, so
+   this is `OUT_WORDS * val` = **2x the value** for a 2-word output. Every output
+   came back exactly doubled. Fix: name the width in a localparam and cast with
+   the parenthesized width -- `localparam int OUT_EXT_W = OUT_WORDS*32;` then
+   `ext = OUT_EXT_W'(val);`. Lesson: never write `N*W'(x)`; a width cast's width
+   must be a single token or a parenthesized constant.
+
+2. **Back-to-back frames overwrote the pending result.** `rx_axis.tready` was
+   hard-tied to 1, so a second INFER_REQUEST streamed in and re-pulsed the core
+   while the first result was still latched/being sent; the first result was
+   lost. Adding a `busy` gate on `req_valid` was **still** wrong because
+   `req_valid` is registered one cycle after the last input word, leaving a
+   two-cycle window where `tready` was high and a new header slipped in. Fix:
+   assert `busy` on the *last input beat* itself (`rx_state==RX_PAYLOAD &&
+   rx_beat && in_idx==N_IN-1`), one cycle earlier, and clear it when the result
+   frame's last beat leaves. Lesson: a single-inference-at-a-time core must
+   backpressure the input the instant the request completes, not after a
+   registered pulse; verify with a genuine back-to-back cocotb vector, not one
+   frame at a time.
+
+A third, quieter trap: the deterministic core *stub* was correct in isolation, so
+early debugging wrongly suspected it. Isolating the stub (drive `x_in_bits`
+directly) vs. the wrapper (drive via AXI frames) localized the fault to the
+wrapper quickly -- do that split first when a wrapped-core sim disagrees with the
+software reference.
+
 ### 2026-09-13 - Empty exo_angles Tap blamed on the App/config; the real cause was a server-side RHD read storm + Exo queue overflow
 
 `exo_angles_probe.py` raised "no Exo angle frames received" and this was

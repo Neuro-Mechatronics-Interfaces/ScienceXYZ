@@ -1,0 +1,14 @@
+# Generated simulation / build artifacts (never commit)
+tests/sim_build/
+**/__pycache__/
+*.vvp
+*.vcd
+results.xml
+# Generated hls4ml projects / Radiant build trees
+prj/
+*_prj/
+impl_1/
+*.rdf
+radiant_build.log
+*.bit
+*.bin
