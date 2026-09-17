@@ -22,3 +22,6 @@
 [submodule "third_party/exo"]
 	path = third_party/exo
 	url = https://github.com/Neuro-Mechatronics-Interfaces/NML_Hand_Exo.git
+[submodule "third_party/hls4ml"]
+	path = third_party/hls4ml
+	url = https://github.com/Neuro-Mechatronics-Interfaces/hls4ml
