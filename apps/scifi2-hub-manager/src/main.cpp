@@ -20,6 +20,12 @@
 
 namespace scifi2_hub {
 
+// scifi-server binds one IPC publisher per configured BroadbandSource node,
+// named "/tmp/publisher_<node_id>". A ZMQDataReader connected to this endpoint
+// receives that source's BroadbandFrames directly, with no graph edge and no tap
+// discovery. See resolve_source_tap_endpoint() and MISTAKES.md 2026-09-13/14.
+static constexpr char kSourcePublisherEndpointPrefix[] = "ipc:///tmp/publisher_";
+
 // Upstream broadband source node id (see config JSON).
 static constexpr uint32_t kBroadbandNodeId = 1;
 
@@ -218,16 +224,32 @@ bool SciFi2HubManagerApp::setup() {
   // Producer taps.
   if (cfg_.exo_source_node_id) {
     const auto source = synapse::get_node_by_id(device_configuration_, cfg_.exo_source_node_id);
-    // Synapse 2.4.1 rejects multiple incoming graph edges. Subscribe by node
-    // ID through the SDK instead; this auxiliary source has no edge to the App.
+    // Synapse 2.4.1 rejects a second incoming graph edge, and the App SDK asserts
+    // exactly one application node, so the Exo source cannot feed the App through
+    // the graph. Instead the App reads the source node's OWN producer tap
+    // ("broadband_source_<node_id>", which the server publishes for every
+    // configured BroadbandSource) directly by endpoint. The setup_reader(node_id)
+    // path does NOT work here: it resolves only graph-connected inputs, so for an
+    // edgeless node it returns a reader subscribed to nothing (proven live:
+    // messages=0 while the driver's server-side queue overflowed). See
+    // docs/t19-synapse-multisource-capability-audit.md and MISTAKES.md 2026-09-13.
     if (!source || !source->has_broadband_source() || cfg_.exo_source_node_id==kBroadbandNodeId) {
       spdlog::error("exo_source_node_id must reference a separate configured BroadbandSource");
       return false;
     }
-    auto neural_reader = data_reader_;
-    if (!setup_reader(cfg_.exo_source_node_id)) return false;
-    exo_data_reader_ = data_reader_;
-    data_reader_ = std::move(neural_reader);
+    // Connect the reader directly to the source node's server-bound IPC
+    // publisher (/tmp/publisher_<node_id>). ZMQ connect is lazy, so this succeeds
+    // even if the server has not bound the socket yet; frames start flowing once
+    // both sides are up. No graph edge, no tap discovery.
+    exo_data_reader_ = std::make_shared<synapse::ZMQDataReader>(zmq_context_);
+    const std::string endpoint = resolve_source_tap_endpoint(cfg_.exo_source_node_id);
+    if (!exo_data_reader_->connect(endpoint)) {
+      spdlog::error("Exo source: failed to connect reader to {}", endpoint);
+      return false;
+    }
+    exo_source_connected_ = true;
+    spdlog::info("Exo source reader connected to {} (broadband_source_{})",
+                 endpoint, cfg_.exo_source_node_id);
     if (!create_tap<synapse::BroadbandFrame>("exo_angles")) return false;
   }
 
@@ -1448,11 +1470,29 @@ void SciFi2HubManagerApp::fill_exo_status(stateful_decode_and_sync::v1::ExoStatu
   }
 }
 
+std::string SciFi2HubManagerApp::resolve_source_tap_endpoint(uint32_t node_id) {
+  // The server (scifi-server) binds one IPC publisher socket per configured
+  // BroadbandSource node, named deterministically "/tmp/publisher_<node_id>"
+  // (verified live: `ss -xlp` shows /tmp/publisher_1 and /tmp/publisher_3 owned
+  // by scifi-server for the two configured sources). So the Exo source node's
+  // endpoint is derivable from its node id with no discovery -- no tap-registry
+  // query and no gRPC. The App's own local tap registry
+  // (ipc:///tmp/tap_registry) cannot be used here: it is bound by THIS App's
+  // TapManager and broadcasts only the App's own taps, never a source-owned tap
+  // (see MISTAKES.md 2026-09-13). Connecting a ZMQDataReader to this endpoint
+  // succeeds even before the server has bound it (ZMQ connect is lazy); frames
+  // simply start arriving once both sides are up.
+  return kSourcePublisherEndpointPrefix + std::to_string(node_id);
+}
+
 // ---------------------------------------------------------------------------
 // Main loop
 // ---------------------------------------------------------------------------
 void SciFi2HubManagerApp::poll_exo_source() {
   if (!exo_data_reader_) return;
+  // The reader was connected in setup() to /tmp/publisher_<node_id> (ZMQ connect
+  // is lazy, so it holds even if the server bound the socket after us). Just
+  // drain it here.
   // One multipart batch per iteration; the SDK reader is nonblocking.
   // Keep the original payload/timestamps/sequence, including invalid samples.
   // This stream never enters the neural decimator or classifier.

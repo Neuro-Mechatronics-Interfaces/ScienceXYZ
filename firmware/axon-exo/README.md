@@ -24,15 +24,21 @@ motion/raw gates remain default-off; the tracked config enables them only for
 supervised bench operation. Firmware's existing startup behavior still applies.
 
 `rhd2132_with_exo.json` connects only neural source node 1 to App node 2.
-Synapse 2.4.1 rejects a second incoming graph edge. Exo source node 3 remains
-configured without an outgoing graph edge; `exo_source_node_id: 3` selects an
-auxiliary SDK subscription by node ID, outside graph routing. Its frames
-are forwarded unchanged to `exo_angles`. They never enter neural decimation,
-MPF features or the classifier. The SDK supports this reader construction;
-server startup/publication of the unconnected source is pending operator
-verification. Rebuild/redeploy the App after this compatibility correction.
-CDC remains selected by
-`exo_usb_control_interface: 1`, with optional `exo_usb_serial` disambiguation.
+Synapse 2.4.1 rejects a second incoming graph edge, and the App SDK asserts
+exactly one application node, so the Exo source cannot feed the App through the
+graph. Exo source node 3 stays configured without an outgoing edge; the App reads
+its telemetry from the source node's **own** producer tap
+(`broadband_source_<node_id>`), which the server publishes for every configured
+BroadbandSource. The App resolves that tap's endpoint from the device tap
+registry (a PUB at `ipc:///tmp/tap_registry` that broadcasts the tap list ~1/s),
+then subscribes a dedicated reader; `exo_source_node_id: 3` selects which source.
+Its frames are forwarded unchanged to the App's `exo_angles` tap and never enter
+neural decimation, MPF features or the classifier. (The earlier
+`setup_reader(node_id)` approach does not work for an edgeless node — it resolves
+only graph-connected inputs and yields a reader subscribed to nothing; see
+`MISTAKES.md` 2026-09-13.) Rebuild/redeploy the App after this change. CDC remains
+selected by `exo_usb_control_interface: 1`, with optional `exo_usb_serial`
+disambiguation.
 
 Hardware dispatch type **0xF002** is distinct from the runtime peripheral ID.
 The operator's 2026-09-11 capture reported RHD ID **200**, Exo ID **300** and App
@@ -55,9 +61,9 @@ rates are integer 1..20 Hz, with 1..18 distinct motors. This is the driver
 | 0 | Signed absolute encoder angle in **0.1 degree**; -32768 means unavailable |
 | 1 | Low 16 bits of source sample age in milliseconds (unsigned bit pattern) |
 | 2 | High 16 bits of source sample age in milliseconds (unsigned bit pattern) |
-| 3 | Angle status: 0 measured, 1 unavailable/read error/out of representable range |
+| 3 | Angle status: 0 measured, 1 unavailable/read error/out of range/**not controlled in this mode** |
 | 4 | `PRESENT_CURRENT` in **milliamps** (signed int16); 0 when unavailable |
-| 5 | Current status: 0 measured, 1 unavailable/read error |
+| 5 | Current status: 0 measured, 1 unavailable/read error/**not controlled in this mode** |
 | 6 | Low 16 bits of derived torque as little-endian **float32 N·m** |
 | 7 | High 16 bits of that float32; the pair is `0xFFFFFFFF` (NaN) when invalid |
 
@@ -66,6 +72,28 @@ Reconstruct torque as a float from fields 6 (low) and 7 (high):
 Torque is derived on the device from the same current sample
 (`N·m = mA × 0.00115`, the XC330-T288 constant); it issues no extra bus read, so
 its validity follows field 5.
+
+### Field validity depends on the active control mode
+
+The angle and current registers physically read in every Dynamixel operating
+mode, but a value is only a **controlled/commanded** quantity in a mode that
+drives it. The firmware stamps the status fields accordingly (symmetric), so a
+consumer never mistakes an uncontrolled-but-readable register for a measurement:
+
+| Control mode | Angle (field 3) | Current/torque (fields 5–7) |
+|---|---|---|
+| `POSITION` | measured | **unavailable** |
+| `CURRENT_POSITION` | measured | measured |
+| `VELOCITY` | **unavailable** | **unavailable** |
+| `CURRENT` | **unavailable** | measured |
+| `DISABLED`/unknown | **unavailable** | **unavailable** |
+
+The stamping is keyed off the firmware's single tracked control mode
+(`motorControlMode_`), which every motor shares. It is decided at the source (the
+OpenRB firmware), so the decoder/probe and the host need no mode logic — they
+already honor the per-field status bits. The example so far runs
+`CURRENT_POSITION` (all fields valid), which is why current/torque have been
+observed alongside angle.
 
 These are motor encoder positions and motor currents, **not anatomical joint
 angles or the six gesture percentages**. Multiple turns are retained up to the

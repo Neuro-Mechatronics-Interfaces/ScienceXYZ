@@ -69,7 +69,14 @@ class SciFi2HubManagerApp : public synapse::App {
  private:
   enum class SourceMode : int { kSampling = 0, kSynthetic = 1 };
   std::shared_ptr<synapse::ZMQDataReader> exo_data_reader_;
+  // True once exo_data_reader_ has connected to the source publisher (in setup()).
+  bool exo_source_connected_ = false;
   void poll_exo_source();
+  // The IPC endpoint of a source node's server-bound broadband publisher
+  // ("ipc:///tmp/publisher_<node_id>"), so an edgeless auxiliary source can be
+  // read without a graph edge or tap discovery. See the .cpp for why the App's
+  // own tap registry cannot be used and MISTAKES.md 2026-09-13/14.
+  std::string resolve_source_tap_endpoint(uint32_t node_id);
   // Periodic Exo-drain diagnostics (>=1/s, including empty batches). See the
   // exo_*_count_ members below and the neural maybe_log_reader_diagnostics().
   void maybe_log_exo_diagnostics(std::size_t batch_size, std::size_t forwarded,

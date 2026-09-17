@@ -79,6 +79,244 @@ device state -- its timestamps can lag the server log by hours; a log window
 that keeps collapsing to milliseconds is an ACTIVE error storm, not a quiet
 device, and repeating the capture at the same width will keep collapsing.
 
+### 2026-09-13 - RESOLVED mechanism: read an edgeless source in-App via the tap registry PUB (no gRPC, no graph edge)
+
+Confirmed the supported way for the App to consume the edgeless Exo source
+node 3 in-process, using the SDK's own public API + a Ghidra pass on
+libsynapse-app-sdk.so.0.6.3 (extracted from the scifi2-hub-manager builder image
+to .local/app-sdk-lib/; headers to .local/app-sdk-include/). Findings from the
+public headers (.local/app-sdk-include/synapse-app-sdk/): App exposes a protected
+`ZMQDataReader` that is publicly constructible from a zmq::context_t and has
+`connect(endpoint_string)` + `receive_multipart()` -- i.e. it can bind to ANY
+endpoint, not only a graph input. The gap was resolving broadband_source_<id>'s
+dynamic endpoint from inside the App. `setup_reader(node_id)` (in the .so, resolves
+via graph inputs -- why node 3 failed) and the App has NO gRPC (only cppzmq +
+protobuf + the SDK). Ghidra decompile of synapse::TapManager settled the registry
+protocol: the ctor does `zmq_socket(ctx, 1)` (1 = ZMQ_PUB) and `zmq_bind` to
+`ipc:///tmp/tap_registry` (kDefaultTapZMQIPC), then run_tap_thread() builds a
+`ListTapsResponse` from its producer+consumer tap maps and `zmq_msg_send`s it
+UNCONDITIONALLY every ~1s with NO recv first. So the registry is a PUB that
+BROADCASTS the full tap directory once per second -- there is NO request/reply
+envelope to reverse. Consumer recipe (all public/vendored): open ZMQ_SUB, set
+subscribe "", connect("ipc:///tmp/tap_registry"), recv one msg, parse as
+synapse::ListTapsResponse (vendored api/tap.proto), find TapConnection.name ==
+"broadband_source_<exo_source_node_id>", take .endpoint(); then
+ZMQDataReader(zmq_context_).connect(that endpoint) and drain in poll_exo_source().
+This replaces the dead setup_reader(3)/data_reader_-swap. No gRPC dependency, no
+2nd incoming edge (2.4.1 rejects), no 2nd App node (SDK asserts exactly one).
+Candidate rule: extract SDK headers (dpkg -L / docker cp from the builder image)
+before assuming a closed API; decompile only the one private behavior headers
+don't state (here: the registry is PUB-broadcast, not REQ/REP).
+
+**Implemented 2026-09-13** (App code; ARM64 rebuild + redeploy pending). main.cpp
+setup(): the exo path now constructs its own `synapse::ZMQDataReader(zmq_context_)`
+and connects it to the endpoint returned by new
+`resolve_source_tap_endpoint(node_id, timeout_ms)`, which SUBs to
+`ipc:///tmp/tap_registry`, reads one broadcast `ListTapsResponse`, and returns the
+`broadband_source_<node_id>` tap's endpoint. poll_exo_source() retries the connect
+lazily (rate-limited to 1/s) if the tap was not yet registered at setup. The old
+setup_reader(3)/data_reader_-swap is gone; the neural setup_reader(1) is
+untouched. The resolver was host-syntax-checked against real cppzmq + the
+generated tap.pb (compiles+links); ZMQDataReader/zmq_context_ are used per the
+extracted SDK headers.
+
+**First redeploy exposed two bugs (2026-09-14), both fixed.** Live `journalctl`
+after rebuild/redeploy: the new App WAS running (my warning
+"Exo source tap (broadband_source_3) not resolvable at setup; will retry" appeared,
+that string is unique to this change), server still logged `Exo 1 queue overflow`,
+and `grep -c 'Exo receive diagnostics'` returned 0. Two causes: (1) the retry used
+a 200 ms blocking SUB recv, but the registry PUB broadcasts only ~once per second,
+so nearly every poll timed out before a broadcast -- the tap WAS published, the
+window just kept missing the 1 Hz beat. Naively bumping the timeout to >1 s would
+have introduced (1b): poll_exo_source() shares the thread with neural
+read_frames() (main.cpp while(node_running_): drain_exo_result; poll_exo_source;
+... read_frames), so a >1 s blocking resolve every retry stalls neural acquisition.
+(2) On a failed retry poll_exo_source returned BEFORE maybe_log_exo_diagnostics(),
+so the once/sec counter never emitted while disconnected -- hence 0 diagnostics
+lines, making the stuck state look like "no new App". Fix: replaced the blocking
+short-timeout resolve with a PERSISTENT registry SUB drained NON-BLOCKING
+(recv_flags::dontwait) each pass -- opened once, returns "" cheaply until a
+broadcast carrying the tap arrives, never blocks the loop. setup() no longer
+attempts a resolve (the SUB has no snapshot the instant it opens). A still-waiting
+warning is rate-limited to 1/s. Candidate rule: when polling a periodic PUB, the
+receive strategy must span the publish period without blocking a shared loop --
+use a persistent non-blocking SUB, not a short blocking recv (misses the beat) nor
+a long blocking one (stalls co-scheduled work); and never early-return past a
+health counter, or a stuck state reads as absent instrumentation. Re-verify after
+the next redeploy: expect "Exo source reader connected to broadband_source_3 at
+..." then messages>0/forwarded>0 and the server overflow to stop.
+
+**DEAD END confirmed (2026-09-14): the local tap registry cannot discover
+source-node taps from inside the App.** After the retry fix, the App (PID 18207)
+logged "broadband_source_3 not yet in the tap registry; waiting" indefinitely,
+while `synapsectl taps list` showed broadband_source_3 present and streaming
+(tcp://0.0.0.0:43581) and node 3 configured/App Running. Root cause proven two
+ways: (1) the Ghidra decompile showed TapManager::run_tap_thread builds its PUB
+ListTapsResponse from ITS OWN two tap maps (the taps that TapManager instance
+created), and (2) `ss -xlp` shows /tmp/tap_registry is BOUND BY THE APP ITSELF
+(users: scifi2-hub-manager pid 18207). ZMQ ipc allows a single binder, so the
+App's resolve-SUB connects to the App's OWN TapManager PUB and only ever sees the
+App's own taps (exo_angles, broadband_out, state, ...), never a source-owned tap
+(broadband_source_1/3). The local registry is per-App-instance, not a device-wide
+directory. So the registry-SUB path (however correctly polled) fundamentally
+cannot reach broadband_source_3. The ONLY App-reachable device-wide tap directory
+is the gRPC Query{kListTaps} RPC (query.proto) that `synapsectl taps list` uses;
+the App SDK exposes no query helper, so the App must open its own gRPC channel to
+the local device (127.0.0.1:647) and call it. Pivoting the resolver to that.
+Candidate rule: verify a discovery endpoint's OWNERSHIP/scope (ss -xlp on the ipc
+socket) before building on it -- a same-named ipc registry can be per-process, not
+a shared bus; the decompile said "its own maps" and the socket ownership confirmed
+it.
+
+**RESOLVED (2026-09-14) -- no gRPC needed: the source publisher endpoint is
+deterministic.** `find /tmp /run -type s` on the device showed `/tmp/publisher_1`
+and `/tmp/publisher_3`, and `ss -xlp` confirmed BOTH are bound by **scifi-server**
+(pid 1260) -- one IPC publisher per configured BroadbandSource node, named
+`/tmp/publisher_<node_id>`. So the source node's endpoint is derivable from its id
+with NO discovery: the App connects a ZMQDataReader straight to
+`ipc:///tmp/publisher_<exo_source_node_id>` (ZMQ connect is lazy, so ordering vs
+the server binding does not matter). This is strictly better than the gRPC
+Query{kListTaps} path that was about to be taken (gRPC is not even in the builder
+image -- ldconfig/find/ldd all empty -- so that would have meant vendoring the
+whole gRPC stack for one query). resolve_source_tap_endpoint() collapsed to
+returning the prefixed id; the registry SUB, its members, the retry loop, tap.pb
+and zmq.hpp includes were all removed; setup() connects once and poll_exo_source()
+just drains. Candidate rule: when discovery looks expensive, check for a
+deterministic server-bound endpoint (ls the ipc sockets) before adding a heavy
+client dependency -- the name may already encode what you were trying to discover.
+Re-verify after redeploy: "Exo source reader connected to ipc:///tmp/publisher_3"
+then messages>0/forwarded>0 and the server overflow stops.
+
+**Post-redeploy result (2026-09-14): (B) code is CORRECT; messages=0 is caused by
+the RHD ephys read STORM starving the server, not by the App.** After deploy the
+App logged "Exo source reader connected to ipc:///tmp/publisher_3
+(broadband_source_3)" and the diagnostics counter emitted every 1s, but with
+messages=0. Extended diagnosis proved the App reader is correct: (a) Ghidra decompile
+of the SDK's own App::setup_reader shows it builds EXACTLY "ipc:///tmp/publisher_"
++ node_id and calls ZMQDataReader::connect -- byte-identical to the new App code;
+(b) ZMQDataReader::connect sets ZMQ_SUBSCRIBE "" (opt 6) internally, so the reader
+IS subscribed; (c) receive_multipart is a plain DONTWAIT drain, same call the
+working neural reader uses on publisher_1. So endpoint, subscription, and drain are
+all correct. Root cause found in the SERVER log: `journalctl -u scifi-server.service
+--since -2min` = 62,452 `Ephys reader: Failed to read data from peripheral` (~500/s,
+the RHD/peripheral-200 read storm) vs only 33 `Exo 1 queue overflow` in the same 2
+min. The single-threaded server loop is saturated spinning on RHD read failures, so
+it cannot drain the Exo driver's 128-frame queue to publish onto /tmp/publisher_3 --
+hence the overflow and hence messages=0 at a correctly-attached subscriber. This is
+the SAME RHD fault seen at the very start of the session (2026-09-13
+exo-start-fail.log) -- the Axon Omnetics adapter (physical RHD2132, USB-C Port 2)
+read failure, which has now recurred twice. It is a hardware/device condition, not
+any code from this session. Fix: reseat/power-cycle the Axon Omnetics adapter,
+confirm the ephys storm clears (a 30s server-log window should be quiet, not tens of
+thousands of lines), THEN re-check Exo diagnostics -- with the server unstarved it
+should drain publisher_3 and messages/forwarded should climb. Candidate rule: a
+correctly-connected consumer reading 0 while the producer's server-side queue
+overflows points UPSTREAM (producer/server not draining-to-publish), not at the
+consumer; check the server for an unrelated error storm saturating its loop before
+suspecting the new reader. Note: `ss -xp` unix-peer attribution showed only
+scifi-server fds on BOTH publisher_1 and publisher_3 even though publisher_1
+delivers -- unix-domain peer attribution is not reliable evidence of a SUB
+attachment; do not use it to judge whether a reader is connected.
+
+**TRUE ROOT CAUSE FOUND (2026-09-14): an EDGELESS kBroadbandSource never streams
+-- the server binds its tap/publisher but never activates the republish flow.**
+The server startup log is decisive. For BOTH sources it logs "TapProxy created
+for broadband_source_N ... TapProxy bound to tcp://... for broadband_source_N
+(republishing: ipc:///tmp/publisher_N)", but then logs "Subscribing to:
+ipc:///tmp/publisher_1" ONLY -- there is NO "Subscribing to:
+ipc:///tmp/publisher_3", on every start. So the server creates and binds the
+source_3 TapProxy (which is why broadband_source_3 appears in `taps list` and
+/tmp/publisher_3 exists) but NEVER subscribes/activates its data flow. source_1
+is activated because it is graph-connected (edge 1->2 to the App); source_3 is
+EDGELESS, so the server treats it as having no consumer and never starts its
+republish pipeline. Confirmed with a quiet server (no ephys storm, no telemetry
+timeout): a fresh independent SUB on /tmp/publisher_3 gets 0 messages in 4s while
+/tmp/publisher_1 gets ~80k in 4s. The `Exo 1 queue overflow` is the driver
+enqueuing OpenRB telemetry that the inactive source_3 pipeline never drains/
+publishes. This OVERTURNS the T-65/H-104 assumption that a configured edgeless
+source publishes and can just be read: it does NOT stream at all without a
+downstream graph consumer. Consequence for the whole session's approach: every
+in-App read path (setup_reader, registry, direct /tmp/publisher_3) was doomed not
+because the read was wrong but because node 3 produces no stream to read. The
+App-side (B) code is correct (proven vs. the SDK's own setup_reader) but cannot
+succeed while node 3 is edgeless. To make node 3 actually stream, it needs a
+downstream consumer the server accepts that is NOT a 2nd incoming edge to the App
+(rejected) and NOT a 2nd app node (rejected) -- candidates: a kDiskWriter or
+another sink node consuming source 3, which would trigger the server's
+"Subscribing to: publisher_3" activation. Whether the App can then ALSO read the
+now-active publisher_3 is the next thing to test. Candidate rule: for this
+server, a source only streams when the graph gives it a consumer; "tap advertised
++ socket bound" is NOT "streaming". Look for the server's per-source "Subscribing
+to:" activation line as the real proof a source is live.
+
+### 2026-09-13 - Two-App-instance graph path is BLOCKED: SDK asserts exactly one application node per device config
+
+To let the App graph-consume Exo node 3 (a 2nd incoming edge to one App node is
+hard-rejected by Synapse 2.4.1: "Node 2 already has an incoming connection",
+confirmed again by starting rhd2132_with_exo_dual_edge.json), the next candidate
+was two `kApplication` nodes each with one incoming edge (1->2 neural, 3->4
+exo), both backed by the same deployed app name. Tested with a throwaway
+`rhd2132_two_apps_probe.json`. Result: the SERVER ACCEPTED the config (both app
+nodes 2 and 4 appear in `info`; both broadband source taps bind:
+broadband_source_1, broadband_source_3), but the APP BINARY refused at startup,
+both processes dying identically: "Expected exactly one application node, got 2
+/ Did you forget to add the application node... / Failed to get app config /
+Failed to setup Synapse application" (systemd exit 1). So the blocker is NOT a
+graph/edge rule and NOT a tap-name collision (T-19's open question) -- it is a
+hard assumption inside the deployed App/SDK base class: it locates "the" single
+application node in the device configuration and asserts exactly one. This also
+explains why kBroadbandNodeId can be a compile-time constant and why there is no
+per-instance node addressing: the SDK identifies its own node as the sole app
+node, not by an id the App passes. Consequence: running two instances of this
+app package in one graph is closed for this SDK as built; it would require a
+second, differently-named deployed app package (two app names, two .deb
+packages), not just a config/param change. Candidate rule: before designing
+around "N app nodes", check the App SDK's own node-lookup assumption -- a config
+the server accepts can still be refused by the App's setup(). Recorded to close
+the two-instance hypothesis; the viable remaining graph-free path is the App (or
+host) reading the source node's own broadband_source_<id> tap directly.
+
+### 2026-09-13 - SETTLED: App never consumes edgeless Exo node 3 (aux setup_reader(3) subscribes to nothing the driver publishes)
+
+The instrumented App (268 `Exo receive diagnostics` lines in the journal, so
+the poll_exo_source() counter IS deployed) settles the empty exo_angles Tap
+conclusively. Read over adb (`journalctl -u scifi2-hub-manager.service`), the
+App's own Exo counter is flat zero across every sample: `batch_size=0
+forwarded_frames=0 parse_errors=0 totals(batches=0 messages=0 forwarded=0
+parse_errors=0 publish_errors=0)`. On ONE interleaved timeline
+(`-u scifi2-hub-manager.service -u scifi-server.service`), the driver
+(`bash[1240]`) logs `Exo 1 queue overflow: dropped 3337->3338->3339 frames`
+every ~100ms at the SAME instants the App logs `messages=0`. So: the driver
+produces and enqueues node-3 telemetry server-side, but the App's
+`exo_data_reader_` receives NONE of it. Not a decode fault (parse_errors=0), not
+a publish fault (publish_errors=0; forwarded=0 only because there is nothing to
+forward), not a client/probe fault, not the RHD ephys storm. The auxiliary
+subscription built by `setup_reader(cfg_.exo_source_node_id=3)` in setup()
+(main.cpp:219-231) is NOT connected to the endpoint the driver publishes on --
+an edgeless BroadbandSource's frames do not reach a by-node-id SDK reader the
+way an edged source's do. This refutes the prior T-65 assumption ("server
+publishes the edgeless source and the App reads it"): the server QUEUES it, but
+nothing DRAINS it. Root cause (now tied to a prior audit): this is EXACTLY the case
+`docs/t19-synapse-multisource-capability-audit.md` line 71 flagged as "Not
+supported by the documented interface" -- `setup_reader(node_id)` initializes
+the SINGULAR inherited `data_reader_` and resolves its source from the App's
+CONNECTED graph inputs. Node 1 works because edge 1->2 makes it a connected
+input; node 3 has NO edge to the App, so `setup_reader(3)` binds to nothing and
+returns a reader subscribed to no endpoint. The App's second `setup_reader(3)` +
+data_reader_ swap (main.cpp:227-230, H-104's workaround) is precisely the
+unsupported multi-reader pattern T-19 said not to build without a demonstrated
+SDK multi-reader API. The counter turns that documented risk into a proven
+failure.
+Fix direction (needs an App code change + redeploy, NOT config): either (a) find
+the SDK call that binds a reader to an edgeless source's real endpoint, or (b)
+give node 3 a supported downstream sink/branch so the server starts+routes it to
+a socket the App can read, without adding a second incoming edge to App node 2
+(which Synapse 2.4.1 rejects). Candidate rule: "peripheral registered + source
+configured + driver producing" does NOT imply "App reader receives"; prove the
+consumer side with a receive counter before assuming the subscription is wired.
+Diagnosis method that worked: adb `journalctl -u <app>.service` reads the App's
+own log free of the server flood that saturates `synapsectl logs`.
+
 ### 2026-09-13 - Exo driver 4->8 field bump missed the request-send path (node 3 start failure)
 
 Bumping the Axon exo telemetry from 4 to 8 fields/motor (schema 0xF211->0xF212)
