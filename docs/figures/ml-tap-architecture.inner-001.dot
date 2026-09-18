@@ -1,0 +1,12 @@
+digraph "inner_001" {
+  graph [layout=neato, overlap=false, splines=true, labelloc=t, label="ml-tap-architecture: inner view 1"];
+  "feat" [fillcolor="#ffe6cc", fontname="Helvetica", fontsize="10", height="0.61111", label="ml_feature_engine\ncanonical sample events\n8-feature EMA / passthrough", pin="true", pos="0,0!", shape="box", style="rounded,filled", width="1.9514"];
+  "core" [fillcolor="#ffe6cc", fontname="Helvetica", fontsize="10", height="0.61111", label="actual hls4ml/XLS RTL\n__myproject__myproject\n8->16->8->4, fixed point", pin="true", pos="180,0!", shape="box", style="rounded,filled", width="1.7014"];
+  "acq" [fillcolor="#dae8fc", fontname="Helvetica", fontsize="10", height="0.61111", label="Acquisition front-end\nRHD2132 SPI (16-bit, 0.195 uV/LSB)\n+ SPI-master gateware (planned)", pin="true", pos="360,0!", shape="box", style="rounded,filled", width="2.441"];
+  "frame" [fillcolor="#dae8fc", fontname="Helvetica", fontsize="10", height="0.77778", label="DATA_FRAME (0x0056)\ntx_axis, ch-sequential\n16-bit, clkmc 40 MHz\n--> Science transport (host)", pin="true", pos="540,0!", shape="box", style="rounded,filled", width="1.8785"];
+  "tap" [fillcolor="#ffe6cc", fontname="Helvetica", fontsize="10", height="0.61111", label="ml_sample_tap\npassive DATA_FRAME parser\nno tready output", pin="true", pos="720,0!", shape="box", style="rounded,filled", width="2.0347"];
+  "acq" -> "frame" [color="#0057b8", fontname="Helvetica", fontsize="9", label="raw stream", penwidth="2"];
+  "frame" -> "tap" [color="#d79b00", fontname="Helvetica", fontsize="9", label="snoop (read-only)", style="dashed"];
+  "tap" -> "feat" [fontname="Helvetica", fontsize="9", label="canonical sample event"];
+  "feat" -> "core" [fontname="Helvetica", fontsize="9", label="feature_valid"];
+}

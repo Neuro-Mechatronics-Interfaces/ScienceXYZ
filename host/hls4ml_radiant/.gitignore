@@ -12,3 +12,6 @@ impl_1/
 radiant_build.log
 *.bit
 *.bin
+# Pipeline clock-period sweep: regenerated RTL + per-variant synth trees.
+# Reproduce with tools/pipeline_sweep_gen.py + tools/characterize_sweep.ps1.
+synthesis/sweep/

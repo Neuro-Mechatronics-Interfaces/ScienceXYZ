@@ -1,0 +1,13 @@
+impl_1/
+*.rdf
+*.sty
+*.pfl
+*.xml
+*.ini
+*.log
+*.udb
+*.vm
+*.mrp
+*.ldc
+*.tcl.bak
+.recovery

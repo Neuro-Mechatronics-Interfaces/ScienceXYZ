@@ -23,6 +23,7 @@ __pycache__/
 .ruff_cache/
 .coverage
 htmlcov/
+sim_build/
 
 # Generated protobuf Python
 *_pb2.py

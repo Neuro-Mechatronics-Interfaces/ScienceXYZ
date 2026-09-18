@@ -1,0 +1,29 @@
+// Science acquisition + non-blocking ML tap — actual data flow.
+// Source of truth for docs/hls4ml-radiant-backend.md §12.
+// Single image within the graphviz 5x5 / 25-node limit. The terminal
+// Science transport (from `frame`) and trigger_out pin (from `fsm`) are
+// described in the surrounding text rather than drawn, to keep one clean image.
+digraph ml_tap_architecture {
+    rankdir=LR;
+    node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10];
+    edge [fontname="Helvetica", fontsize=9];
+
+    acq   [label="Acquisition front-end\nRHD2132 SPI (16-bit, 0.195 uV/LSB)\n+ SPI-master gateware (planned)", fillcolor="#dae8fc"];
+    frame [label="DATA_FRAME (0x0056)\ntx_axis, ch-sequential\n16-bit, clkmc 40 MHz\n--> Science transport (host)", fillcolor="#dae8fc"];
+    tap   [label="ml_sample_tap\npassive DATA_FRAME parser\nno tready output", fillcolor="#ffe6cc"];
+    feat  [label="ml_feature_engine\ncanonical sample events\n8-feature EMA / passthrough", fillcolor="#ffe6cc"];
+    core  [label="actual hls4ml/XLS RTL\n__myproject__myproject\n8->16->8->4, fixed point", fillcolor="#ffe6cc"];
+    score [label="valid alignment + score select\nall 4 signed outputs checked", fillcolor="#ffe6cc"];
+    fsm   [label="ml_trigger_fsm\nthreshold/refractory/pulse\n--> trigger_out (internal)", fillcolor="#ffe6cc"];
+
+    // Acquisition path (independent of ML): front-end -> frame -> transport.
+    acq -> frame [color="#0057b8", penwidth=2, label="raw stream"];
+
+    // Read-only tap branch off the same frame stream.
+    frame -> tap [label="snoop (read-only)", style=dashed, color="#d79b00"];
+    tap -> feat [label="canonical sample event"];
+    feat -> core [label="feature_valid"];
+    core -> score [label="registered output"];
+    score -> fsm [label="selected score + valid"];
+    score -> tap [label="busy / done", style=dotted];
+}

@@ -1,5 +1,20 @@
 # Mistakes
 
+### 2026-09-17 - Called a placeholder core integration an hls4ml RTL validation
+
+The earlier T-70/H-113 tap report described a generated-core path and quoted
+core-plus-shell timing/resource figures, but the tap cocotb source actually
+compiled `hls4ml_core_stub.sv`; the hand-written latency counter was not
+evidence of generated hls4ml behavior. The cause was a test-source and report
+scope mismatch, not a Radiant or hls4ml numerical failure. The correction is a
+checked-in hls4ml/XLS-generated `__myproject__myproject` source, an independent
+integer fixed-point reference, direct integrated cocotb coverage, and separate
+standalone/integrated Radiant measurements. The standalone generated core is
+1857 LUT4 / 205 FF and misses 40 MHz at estimated 34.3 MHz; the integrated
+open top is 1633 LUT4 / 1234 FF with an estimated 62.2 MHz in its own context.
+Rule: every claimed RTL result must name the exact compiled source and timing
+scope; do not add a placeholder shell to a generated-core estimate.
+
 ### 2026-09-17 - Two real bugs in the hls4ml Axon wrapper caught only by cocotb (SV width-cast precedence; back-to-back result overwrite)
 
 While bringing up `host/hls4ml_radiant/gateware/hls4ml_axon_peripheral.sv` (the

@@ -1,0 +1,6 @@
+digraph "inner_002" {
+  graph [layout=neato, overlap=false, splines=true, labelloc=t, label="ml-tap-architecture: inner view 2"];
+  "score" [fillcolor="#ffe6cc", fontname="Helvetica", fontsize="10", height="0.5", label="valid alignment + score select\nall 4 signed outputs checked", pin="true", pos="0,0!", shape="box", style="rounded,filled", width="2.0139"];
+  "fsm" [fillcolor="#ffe6cc", fontname="Helvetica", fontsize="10", height="0.61111", label="ml_trigger_fsm\nthreshold/refractory/pulse\n--> trigger_out (internal)", pin="true", pos="180,0!", shape="box", style="rounded,filled", width="1.7431"];
+  "score" -> "fsm" [fontname="Helvetica", fontsize="9", label="selected score + valid"];
+}
